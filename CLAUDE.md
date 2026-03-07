@@ -62,6 +62,10 @@ Architecture inherited from ~/coin project (crypto trading bot).
 - Port separation: us-stock 8001/3001, coin 8000/3000
 - Shared infra: PostgreSQL (coin's container, separate DB), Redis db 1 (coin uses db 0)
 - Notification: adapter pattern (Discord/Telegram/Slack)
+- FRED integration: data/fred_service.py — macro indicators (FFR, 10Y/2Y yields, CPI, unemployment)
+- Donchian breakout: uses previous bar's channel (pandas-ta donchian includes current bar)
+- Bollinger squeeze: squeeze_min_bars=3 (daily timeframe; 6 was too strict)
+- Backtest verification: backtest/verify_strategies.py — 13 strategies × 8 stocks × 3yr
 
 ### Reference
 - ~/coin: Crypto trading bot (architecture reference)

@@ -52,8 +52,11 @@ class DonchianBreakoutStrategy(BaseStrategy):
         if donchian_lower > 0:
             channel_width = (donchian_upper - donchian_lower) / donchian_lower * 100
 
-        # Exit period low (turtle exit)
-        exit_low = float(df["low"].iloc[-self._exit_period:].min())
+        # Exit period low (turtle exit) — use prior bars (exclude current bar)
+        if len(df) > self._exit_period + 1:
+            exit_low = float(df["low"].iloc[-(self._exit_period + 1):-1].min())
+        else:
+            exit_low = float(df["low"].iloc[:-1].min())
 
         indicators = {
             "donchian_upper": donchian_upper,
@@ -64,30 +67,41 @@ class DonchianBreakoutStrategy(BaseStrategy):
             "volume_ratio": float(volume_ratio) if volume_ratio and not pd.isna(volume_ratio) else 0,
         }
 
-        # BUY: breakout above Donchian upper
+        # BUY: breakout above prior Donchian upper
+        # Use previous bar's upper channel (current bar is included in donchian calc)
+        prev_upper = prev.get("donchian_upper")
+        if prev_upper is not None and not pd.isna(prev_upper):
+            prev_upper = float(prev_upper)
+        else:
+            prev_upper = donchian_upper
         prev_close = float(prev["close"])
-        if price > donchian_upper and prev_close <= float(prev.get("donchian_upper", price)):
+        if price > prev_upper and prev_close <= prev_upper:
             confidence = self._calc_buy_confidence(
-                adx, volume_ratio, atr, price, donchian_upper, channel_width,
+                adx, volume_ratio, atr, price, prev_upper, channel_width,
             )
             return Signal(
                 signal_type=SignalType.BUY,
                 confidence=confidence,
                 strategy_name=self.name,
-                reason=f"Donchian breakout: price {price:.2f} > upper {donchian_upper:.2f} (width={channel_width:.1f}%)",
+                reason=f"Donchian breakout: price {price:.2f} > upper {prev_upper:.2f} (width={channel_width:.1f}%)",
                 suggested_price=price,
                 indicators=indicators,
             )
 
-        # SELL: break below Donchian lower (full reversal)
-        if price < donchian_lower:
+        # SELL: break below prior Donchian lower (full reversal)
+        prev_lower = prev.get("donchian_lower")
+        if prev_lower is not None and not pd.isna(prev_lower):
+            prev_lower = float(prev_lower)
+        else:
+            prev_lower = donchian_lower
+        if price < prev_lower:
             width_bonus = min(channel_width / 20.0, 0.15)
             confidence = min(0.60 + width_bonus, 0.95)
             return Signal(
                 signal_type=SignalType.SELL,
                 confidence=confidence,
                 strategy_name=self.name,
-                reason=f"Donchian lower break: price {price:.2f} < lower {donchian_lower:.2f}",
+                reason=f"Donchian lower break: price {price:.2f} < lower {prev_lower:.2f}",
                 suggested_price=price,
                 indicators=indicators,
             )

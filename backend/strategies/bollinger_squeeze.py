@@ -20,7 +20,7 @@ class BollingerSqueezeStrategy(BaseStrategy):
 
     def __init__(self, params: dict | None = None):
         p = params or {}
-        self._squeeze_min_bars = p.get("squeeze_min_bars", 6)
+        self._squeeze_min_bars = p.get("squeeze_min_bars", 3)
 
     async def analyze(self, df: pd.DataFrame, symbol: str) -> Signal:
         if len(df) < self.min_candles_required:

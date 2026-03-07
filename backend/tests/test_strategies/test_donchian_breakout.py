@@ -65,7 +65,8 @@ class TestDonchianBreakout:
 
     async def test_sell_below_donchian_lower(self):
         strategy = DonchianBreakoutStrategy()
-        df = _make_df(close=85.0, donchian_upper=105.0, donchian_lower=90.0)
+        # close=85 is below prev bar's donchian_lower=90 (default in _make_df)
+        df = _make_df(close=85.0, donchian_upper=105.0, donchian_lower=80.0)
         signal = await strategy.analyze(df, "AAPL")
         assert signal.signal_type == SignalType.SELL
         assert "lower" in signal.reason.lower()
@@ -73,7 +74,7 @@ class TestDonchianBreakout:
     async def test_sell_turtle_exit(self):
         """Price below exit-period low triggers turtle exit."""
         strategy = DonchianBreakoutStrategy()
-        # close=91 is above donchian_lower=90 but below recent lows (97)
+        # close=91 is above prev_donchian_lower=90 but below prior lows (97)
         df = _make_df(close=91.0, donchian_upper=105.0, donchian_lower=85.0)
         signal = await strategy.analyze(df, "AAPL")
         assert signal.signal_type == SignalType.SELL

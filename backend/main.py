@@ -30,6 +30,7 @@ from scanner.stock_scanner import StockScanner
 from scanner.sector_analyzer import SectorAnalyzer
 from data.market_state import MarketStateDetector
 from data.external_data_service import ExternalDataService
+from data.fred_service import FREDService
 from db.session import get_session_factory
 from services.cache import CacheService
 from services.health import HealthMonitor
@@ -182,6 +183,10 @@ async def lifespan(app: FastAPI):
     market_state_detector = MarketStateDetector()
     app.state.market_state_detector = market_state_detector
 
+    # FRED macro data service
+    fred_service = FREDService(api_key=config.external.fred_api_key)
+    app.state.fred_service = fred_service
+
     # Recovery manager for circuit breakers
     recovery_mgr = RecoveryManager(notification=notification)
     app.state.recovery = recovery_mgr
@@ -328,6 +333,29 @@ async def lifespan(app: FastAPI):
     scheduler.add_task(
         "daily_briefing", task_daily_briefing,
         interval_sec=86400, phases=[MarketPhase.AFTER_HOURS],
+    )
+
+    async def task_macro_update():
+        """T5: Fetch FRED macro indicators (daily, pre-market)."""
+        if not fred_service.available:
+            return
+        try:
+            indicators = fred_service.fetch_macro_indicators()
+            if indicators.yield_curve_inverted:
+                logger.warning("Yield curve inverted — recession signal")
+            logger.info(
+                "Macro update: FFR=%.2f, 10Y=%.2f, spread=%.2f, CPI=%.1f%%",
+                indicators.fed_funds_rate or 0,
+                indicators.treasury_10y or 0,
+                indicators.yield_spread or 0,
+                indicators.cpi_yoy or 0,
+            )
+        except Exception as e:
+            logger.error("Macro update failed: %s", e)
+
+    scheduler.add_task(
+        "macro_update", task_macro_update,
+        interval_sec=86400, phases=[MarketPhase.PRE_MARKET],
     )
 
     app.state.scheduler = scheduler

@@ -149,7 +149,7 @@ strategies:
       bb_std: 2.0
       keltner_period: 20
       keltner_atr_mult: 1.5
-      squeeze_min_bars: 6
+      squeeze_min_bars: 3
     stop_loss:
       type: atr
       atr_multiplier: 1.5

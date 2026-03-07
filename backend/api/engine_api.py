@@ -94,6 +94,20 @@ async def reset_all_circuits(request: Request):
     return {"status": "all_reset"}
 
 
+@router.get("/macro")
+async def macro_indicators(request: Request):
+    """Get latest FRED macroeconomic indicators."""
+    fred = getattr(request.app.state, "fred_service", None)
+    if not fred:
+        return {"status": "not_configured"}
+    if not fred.available:
+        return {"status": "no_api_key"}
+    indicators = fred.last_indicators
+    if indicators:
+        return indicators.to_dict()
+    return {"status": "not_fetched_yet"}
+
+
 @router.get("/websocket")
 async def websocket_status(request: Request):
     """Get KIS WebSocket connection status."""

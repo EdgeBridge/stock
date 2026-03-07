@@ -226,7 +226,9 @@
 │   │
 │   ├── data/
 │   │   ├── market_data_service.py    # KIS 시세 + 캐싱
-│   │   ├── external_data_service.py  # yfinance, FRED, 뉴스
+│   │   ├── external_data_service.py  # yfinance 기본 데이터
+│   │   ├── fred_service.py           # FRED 매크로 경제지표
+│   │   ├── market_state.py           # SPY/VIX 시장 레짐 감지
 │   │   ├── indicator_service.py      # 기술적 지표 계산
 │   │   └── historical_data.py        # 과거 데이터 수집/저장
 │   │
@@ -1064,11 +1066,14 @@ class ExternalDataService:
     async def get_stock_profile(symbol) -> StockProfile  # 통합 프로파일
     async def get_sector_performance() -> dict
 
-    # FRED (매크로 경제지표)
-    async def get_fed_rate() -> float
-    async def get_vix() -> float
-    async def get_yield_curve() -> dict
-    async def get_unemployment() -> float
+    # FRED (매크로 경제지표) - data/fred_service.py
+    # FREDService: fredapi 기반 매크로 경제지표 수집
+    # 주요 시리즈: FEDFUNDS, DGS10, DGS2, UNRATE, CPIAUCSL, ICSA
+    # MacroIndicators: 스냅샷 데이터클래스 (금리, 수익률 곡선, 실업률, CPI)
+    # 수익률 곡선 역전 감지, 금리 환경 분류 (low/moderate/high)
+    def fetch_macro_indicators() -> MacroIndicators
+    def fetch_series(series_id, ...) -> pd.Series
+    def get_yield_curve_history(months) -> pd.DataFrame
 
     # 매크로 레짐 판단
     async def get_macro_regime() -> MacroRegime
@@ -2506,7 +2511,7 @@ strategies:
       bb_std: 2.0
       keltner_period: 20
       keltner_atr_mult: 1.5
-      squeeze_min_bars: 6     # 최소 6봉 스퀴즈 후 돌파
+      squeeze_min_bars: 3     # 최소 3봉 스퀴즈 후 돌파 (일봉 기준)
     stop_loss:
       type: atr
       atr_multiplier: 1.5
@@ -2698,6 +2703,8 @@ tests/
 ├── test_data/
 │   ├── test_market_data_service.py
 │   ├── test_external_data_service.py
+│   ├── test_fred_service.py
+│   ├── test_market_state.py
 │   └── test_indicator_service.py
 │
 ├── test_backtest/
