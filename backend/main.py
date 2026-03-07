@@ -302,26 +302,92 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Sector analysis failed: %s", e)
 
-    async def task_daily_briefing():
-        """T4: Post-market daily briefing via notification."""
+    async def task_after_hours_scan():
+        """T4a: Post-market stock analysis & watchlist update.
+
+        Runs 3-layer pipeline on a broad universe to find tomorrow's candidates.
+        Top candidates are auto-added to watchlist.
+        """
+        from db.trade_repository import TradeRepository
+
+        # Broad universe: current watchlist + popular large-caps
+        base_universe = [
+            "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "TSLA", "META",
+            "JPM", "JNJ", "XOM", "UNH", "V", "MA", "HD", "PG",
+            "COST", "ABBV", "CRM", "AMD", "NFLX", "ADBE", "AVGO",
+            "LLY", "MRK", "PEP", "KO", "WMT", "DIS", "INTC", "CSCO",
+        ]
         try:
-            # Gather day's summary
+            # Merge with existing watchlist
+            async with session_factory() as session:
+                repo = TradeRepository(session)
+                existing = await repo.get_watchlist(active_only=True)
+                existing_syms = {w.symbol for w in existing}
+
+            universe = list(existing_syms | set(base_universe))
+            logger.info("After-hours scan: %d symbols in universe", len(universe))
+
+            # Run 3-layer pipeline (grade C to cast a wider net)
+            candidates = await scanner_pipeline.run_full_scan(
+                symbols=universe, min_grade="C", max_candidates=15,
+            )
+
+            if not candidates:
+                logger.info("After-hours scan: no candidates found")
+                return
+
+            # Auto-add top candidates to watchlist
+            top_symbols = [c["symbol"] for c in candidates[:10]]
+            async with session_factory() as session:
+                repo = TradeRepository(session)
+                added = []
+                for sym in top_symbols:
+                    if sym not in existing_syms:
+                        await repo.add_to_watchlist(
+                            symbol=sym, source="scanner",
+                        )
+                        added.append(sym)
+
+            # Update evaluation loop watchlist
+            async with session_factory() as session:
+                repo = TradeRepository(session)
+                wl = await repo.get_watchlist(active_only=True)
+                evaluation_loop.set_watchlist([w.symbol for w in wl])
+
+            # Send scan results via Discord
+            msg = f"After-Hours Scan Complete\nCandidates: {len(candidates)}\n"
+            for c in candidates[:10]:
+                ai_note = ""
+                if c.get("ai_recommendation"):
+                    ai_note = f" | AI: {c['ai_recommendation']}"
+                msg += (
+                    f"  {c['symbol']}: score={c['combined_score']:.0f} "
+                    f"grade={c.get('grade', '?')}{ai_note}\n"
+                )
+            if added:
+                msg += f"\nNew watchlist adds: {', '.join(added)}"
+
+            await notification.notify_system_event("after_hours_scan", msg)
+            logger.info(
+                "After-hours scan: %d candidates, %d new adds",
+                len(candidates), len(added),
+            )
+        except Exception as e:
+            logger.error("After-hours scan failed: %s", e)
+
+    async def task_daily_briefing():
+        """T4b: Post-market daily briefing via notification."""
+        try:
             positions = await adapter.fetch_positions()
             balance = await adapter.fetch_balance()
-
-            brief = (
-                f"Daily Briefing\n"
-                f"Balance: ${balance.total:,.2f} (Cash: ${balance.available:,.2f})\n"
-                f"Positions: {len(positions)}\n"
+            daily_pnl = sum(
+                (p.current_price - p.avg_price) * p.quantity
+                for p in positions
             )
-            for pos in positions[:10]:
-                pnl_pct = ((pos.current_price - pos.avg_price) / pos.avg_price * 100) if pos.avg_price > 0 else 0
-                brief += f"  {pos.symbol}: {pnl_pct:+.1f}%\n"
-
-            await notification.send_notification(
-                title="Daily Briefing",
-                message=brief,
-                level="info",
+            await notification.notify_daily_summary(
+                equity=balance.total,
+                daily_pnl=daily_pnl,
+                positions=len(positions),
             )
             logger.info("Daily briefing sent")
         except Exception as e:
@@ -342,6 +408,10 @@ async def lifespan(app: FastAPI):
     scheduler.add_task(
         "sector_analysis", task_sector_analysis,
         interval_sec=3600, phases=[MarketPhase.REGULAR],
+    )
+    scheduler.add_task(
+        "after_hours_scan", task_after_hours_scan,
+        interval_sec=86400, phases=[MarketPhase.AFTER_HOURS],
     )
     scheduler.add_task(
         "daily_briefing", task_daily_briefing,
@@ -372,6 +442,23 @@ async def lifespan(app: FastAPI):
     )
 
     app.state.scheduler = scheduler
+
+    # Load watchlist into evaluation loop from DB
+    try:
+        async with session_factory() as session:
+            repo = TradeRepository(session)
+            wl = await repo.get_watchlist(active_only=True)
+            symbols = [w.symbol for w in wl]
+            if symbols:
+                evaluation_loop.set_watchlist(symbols)
+                logger.info("Watchlist loaded: %d symbols", len(symbols))
+    except Exception as e:
+        logger.warning("Failed to load watchlist: %s", e)
+
+    # Auto-start scheduler
+    import asyncio
+    asyncio.create_task(scheduler.start())
+    logger.info("Scheduler auto-started")
 
     # Install WebSocket log handler for real-time log streaming
     install_log_handler()
