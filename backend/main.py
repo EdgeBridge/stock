@@ -227,6 +227,7 @@ async def lifespan(app: FastAPI):
                 watchlist = await repo.get_watchlist(active_only=True)
                 symbols = [w.symbol for w in watchlist]
             if symbols:
+                evaluation_loop.set_watchlist(symbols)
                 await scanner_pipeline.run_full_scan(symbols)
         except Exception as e:
             logger.error("Daily scan failed: %s", e)

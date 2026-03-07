@@ -9,12 +9,13 @@ import LogPanel from './LogPanel'
 import TradeHistory from './TradeHistory'
 import StockChart from './StockChart'
 import BacktestPanel from './BacktestPanel'
+import OptimizePanel from './OptimizePanel'
 import PortfolioChart from './PortfolioChart'
 import SectorHeatmap from './SectorHeatmap'
 import StrategyPerformance from './StrategyPerformance'
 import clsx from 'clsx'
 
-type Tab = 'dashboard' | 'positions' | 'trades' | 'chart' | 'strategies' | 'scanner' | 'watchlist' | 'logs' | 'backtest' | 'portfolio' | 'sectors' | 'performance'
+type Tab = 'dashboard' | 'positions' | 'trades' | 'chart' | 'strategies' | 'scanner' | 'watchlist' | 'logs' | 'backtest' | 'optimize' | 'portfolio' | 'sectors' | 'performance'
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'dashboard', label: 'Dashboard' },
@@ -25,6 +26,7 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'strategies', label: 'Strategies' },
   { key: 'performance', label: 'Performance' },
   { key: 'backtest', label: 'Backtest' },
+  { key: 'optimize', label: 'Optimize' },
   { key: 'scanner', label: 'Scanner' },
   { key: 'sectors', label: 'Sectors' },
   { key: 'watchlist', label: 'Watchlist' },
@@ -71,6 +73,7 @@ export default function App() {
         {tab === 'scanner' && <ScannerPanel />}
         {tab === 'watchlist' && <WatchlistPanel />}
         {tab === 'backtest' && <BacktestPanel />}
+        {tab === 'optimize' && <OptimizePanel />}
         {tab === 'portfolio' && <PortfolioChart />}
         {tab === 'sectors' && <SectorHeatmap />}
         {tab === 'performance' && <StrategyPerformance />}

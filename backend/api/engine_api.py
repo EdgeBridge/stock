@@ -137,11 +137,18 @@ async def run_evaluation(request: Request):
     if not eval_loop:
         return {"status": "error", "detail": "Evaluation loop not initialized"}
 
-    # Load watchlist from in-memory store if eval_loop's watchlist is empty
+    # Load watchlist from DB if eval_loop's watchlist is empty
     if not eval_loop._watchlist:
-        from api.watchlist import _watchlist
-        if _watchlist:
-            eval_loop.set_watchlist(list(_watchlist))
+        from db.session import get_session_factory
+        from db.trade_repository import TradeRepository
+        try:
+            factory = get_session_factory()
+            async with factory() as session:
+                repo = TradeRepository(session)
+                items = await repo.get_watchlist(active_only=True)
+                eval_loop.set_watchlist([w.symbol for w in items])
+        except Exception:
+            pass
 
     if not eval_loop._watchlist:
         return {"status": "error", "detail": "Watchlist is empty. Add symbols via /watchlist/ first."}
