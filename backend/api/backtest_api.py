@@ -10,6 +10,7 @@ from backtest.engine import BacktestEngine
 from backtest.simulator import SimConfig
 from backtest.result_store import BacktestResultStore
 from backtest.adaptive_backtest import AdaptiveBacktestEngine
+from backtest.optimize_all import optimize_strategy, optimize_all, PARAM_GRIDS
 
 router = APIRouter(prefix="/backtest", tags=["backtest"])
 logger = logging.getLogger(__name__)
@@ -241,3 +242,109 @@ async def run_adaptive_backtest(req: AdaptiveBacktestRequest):
     )
 
     return {**response, "cached": False}
+
+
+# --- Optimization endpoints ---
+
+
+class OptimizeRequest(BaseModel):
+    strategy_name: str | None = None  # None = all strategies
+    symbols: list[str] = ["AAPL", "MSFT", "NVDA", "JPM", "JNJ"]
+    period: str = "3y"
+    metric: str = "sharpe_ratio"
+    force: bool = False
+
+
+@router.post("/optimize")
+async def run_optimization(req: OptimizeRequest):
+    """Run parameter optimization for one or all strategies."""
+    if req.strategy_name:
+        # Single strategy
+        if req.strategy_name not in PARAM_GRIDS:
+            return {"error": f"No param grid for '{req.strategy_name}'"}
+        try:
+            result = await optimize_strategy(
+                strategy_name=req.strategy_name,
+                symbols=req.symbols,
+                period=req.period,
+                metric=req.metric,
+                result_store=_result_store,
+                force=req.force,
+            )
+            return {
+                "strategy": result.strategy_name,
+                "best_params": result.best_params,
+                "avg_sharpe": round(safe(result.avg_sharpe), 3),
+                "avg_cagr": round(safe(result.avg_cagr * 100), 2),
+                "grid_combos": result.grid_combos,
+                "elapsed_sec": round(result.elapsed_sec, 1),
+                "per_symbol": {
+                    sym: {k: round(safe(v), 3) if isinstance(v, float) else v
+                          for k, v in m.items()}
+                    for sym, m in result.per_symbol.items()
+                },
+            }
+        except Exception as e:
+            logger.error("Optimization failed: %s", e)
+            return {"error": str(e)}
+    else:
+        # All strategies
+        try:
+            full = await optimize_all(
+                symbols=req.symbols,
+                period=req.period,
+                metric=req.metric,
+                force=req.force,
+            )
+            return full.to_dict()
+        except Exception as e:
+            logger.error("Full optimization failed: %s", e)
+            return {"error": str(e)}
+
+
+@router.get("/optimize/grids")
+async def get_param_grids():
+    """Get parameter grids for all strategies."""
+    return PARAM_GRIDS
+
+
+@router.post("/optimize/apply")
+async def apply_optimized_params(request: Request):
+    """Apply optimized parameters to the running strategy registry.
+
+    Reads best_params from stored optimization results and updates
+    the live strategy instances.
+    """
+    registry = request.app.state.registry
+    stored = _result_store.list_results(mode="optimization")
+    if not stored:
+        return {"error": "No optimization results found. Run /optimize first."}
+
+    applied = {}
+    for entry in stored:
+        data = _result_store.get_by_key(entry["key"])
+        if not data or "result" not in data:
+            continue
+        result = data["result"]
+        strat_name = result.get("strategy_name", "")
+        best_params = result.get("best_params", {})
+        if not strat_name or not best_params:
+            continue
+
+        # Find strategy in registry
+        for s in registry.get_enabled():
+            if s.name == strat_name:
+                old_params = s.get_params()
+                s.set_params(best_params)
+                applied[strat_name] = {
+                    "old": old_params,
+                    "new": best_params,
+                }
+                logger.info("Applied optimized params for %s: %s", strat_name, best_params)
+                break
+
+    return {
+        "status": "applied",
+        "count": len(applied),
+        "strategies": applied,
+    }

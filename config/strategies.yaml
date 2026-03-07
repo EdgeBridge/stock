@@ -115,11 +115,11 @@ strategies:
     enabled: true
     timeframe: "1D"
     params:
-      ema_fast: 20
-      ema_slow: 50
+      ema_fast: 20          # optimized (unchanged)
+      ema_slow: 50          # optimized (unchanged)
       ema_long: 200
       adx_period: 14
-      adx_threshold: 25
+      adx_threshold: 20     # optimized: 25 -> 20
       volume_ma_period: 20
       volume_min_ratio: 1.0
     stop_loss:
@@ -139,7 +139,7 @@ strategies:
     enabled: true
     timeframe: "1M"
     params:
-      lookback_months: 12
+      lookback_months: 18   # optimized: 12 -> 18
       top_n: 5
       rebalance_day: 1
       min_absolute_return: 0.0
@@ -164,9 +164,9 @@ strategies:
     enabled: true
     timeframe: "1D"
     params:
-      atr_period: 10
-      multiplier: 3.0
-      confirmation_bars: 2
+      atr_period: 7          # optimized: 10 -> 7
+      multiplier: 2.0        # optimized: 3.0 -> 2.0
+      confirmation_bars: 3   # optimized: 2 -> 3
     stop_loss:
       type: supertrend
 
@@ -174,9 +174,9 @@ strategies:
     enabled: true
     timeframe: "1D"
     params:
-      fast_period: 12
-      slow_period: 26
-      signal_period: 9
+      fast_period: 8         # optimized: 12 -> 8
+      slow_period: 20        # optimized: 26 -> 20
+      signal_period: 7       # optimized: 9 -> 7
       divergence_lookback: 14
       min_histogram_change: 0.5
     stop_loss:
@@ -187,9 +187,9 @@ strategies:
     enabled: true
     timeframe: "1D"
     params:
-      rsi_period: 14
-      overbought: 70
-      oversold: 30
+      rsi_period: 10         # optimized: 14 -> 10
+      overbought: 75         # optimized: 70 -> 75
+      oversold: 35           # optimized: 30 -> 35
       divergence_lookback: 14
       min_price_move_pct: 3.0
     stop_loss:
@@ -204,7 +204,7 @@ strategies:
       bb_std: 2.0
       keltner_period: 20
       keltner_atr_mult: 1.5
-      squeeze_min_bars: 3
+      squeeze_min_bars: 5   # optimized: 3 -> 5
     stop_loss:
       type: atr
       atr_multiplier: 1.5
@@ -213,8 +213,8 @@ strategies:
     enabled: true
     timeframe: "1D"
     params:
-      lookback_days: 60
-      volume_surge_threshold: 2.0
+      lookback_days: 40          # optimized: 60 -> 40
+      volume_surge_threshold: 1.5 # optimized: 2.0 -> 1.5
       obv_ma_period: 20
     stop_loss:
       type: fixed_pct
@@ -225,8 +225,8 @@ strategies:
     timeframe: "1D"
     params:
       spy_sma_period: 200
-      vix_bull_threshold: 20
-      vix_bear_threshold: 25
+      vix_bull_threshold: 18   # optimized: 20 -> 18
+      vix_bear_threshold: 23   # optimized: 25 -> 23
       confirmation_days: 2
       max_leverage_etf_hold_days: 10
     etf_mapping:
@@ -238,9 +238,9 @@ strategies:
     enabled: true
     timeframe: "1D"
     params:
-      roc_short: 5
-      roc_long: 10
-      roc_short_buy: 3.0    # stocks: 3% (crypto was 2%)
+      roc_short: 5           # optimized (unchanged)
+      roc_long: 15           # optimized: 10 -> 15
+      roc_short_buy: 2.0     # optimized: 3.0 -> 2.0
       roc_long_buy: 5.0     # stocks: 5% (crypto was 3%)
       roc_short_sell: -3.0
       roc_long_sell: -5.0
@@ -258,8 +258,8 @@ strategies:
     enabled: true
     timeframe: "1D"
     params:
-      k: 0.5
-      willr_period: 14
+      k: 1.0                # optimized: 0.5 -> 1.0
+      willr_period: 10       # optimized: 14 -> 10
       willr_oversold: -80.0
       willr_overbought: -20.0
       sma_period: 20
@@ -276,9 +276,9 @@ strategies:
     enabled: true
     timeframe: "1D"
     params:
-      sma_period: 25
-      buy_deviation: -5.0    # stocks: -5% (crypto was -10%)
-      sell_deviation: 3.0    # stocks: +3% (crypto was +5%)
+      sma_period: 20         # optimized: 25 -> 20
+      buy_deviation: -5.0    # optimized (unchanged)
+      sell_deviation: 3.0    # optimized (unchanged)
       rsi_boost_threshold: 35.0
     stop_loss:
       type: fixed_pct
@@ -288,8 +288,8 @@ strategies:
     enabled: true
     timeframe: "1M"
     params:
-      top_sectors: 3
-      lookback_weeks: 12
+      top_sectors: 2         # optimized: 3 -> 2
+      lookback_weeks: 16     # optimized: 12 -> 16
       rebalance_day: 1
       min_strength_score: 60
     sector_etfs:
