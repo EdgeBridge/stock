@@ -1,0 +1,93 @@
+"""Strategy Registry - manages strategy instances and config reloading.
+
+Provides a central registry for all available strategies,
+handles config loading and hot-reload from strategies.yaml.
+"""
+
+import logging
+
+from strategies.base import BaseStrategy
+from strategies.config_loader import StrategyConfigLoader
+from strategies.trend_following import TrendFollowingStrategy
+from strategies.donchian_breakout import DonchianBreakoutStrategy
+from strategies.supertrend_strategy import SupertrendStrategy
+from strategies.macd_histogram import MACDHistogramStrategy
+from strategies.dual_momentum import DualMomentumStrategy
+from strategies.rsi_divergence import RSIDivergenceStrategy
+from strategies.bollinger_squeeze import BollingerSqueezeStrategy
+from strategies.volume_profile import VolumeProfileStrategy
+from strategies.regime_switch import RegimeSwitchStrategy
+from strategies.sector_rotation import SectorRotationStrategy
+from strategies.cis_momentum import CISMomentumStrategy
+from strategies.larry_williams import LarryWilliamsStrategy
+from strategies.bnf_deviation import BNFDeviationStrategy
+
+logger = logging.getLogger(__name__)
+
+# All available strategy classes
+STRATEGY_CLASSES: dict[str, type[BaseStrategy]] = {
+    "trend_following": TrendFollowingStrategy,
+    "donchian_breakout": DonchianBreakoutStrategy,
+    "supertrend": SupertrendStrategy,
+    "macd_histogram": MACDHistogramStrategy,
+    "dual_momentum": DualMomentumStrategy,
+    "rsi_divergence": RSIDivergenceStrategy,
+    "bollinger_squeeze": BollingerSqueezeStrategy,
+    "volume_profile": VolumeProfileStrategy,
+    "regime_switch": RegimeSwitchStrategy,
+    "sector_rotation": SectorRotationStrategy,
+    "cis_momentum": CISMomentumStrategy,
+    "larry_williams": LarryWilliamsStrategy,
+    "bnf_deviation": BNFDeviationStrategy,
+}
+
+
+class StrategyRegistry:
+    """Central registry for strategy instances."""
+
+    def __init__(self, config_loader: StrategyConfigLoader | None = None):
+        self._config_loader = config_loader or StrategyConfigLoader()
+        self._strategies: dict[str, BaseStrategy] = {}
+        self._load_strategies()
+
+    def _load_strategies(self) -> None:
+        """Instantiate enabled strategies with config params."""
+        for name, cls in STRATEGY_CLASSES.items():
+            if self._config_loader.is_enabled(name):
+                params = self._config_loader.get_strategy_params(name)
+                self._strategies[name] = cls(params=params)
+                logger.info("Loaded strategy: %s", name)
+
+    def get(self, name: str) -> BaseStrategy | None:
+        return self._strategies.get(name)
+
+    def get_all(self) -> dict[str, BaseStrategy]:
+        return dict(self._strategies)
+
+    def get_enabled(self) -> list[BaseStrategy]:
+        return list(self._strategies.values())
+
+    def get_names(self) -> list[str]:
+        return list(self._strategies.keys())
+
+    def reload_config(self) -> None:
+        """Hot-reload strategy configuration from YAML."""
+        self._config_loader.reload()
+        for name, strategy in self._strategies.items():
+            params = self._config_loader.get_strategy_params(name)
+            strategy.set_params(params)
+            logger.info("Reloaded params for %s", name)
+
+        # Check for newly enabled/disabled strategies
+        for name, cls in STRATEGY_CLASSES.items():
+            if self._config_loader.is_enabled(name) and name not in self._strategies:
+                params = self._config_loader.get_strategy_params(name)
+                self._strategies[name] = cls(params=params)
+                logger.info("Newly enabled strategy: %s", name)
+            elif not self._config_loader.is_enabled(name) and name in self._strategies:
+                del self._strategies[name]
+                logger.info("Disabled strategy: %s", name)
+
+    def get_profile_weights(self, market_state: str) -> dict[str, float]:
+        """Get strategy weights for current market state."""
+        return self._config_loader.get_profile_weights(market_state)

@@ -1,0 +1,78 @@
+# ETF Universe Configuration
+# Leveraged/Inverse ETF pairs and sector ETF mappings
+
+# Bull/Bear leveraged pairs for regime-based trading
+leveraged_pairs:
+  QQQ:    { bull: TQQQ, bear: SQQQ, leverage: 3 }
+  SPY:    { bull: UPRO, bear: SPXU, leverage: 3 }
+  SOXX:   { bull: SOXL, bear: SOXS, leverage: 3 }
+  XLK:    { bull: TECL, bear: TECS, leverage: 3 }
+  ARKK:   { bull: null, bear: SARK, leverage: 1 }
+
+# Sector ETFs (standard 1x)
+sectors:
+  Technology:
+    etf: XLK
+    leveraged: TECL
+    top_holdings: [AAPL, MSFT, NVDA, AVGO, ADBE]
+  Financials:
+    etf: XLF
+    leveraged: FAS
+    top_holdings: [BRK-B, JPM, V, MA, BAC]
+  Energy:
+    etf: XLE
+    leveraged: ERX
+    top_holdings: [XOM, CVX, COP, EOG, SLB]
+  Healthcare:
+    etf: XLV
+    leveraged: LABU
+    top_holdings: [UNH, JNJ, LLY, ABBV, MRK]
+  Consumer_Discretionary:
+    etf: XLY
+    leveraged: null
+    top_holdings: [AMZN, TSLA, HD, MCD, NKE]
+  Consumer_Staples:
+    etf: XLP
+    leveraged: null
+    top_holdings: [PG, KO, PEP, COST, WMT]
+  Industrials:
+    etf: XLI
+    leveraged: null
+    top_holdings: [CAT, UNP, HON, GE, RTX]
+  Materials:
+    etf: XLB
+    leveraged: null
+    top_holdings: [LIN, APD, SHW, FCX, NEM]
+  Utilities:
+    etf: XLU
+    leveraged: null
+    top_holdings: [NEE, SO, DUK, D, AEP]
+  Real_Estate:
+    etf: XLRE
+    leveraged: null
+    top_holdings: [PLD, AMT, EQIX, PSA, SPG]
+  Communications:
+    etf: XLC
+    leveraged: null
+    top_holdings: [META, GOOGL, NFLX, DIS, CMCSA]
+
+# Safe-haven / cash-equivalent ETFs
+safe_haven:
+  - SHY   # 1-3yr Treasury
+  - TLT   # 20+yr Treasury
+  - GLD   # Gold
+  - UUP   # US Dollar
+
+# VIX-related
+volatility:
+  - VXX   # VIX Short-Term Futures
+  - UVXY  # 2x VIX
+  - SVXY  # -0.5x VIX
+
+# Risk limits for leveraged ETFs
+risk_rules:
+  max_hold_days: 10        # No holding leveraged >10 days
+  max_portfolio_pct: 0.30  # Max 30% in leveraged ETFs
+  max_single_etf_pct: 0.15 # Max 15% in single ETF
+  require_stop_loss: true   # Always use stop-loss
+  default_stop_loss_pct: 0.08

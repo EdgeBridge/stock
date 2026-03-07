@@ -1,0 +1,185 @@
+"""Market-hours-aware scheduler for the trading engine.
+
+Manages all periodic tasks:
+- T1: Daily full scan (pre-market)
+- T2: Intraday hot scan (during regular session, every 30min)
+- T3: Sector analysis (during regular session, every 1h)
+- T4: AI daily briefing (post-market)
+- Strategy evaluation loop (during regular session, every 5min)
+- SL/TP position check (during regular session, every 1min)
+- Market state update (during regular session, every 15min)
+- Health check (always, every 2min)
+
+US market hours in KST:
+  Pre-market:    18:00 ~ 23:30 (DST: 17:00 ~ 22:30)
+  Regular:       23:30 ~ 06:00 (DST: 22:30 ~ 05:00)
+  After-hours:   06:00 ~ 10:00 (DST: 05:00 ~ 09:00)
+  Market closed: 10:00 ~ 18:00 (DST: 09:00 ~ 17:00)
+"""
+
+import asyncio
+import logging
+from datetime import datetime, time, timedelta
+from enum import Enum
+from zoneinfo import ZoneInfo
+
+logger = logging.getLogger(__name__)
+
+ET = ZoneInfo("America/New_York")
+KST = ZoneInfo("Asia/Seoul")
+
+
+class MarketPhase(str, Enum):
+    PRE_MARKET = "pre_market"
+    REGULAR = "regular"
+    AFTER_HOURS = "after_hours"
+    CLOSED = "closed"
+
+
+def get_market_phase(now: datetime | None = None) -> MarketPhase:
+    """Get current US market phase based on ET time."""
+    if now is None:
+        now = datetime.now(ET)
+    else:
+        now = now.astimezone(ET)
+
+    t = now.time()
+    weekday = now.weekday()
+
+    # Weekend
+    if weekday >= 5:
+        return MarketPhase.CLOSED
+
+    if time(4, 0) <= t < time(9, 30):
+        return MarketPhase.PRE_MARKET
+    elif time(9, 30) <= t < time(16, 0):
+        return MarketPhase.REGULAR
+    elif time(16, 0) <= t < time(20, 0):
+        return MarketPhase.AFTER_HOURS
+    else:
+        return MarketPhase.CLOSED
+
+
+def is_market_open(now: datetime | None = None) -> bool:
+    return get_market_phase(now) == MarketPhase.REGULAR
+
+
+class TaskEntry:
+    """A scheduled task with phase and interval."""
+
+    def __init__(
+        self,
+        name: str,
+        fn,
+        interval_sec: int,
+        phases: list[MarketPhase] | None = None,
+        recovery=None,
+    ):
+        self.name = name
+        self.fn = fn
+        self.interval_sec = interval_sec
+        self.phases = phases  # None = always run
+        self.last_run: datetime | None = None
+        self.recovery = recovery  # Optional TaskRecovery wrapper
+
+    def should_run(self, now: datetime) -> bool:
+        if self.last_run and (now - self.last_run).total_seconds() < self.interval_sec:
+            return False
+        if self.phases is not None:
+            phase = get_market_phase(now)
+            if phase not in self.phases:
+                return False
+        return True
+
+
+class TradingScheduler:
+    """Orchestrates all periodic tasks with market-hours awareness."""
+
+    def __init__(self, recovery_manager=None):
+        self._tasks: list[TaskEntry] = []
+        self._running = False
+        self._tick_interval = 10  # check every 10 seconds
+        self._recovery = recovery_manager
+
+    def add_task(
+        self,
+        name: str,
+        fn,
+        interval_sec: int,
+        phases: list[MarketPhase] | None = None,
+        max_retries: int = 2,
+        failure_threshold: int = 5,
+    ) -> None:
+        """Register a periodic task."""
+        recovery = None
+        if self._recovery:
+            recovery = self._recovery.wrap_task(
+                name=name, fn=fn,
+                max_retries=max_retries,
+                failure_threshold=failure_threshold,
+            )
+
+        self._tasks.append(TaskEntry(name, fn, interval_sec, phases, recovery))
+        logger.info(
+            "Scheduled task: %s (every %ds, phases=%s)",
+            name, interval_sec, [p.value for p in phases] if phases else "always",
+        )
+
+    async def start(self) -> None:
+        """Start the scheduler loop."""
+        self._running = True
+        logger.info("Scheduler started with %d tasks", len(self._tasks))
+
+        while self._running:
+            now = datetime.now(ET)
+            phase = get_market_phase(now)
+
+            for task in self._tasks:
+                if task.should_run(now):
+                    if task.recovery:
+                        success = await task.recovery.execute()
+                        if success:
+                            task.last_run = now
+                    else:
+                        try:
+                            logger.debug("Running task: %s (phase=%s)", task.name, phase.value)
+                            await task.fn()
+                            task.last_run = now
+                        except Exception as e:
+                            logger.error("Task %s failed: %s", task.name, e)
+
+            await asyncio.sleep(self._tick_interval)
+
+    async def stop(self) -> None:
+        """Stop the scheduler."""
+        self._running = False
+        logger.info("Scheduler stopped")
+
+    @property
+    def running(self) -> bool:
+        return self._running
+
+    @property
+    def task_names(self) -> list[str]:
+        return [t.name for t in self._tasks]
+
+    def get_status(self) -> dict:
+        """Get scheduler status with task info."""
+        now = datetime.now(ET)
+        phase = get_market_phase(now)
+        return {
+            "running": self._running,
+            "market_phase": phase.value,
+            "market_time_et": now.strftime("%Y-%m-%d %H:%M:%S ET"),
+            "tasks": [
+                {
+                    "name": t.name,
+                    "interval_sec": t.interval_sec,
+                    "phases": [p.value for p in t.phases] if t.phases else None,
+                    "last_run": t.last_run.isoformat() if t.last_run else None,
+                    "active": t.should_run(now),
+                    "circuit": t.recovery.circuit.get_status() if t.recovery else None,
+                }
+                for t in self._tasks
+            ],
+        }

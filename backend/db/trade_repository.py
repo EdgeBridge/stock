@@ -1,0 +1,142 @@
+"""Trade and order persistence using SQLAlchemy async."""
+
+import logging
+from datetime import datetime
+
+from sqlalchemy import select, desc
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from core.models import Order, Watchlist
+
+logger = logging.getLogger(__name__)
+
+
+class TradeRepository:
+    """CRUD operations for trades/orders and watchlist."""
+
+    def __init__(self, session: AsyncSession):
+        self._session = session
+
+    # --- Orders / Trade History ---
+
+    async def save_order(
+        self,
+        symbol: str,
+        side: str,
+        order_type: str,
+        quantity: float,
+        price: float | None,
+        filled_quantity: float = 0,
+        filled_price: float | None = None,
+        status: str = "pending",
+        strategy_name: str = "",
+        kis_order_id: str = "",
+        pnl: float | None = None,
+        exchange: str = "NASD",
+    ) -> Order:
+        order = Order(
+            symbol=symbol,
+            exchange=exchange,
+            side=side,
+            order_type=order_type,
+            quantity=quantity,
+            price=price,
+            filled_quantity=filled_quantity,
+            filled_price=filled_price,
+            status=status,
+            strategy_name=strategy_name,
+            kis_order_id=kis_order_id,
+            pnl=pnl,
+        )
+        self._session.add(order)
+        await self._session.commit()
+        await self._session.refresh(order)
+        return order
+
+    async def update_order_status(
+        self,
+        order_id: int,
+        status: str,
+        filled_price: float | None = None,
+        filled_quantity: float | None = None,
+        pnl: float | None = None,
+    ) -> Order | None:
+        result = await self._session.get(Order, order_id)
+        if result is None:
+            return None
+        result.status = status
+        if filled_price is not None:
+            result.filled_price = filled_price
+        if filled_quantity is not None:
+            result.filled_quantity = filled_quantity
+        if pnl is not None:
+            result.pnl = pnl
+        if status == "filled":
+            result.filled_at = datetime.utcnow()
+        await self._session.commit()
+        return result
+
+    async def get_trade_history(
+        self, limit: int = 50, symbol: str | None = None
+    ) -> list[Order]:
+        stmt = select(Order).order_by(desc(Order.created_at)).limit(limit)
+        if symbol:
+            stmt = stmt.where(Order.symbol == symbol)
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_open_orders(self) -> list[Order]:
+        stmt = select(Order).where(Order.status.in_(["pending", "open"]))
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    # --- Watchlist ---
+
+    async def get_watchlist(self, active_only: bool = True) -> list[Watchlist]:
+        stmt = select(Watchlist).order_by(Watchlist.added_at)
+        if active_only:
+            stmt = stmt.where(Watchlist.is_active == True)
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def add_to_watchlist(
+        self,
+        symbol: str,
+        exchange: str = "NASD",
+        name: str | None = None,
+        sector: str | None = None,
+        source: str = "manual",
+    ) -> Watchlist:
+        # Check if already exists
+        stmt = select(Watchlist).where(Watchlist.symbol == symbol)
+        result = await self._session.execute(stmt)
+        existing = result.scalar_one_or_none()
+
+        if existing:
+            existing.is_active = True
+            existing.updated_at = datetime.utcnow()
+            await self._session.commit()
+            return existing
+
+        item = Watchlist(
+            symbol=symbol,
+            exchange=exchange,
+            name=name,
+            sector=sector,
+            source=source,
+            is_active=True,
+        )
+        self._session.add(item)
+        await self._session.commit()
+        await self._session.refresh(item)
+        return item
+
+    async def remove_from_watchlist(self, symbol: str) -> bool:
+        stmt = select(Watchlist).where(Watchlist.symbol == symbol)
+        result = await self._session.execute(stmt)
+        item = result.scalar_one_or_none()
+        if item:
+            item.is_active = False
+            await self._session.commit()
+            return True
+        return False

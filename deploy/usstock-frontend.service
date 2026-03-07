@@ -1,0 +1,16 @@
+[Unit]
+Description=US Stock Trading Frontend (static serve)
+After=network.target usstock-backend.service
+
+[Service]
+Type=simple
+User=chans
+WorkingDirectory=/home/chans/us-stock/frontend
+ExecStartPre=/usr/bin/npm run build
+ExecStart=/usr/bin/npx serve -s dist -l 3001
+Restart=always
+RestartSec=10
+Environment=HOME=/home/chans
+
+[Install]
+WantedBy=multi-user.target

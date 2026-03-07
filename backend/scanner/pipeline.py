@@ -1,0 +1,135 @@
+"""Scanner Pipeline Orchestrator.
+
+Chains the 3 screening layers into a single pipeline:
+  Layer 1: IndicatorScreener  (technical scoring)
+  Layer 2: FundamentalEnricher (yfinance fundamentals)
+  Layer 3: MarketAnalystAgent  (Claude AI analysis, optional)
+"""
+
+import logging
+from dataclasses import asdict
+
+from data.market_data_service import MarketDataService
+from data.indicator_service import IndicatorService
+from scanner.indicator_screener import IndicatorScreener
+from scanner.fundamental_enricher import FundamentalEnricher
+from agents.market_analyst import MarketAnalystAgent
+
+logger = logging.getLogger(__name__)
+
+
+class ScannerPipeline:
+    """Orchestrate the 3-layer stock screening pipeline."""
+
+    def __init__(
+        self,
+        market_data: MarketDataService,
+        indicator_svc: IndicatorService,
+        enricher: FundamentalEnricher,
+        ai_agent: MarketAnalystAgent | None = None,
+    ):
+        self._market_data = market_data
+        self._indicator_svc = indicator_svc
+        self._enricher = enricher
+        self._ai_agent = ai_agent
+        self._screener = IndicatorScreener()
+
+    async def run_full_scan(
+        self,
+        symbols: list[str],
+        min_grade: str = "B",
+        max_candidates: int = 20,
+    ) -> list[dict]:
+        """Run all 3 layers and return ranked candidates.
+
+        Args:
+            symbols: List of stock tickers to scan.
+            min_grade: Minimum grade to pass Layer 1 (default "B").
+            max_candidates: Max results to return from Layer 2.
+
+        Returns:
+            List of candidate dicts sorted by combined score descending.
+        """
+        if not symbols:
+            logger.info("Scanner pipeline: no symbols provided")
+            return []
+
+        # Layer 1: Score all symbols with IndicatorScreener
+        logger.info("Layer 1: Screening %d symbols", len(symbols))
+        screener_scores = []
+        for symbol in symbols:
+            try:
+                df = await self._market_data.get_ohlcv(symbol, limit=250)
+                if df.empty:
+                    continue
+                df = self._indicator_svc.add_all_indicators(df)
+                score = self._screener.score(df, symbol)
+                screener_scores.append(score)
+            except Exception as e:
+                logger.warning("Layer 1 failed for %s: %s", symbol, e)
+
+        # Filter by grade
+        self._screener._min_grade = min_grade
+        filtered = self._screener.filter_candidates(screener_scores, max_candidates=max_candidates)
+        logger.info(
+            "Layer 1 complete: %d/%d passed (min_grade=%s)",
+            len(filtered), len(screener_scores), min_grade,
+        )
+
+        if not filtered:
+            return []
+
+        # Layer 2: Enrich top candidates with FundamentalEnricher
+        logger.info("Layer 2: Enriching %d candidates", len(filtered))
+        enrich_input = []
+        for s in filtered:
+            try:
+                price = await self._market_data.get_price(s.symbol)
+            except Exception:
+                price = 0.0
+            enrich_input.append((s.symbol, s.total_score, price))
+
+        enriched = await self._enricher.enrich_batch(enrich_input)
+        logger.info("Layer 2 complete: %d enriched candidates", len(enriched))
+
+        # Build results
+        results = []
+        for candidate in enriched:
+            result = {
+                "symbol": candidate.symbol,
+                "indicator_score": candidate.indicator_score,
+                "consensus_score": candidate.consensus_score,
+                "fundamental_score": candidate.fundamental_score,
+                "smart_money_score": candidate.smart_money_score,
+                "combined_score": candidate.combined_score,
+                "grade": candidate.grade,
+            }
+            results.append(result)
+
+        # Layer 3: (optional) AI analysis on top 5
+        if self._ai_agent and results:
+            top_n = min(5, len(results))
+            logger.info("Layer 3: AI analysis on top %d candidates", top_n)
+            for result in results[:top_n]:
+                try:
+                    recommendation = await self._ai_agent.analyze(
+                        symbol=result["symbol"],
+                        indicator_score=result["indicator_score"],
+                        fundamental_data={
+                            "consensus_score": result["consensus_score"],
+                            "fundamental_score": result["fundamental_score"],
+                            "smart_money_score": result["smart_money_score"],
+                        },
+                        market_context={},
+                    )
+                    result["ai_recommendation"] = recommendation.recommendation
+                    result["ai_score"] = recommendation.score
+                    result["ai_conviction"] = recommendation.conviction
+                    result["ai_summary"] = recommendation.summary
+                except Exception as e:
+                    logger.warning("Layer 3 AI analysis failed for %s: %s", result["symbol"], e)
+            logger.info("Layer 3 complete")
+
+        # Sort by combined_score descending
+        results.sort(key=lambda r: r["combined_score"], reverse=True)
+        return results[:max_candidates]
