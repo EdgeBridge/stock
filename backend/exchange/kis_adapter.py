@@ -27,28 +27,41 @@ from exchange.kis_auth import KISAuth
 logger = logging.getLogger(__name__)
 
 # TR_ID mappings for US stock operations
-TR_ID = {
-    # Market data
+TR_ID_LIVE = {
+    # Market data (same for live/paper)
     "PRICE": "HHDFS00000300",
     "PRICE_DETAIL": "HHDFS76200200",
-    "ORDERBOOK": "HHDFS76200100",  # placeholder
+    "ORDERBOOK": "HHDFS76200100",
     "MINUTE_CANDLE": "HHDFS76950200",
     "DAILY_CANDLE": "HHDFS76240000",
-    # Orders (real account)
+    # Orders
     "BUY_US": "TTTT1002U",
     "SELL_US": "TTTT1006U",
     "CANCEL_US": "TTTT1004U",
-    # Orders (virtual/paper account)
-    "BUY_US_PAPER": "VTTT1002U",
-    "SELL_US_PAPER": "VTTT1001U",
     # Account
     "BALANCE": "TTTS3012R",
     "BUYING_POWER": "TTTS3007R",
     "ORDER_HISTORY": "TTTS3035R",
     "PENDING_ORDERS": "TTTS3018R",
     # Scanner
-    "VOLUME_SURGE": "HHDFS76410000",  # placeholder mapping
+    "VOLUME_SURGE": "HHDFS76410000",
 }
+
+TR_ID_PAPER = {
+    **TR_ID_LIVE,
+    # Paper-specific overrides (TT -> VT prefix)
+    "BUY_US": "VTTT1002U",
+    "SELL_US": "VTTT1006U",
+    "CANCEL_US": "VTTT1004U",
+    "BALANCE": "VTTS3012R",
+    "BUYING_POWER": "VTTS3007R",
+    "ORDER_HISTORY": "VTTS3035R",
+    "PENDING_ORDERS": "VTTS3018R",
+}
+
+
+# Market data endpoints use 3-char codes; trading endpoints use 4-char codes
+_EXCD_MARKET = {"NASD": "NAS", "NYSE": "NYS", "AMEX": "AMS"}
 
 
 class KISAdapter(ExchangeAdapter):
@@ -59,6 +72,7 @@ class KISAdapter(ExchangeAdapter):
         self._auth = auth
         self._session: aiohttp.ClientSession | None = None
         self._is_paper = "vts" in config.base_url
+        self._tr = TR_ID_PAPER if self._is_paper else TR_ID_LIVE
 
     async def initialize(self) -> None:
         self._session = aiohttp.ClientSession()
@@ -78,12 +92,12 @@ class KISAdapter(ExchangeAdapter):
         await self._auth.ensure_valid_token()
         params = {
             "AUTH": "",
-            "EXCD": exchange,
+            "EXCD": _EXCD_MARKET.get(exchange, exchange),
             "SYMB": symbol,
         }
         data = await self._get(
             "/uapi/overseas-price/v1/quotations/price",
-            TR_ID["PRICE"],
+            self._tr["PRICE"],
             params,
         )
         output = data.get("output", {})
@@ -109,7 +123,7 @@ class KISAdapter(ExchangeAdapter):
 
         params = {
             "AUTH": "",
-            "EXCD": exchange,
+            "EXCD": _EXCD_MARKET.get(exchange, exchange),
             "SYMB": symbol,
             "GUBN": period,
             "BYMD": "",  # empty = latest
@@ -117,7 +131,7 @@ class KISAdapter(ExchangeAdapter):
         }
         data = await self._get(
             "/uapi/overseas-price/v1/quotations/dailyprice",
-            TR_ID["DAILY_CANDLE"],
+            self._tr["DAILY_CANDLE"],
             params,
         )
         candles = []
@@ -145,12 +159,12 @@ class KISAdapter(ExchangeAdapter):
         # KIS orderbook endpoint for overseas stocks
         params = {
             "AUTH": "",
-            "EXCD": exchange,
+            "EXCD": _EXCD_MARKET.get(exchange, exchange),
             "SYMB": symbol,
         }
         data = await self._get(
             "/uapi/overseas-price/v1/quotations/inquire-asking-price",
-            TR_ID["ORDERBOOK"],
+            self._tr["ORDERBOOK"],
             params,
         )
         # Parse bid/ask from response
@@ -172,7 +186,9 @@ class KISAdapter(ExchangeAdapter):
 
     async def fetch_balance(self) -> Balance:
         await self._auth.ensure_valid_token()
-        params = {
+
+        # 1. Position-based balance (total equity, realized P&L)
+        bal_params = {
             "CANO": self._config.account_no,
             "ACNT_PRDT_CD": self._config.account_product,
             "OVRS_EXCG_CD": "NASD",
@@ -182,19 +198,37 @@ class KISAdapter(ExchangeAdapter):
         }
         data = await self._get(
             "/uapi/overseas-stock/v1/trading/inquire-balance",
-            TR_ID["BALANCE"],
-            params,
+            self._tr["BALANCE"],
+            bal_params,
         )
         output2 = data.get("output2", {})
         if isinstance(output2, list) and output2:
             output2 = output2[0]
-        total_usd = float(output2.get("tot_evlu_pfls_amt", 0))
-        available = float(output2.get("frcr_pchs_amt1", 0))
+        position_value = float(output2.get("frcr_buy_amt_smtl1", 0))
+
+        # 2. Buying power (available cash for orders)
+        # ITEM_CD + OVRS_ORD_UNPR required; use dummy values to get total buying power
+        bp_params = {
+            "CANO": self._config.account_no,
+            "ACNT_PRDT_CD": self._config.account_product,
+            "OVRS_EXCG_CD": "NASD",
+            "OVRS_ORD_UNPR": "1",
+            "ITEM_CD": "AAPL",
+        }
+        bp_data = await self._get(
+            "/uapi/overseas-stock/v1/trading/inquire-psamount",
+            self._tr["BUYING_POWER"],
+            bp_params,
+        )
+        bp_output = bp_data.get("output", {})
+        available = float(bp_output.get("ord_psbl_frcr_amt", 0))
+
+        total = available + position_value
         return Balance(
             currency="USD",
-            total=total_usd,
+            total=total,
             available=available,
-            locked=total_usd - available,
+            locked=position_value,
         )
 
     async def fetch_positions(self) -> list[Position]:
@@ -209,7 +243,7 @@ class KISAdapter(ExchangeAdapter):
         }
         data = await self._get(
             "/uapi/overseas-stock/v1/trading/inquire-balance",
-            TR_ID["BALANCE"],
+            self._tr["BALANCE"],
             params,
         )
         positions = []
@@ -249,9 +283,8 @@ class KISAdapter(ExchangeAdapter):
         order_type: str = "limit",
         exchange: str = "NASD",
     ) -> OrderResult:
-        tr_id = TR_ID["BUY_US_PAPER"] if self._is_paper else TR_ID["BUY_US"]
         return await self._place_order(
-            symbol, "buy", quantity, price, order_type, exchange, tr_id
+            symbol, "buy", quantity, price, order_type, exchange, self._tr["BUY_US"]
         )
 
     async def create_sell_order(
@@ -262,9 +295,8 @@ class KISAdapter(ExchangeAdapter):
         order_type: str = "limit",
         exchange: str = "NASD",
     ) -> OrderResult:
-        tr_id = TR_ID["SELL_US_PAPER"] if self._is_paper else TR_ID["SELL_US"]
         return await self._place_order(
-            symbol, "sell", quantity, price, order_type, exchange, tr_id
+            symbol, "sell", quantity, price, order_type, exchange, self._tr["SELL_US"]
         )
 
     async def cancel_order(self, order_id: str, symbol: str) -> bool:
@@ -282,7 +314,7 @@ class KISAdapter(ExchangeAdapter):
         hashkey = await self._auth.get_hashkey(body)
         data = await self._post(
             "/uapi/overseas-stock/v1/trading/order-rvsecncl",
-            TR_ID["CANCEL_US"],
+            self._tr["CANCEL_US"],
             body,
             hashkey,
         )
@@ -315,7 +347,7 @@ class KISAdapter(ExchangeAdapter):
         }
         data = await self._get(
             "/uapi/overseas-stock/v1/trading/inquire-nccs",
-            TR_ID["PENDING_ORDERS"],
+            self._tr["PENDING_ORDERS"],
             params,
         )
         results = []
