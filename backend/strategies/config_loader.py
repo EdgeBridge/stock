@@ -7,7 +7,14 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "strategies.yaml"
+_PROJECT_ROOT = Path(__file__).parent.parent.parent  # local: us-stock/
+_APP_ROOT = Path(__file__).parent.parent  # docker: /app/
+
+# Try Docker path first (/app/config/), then local project root
+if (_APP_ROOT / "config" / "strategies.yaml").exists():
+    DEFAULT_CONFIG_PATH = _APP_ROOT / "config" / "strategies.yaml"
+else:
+    DEFAULT_CONFIG_PATH = _PROJECT_ROOT / "config" / "strategies.yaml"
 
 
 class StrategyConfigLoader:
