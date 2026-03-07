@@ -123,17 +123,12 @@ strategies:
       volume_ma_period: 20
       volume_min_ratio: 1.0
     stop_loss:
-      type: atr
-      atr_multiplier: 2.0
-      max_pct: 0.08
-    take_profit:
-      type: atr
-      atr_multiplier: 4.0
-      max_pct: 0.20
+      type: fixed_pct
+      max_pct: 0.10         # SL/TP optimized: 0.08 -> 0.10
     trailing_stop:
       enabled: true
-      activation_pct: 0.05
-      trail_pct: 0.03
+      activation_pct: 0.08  # SL/TP optimized: 0.05 -> 0.08
+      trail_pct: 0.05       # SL/TP optimized: 0.03 -> 0.05
 
   dual_momentum:
     enabled: true
@@ -152,21 +147,24 @@ strategies:
     enabled: true
     timeframe: "1D"
     params:
-      entry_period: 20
-      exit_period: 10
-      adx_threshold: 25.0
+      entry_period: 15       # walk-forward: 20 -> 15
+      exit_period: 7         # walk-forward: 10 -> 7
+      adx_threshold: 20.0    # walk-forward: 25 -> 20
       volume_multiplier: 1.5
     stop_loss:
-      type: atr
-      atr_multiplier: 2.0
+      type: fixed_pct
+      max_pct: 0.08         # SL/TP optimized: moderate
+    take_profit:
+      type: fixed_pct
+      max_pct: 0.20         # SL/TP optimized: moderate
 
   supertrend:
     enabled: true
     timeframe: "1D"
     params:
-      atr_period: 7          # optimized: 10 -> 7
-      multiplier: 2.0        # optimized: 3.0 -> 2.0
-      confirmation_bars: 3   # optimized: 2 -> 3
+      atr_period: 7          # optimized + walk-forward confirmed
+      multiplier: 2.0        # optimized + walk-forward confirmed
+      confirmation_bars: 1   # walk-forward: 3 -> 1 (more robust)
     stop_loss:
       type: supertrend
 
@@ -246,13 +244,11 @@ strategies:
       roc_long_sell: -5.0
       volume_ratio_threshold: 1.2
     stop_loss:
-      type: atr
-      atr_multiplier: 2.0
-      max_pct: 0.07
-    trailing_stop:
-      enabled: true
-      activation_pct: 0.05
-      trail_pct: 0.03
+      type: fixed_pct
+      max_pct: 0.12         # SL/TP optimized: wide
+    take_profit:
+      type: fixed_pct
+      max_pct: 0.30         # SL/TP optimized: wide
 
   larry_williams:
     enabled: true

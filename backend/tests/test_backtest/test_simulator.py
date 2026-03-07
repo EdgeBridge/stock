@@ -184,6 +184,162 @@ class TestSimulator:
         assert len(sim.positions) == 0
 
 
+class TestStopLossTakeProfit:
+    def test_stop_loss_triggers(self):
+        """Position should be closed when price drops below SL."""
+        config = SimConfig(
+            initial_equity=100_000, slippage_pct=0.0,
+            stop_loss_pct=0.05, max_position_pct=0.95,
+        )
+        sim = BacktestSimulator(config)
+
+        # Price drops 10%: 100 -> 90
+        prices = [100.0] * 5 + [90.0] * 5
+        dates = pd.bdate_range("2021-01-01", periods=10)
+        df = pd.DataFrame({
+            "open": prices,
+            "high": [p * 1.01 for p in prices],
+            "low": [p * 0.99 for p in prices],
+            "close": prices,
+            "volume": [1_000_000.0] * 10,
+        }, index=dates)
+
+        signals = {1: _buy_signal()}
+        sim.run(df, signals, "AAPL")
+
+        # Position should have been stopped out
+        assert len(sim.trades) == 1
+        assert sim.trades[0].pnl < 0
+        assert "AAPL" not in sim.positions
+
+    def test_stop_loss_exact_level(self):
+        """SL triggers when low touches SL price."""
+        config = SimConfig(
+            initial_equity=100_000, slippage_pct=0.0,
+            stop_loss_pct=0.10, max_position_pct=0.95,
+        )
+        sim = BacktestSimulator(config)
+
+        # Entry at 100, SL at 90. Low goes to 89 on bar 5
+        prices = [100.0] * 5 + [95.0] * 5
+        lows = [99.0] * 5 + [89.0] + [94.0] * 4
+        dates = pd.bdate_range("2021-01-01", periods=10)
+        df = pd.DataFrame({
+            "open": prices, "high": [p + 1 for p in prices],
+            "low": lows, "close": prices,
+            "volume": [1_000_000.0] * 10,
+        }, index=dates)
+
+        signals = {1: _buy_signal()}
+        sim.run(df, signals, "AAPL")
+        assert len(sim.trades) == 1  # SL triggered
+
+    def test_take_profit_triggers(self):
+        """Position closed when price hits TP level."""
+        config = SimConfig(
+            initial_equity=100_000, slippage_pct=0.0,
+            take_profit_pct=0.10, max_position_pct=0.95,
+        )
+        sim = BacktestSimulator(config)
+
+        # Price goes up 15%: 100 -> 115
+        prices = [100.0] * 5 + [115.0] * 5
+        dates = pd.bdate_range("2021-01-01", periods=10)
+        df = pd.DataFrame({
+            "open": prices,
+            "high": [p * 1.01 for p in prices],
+            "low": [p * 0.99 for p in prices],
+            "close": prices,
+            "volume": [1_000_000.0] * 10,
+        }, index=dates)
+
+        signals = {1: _buy_signal()}
+        sim.run(df, signals, "AAPL")
+
+        assert len(sim.trades) == 1
+        assert sim.trades[0].pnl > 0
+
+    def test_trailing_stop_triggers(self):
+        """Trailing stop activates after gain, then triggers on pullback."""
+        config = SimConfig(
+            initial_equity=100_000, slippage_pct=0.0,
+            trailing_stop_activation_pct=0.05,
+            trailing_stop_trail_pct=0.03,
+            max_position_pct=0.95,
+        )
+        sim = BacktestSimulator(config)
+
+        # Price: entry 100, rises to 110 (+10%), then drops to 105 (~4.5% from peak)
+        prices = [100.0, 100.0, 105.0, 108.0, 110.0, 108.0, 105.0, 103.0, 100.0, 98.0]
+        dates = pd.bdate_range("2021-01-01", periods=10)
+        df = pd.DataFrame({
+            "open": prices,
+            "high": [p + 1 for p in prices],
+            "low": [p - 1 for p in prices],
+            "close": prices,
+            "volume": [1_000_000.0] * 10,
+        }, index=dates)
+
+        signals = {1: _buy_signal()}
+        sim.run(df, signals, "AAPL")
+
+        # Trailing stop should trigger when price drops 3% from 111 peak
+        assert len(sim.trades) == 1
+        assert sim.trades[0].pnl > 0  # Still profitable (locked in gains)
+
+    def test_no_sl_tp_when_disabled(self):
+        """With SL/TP at 0, positions are not auto-closed."""
+        config = SimConfig(
+            initial_equity=100_000, slippage_pct=0.0,
+            stop_loss_pct=0.0, take_profit_pct=0.0,
+            max_position_pct=0.95,
+        )
+        sim = BacktestSimulator(config)
+
+        # Big drop but no SL
+        prices = [100.0] * 5 + [50.0] * 5
+        dates = pd.bdate_range("2021-01-01", periods=10)
+        df = pd.DataFrame({
+            "open": prices,
+            "high": [p * 1.01 for p in prices],
+            "low": [p * 0.99 for p in prices],
+            "close": prices,
+            "volume": [1_000_000.0] * 10,
+        }, index=dates)
+
+        signals = {1: _buy_signal()}
+        sim.run(df, signals, "AAPL")
+
+        assert len(sim.trades) == 0  # No auto-close, still holding
+        assert "AAPL" in sim.positions
+
+    def test_sl_tp_combined(self):
+        """SL should fire before TP when price drops."""
+        config = SimConfig(
+            initial_equity=100_000, slippage_pct=0.0,
+            stop_loss_pct=0.05, take_profit_pct=0.20,
+            max_position_pct=0.95,
+        )
+        sim = BacktestSimulator(config)
+
+        # Price drops 8%
+        prices = [100.0, 100.0, 100.0, 92.0, 90.0, 88.0, 85.0, 83.0, 80.0, 78.0]
+        dates = pd.bdate_range("2021-01-01", periods=10)
+        df = pd.DataFrame({
+            "open": prices,
+            "high": [p + 0.5 for p in prices],
+            "low": [p - 0.5 for p in prices],
+            "close": prices,
+            "volume": [1_000_000.0] * 10,
+        }, index=dates)
+
+        signals = {1: _buy_signal()}
+        sim.run(df, signals, "AAPL")
+
+        assert len(sim.trades) == 1
+        assert sim.trades[0].pnl < 0  # Stopped out at a loss
+
+
 class TestSimConfig:
     def test_defaults(self):
         c = SimConfig()
@@ -192,6 +348,9 @@ class TestSimConfig:
         assert c.commission_per_order == 0.0
         assert c.max_position_pct == 0.10
         assert c.max_total_positions == 20
+        assert c.stop_loss_pct == 0.0
+        assert c.take_profit_pct == 0.0
+        assert c.trailing_stop_activation_pct == 0.0
 
     def test_custom_values(self):
         c = SimConfig(initial_equity=50_000, slippage_pct=0.1)

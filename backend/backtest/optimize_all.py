@@ -87,6 +87,23 @@ PARAM_GRIDS: dict[str, dict[str, list]] = {
     },
 }
 
+# Stop-loss / take-profit grids (tested separately to keep grid size manageable)
+SL_TP_GRIDS: dict[str, list[dict[str, float]]] = {
+    # Each entry is a (stop_loss_pct, take_profit_pct, trailing_activation, trailing_trail) combo
+    "conservative": {"stop_loss_pct": 0.05, "take_profit_pct": 0.15,
+                     "trailing_stop_activation_pct": 0.0, "trailing_stop_trail_pct": 0.0},
+    "moderate": {"stop_loss_pct": 0.08, "take_profit_pct": 0.20,
+                 "trailing_stop_activation_pct": 0.0, "trailing_stop_trail_pct": 0.0},
+    "wide": {"stop_loss_pct": 0.12, "take_profit_pct": 0.30,
+             "trailing_stop_activation_pct": 0.0, "trailing_stop_trail_pct": 0.0},
+    "trailing_tight": {"stop_loss_pct": 0.08, "take_profit_pct": 0.0,
+                       "trailing_stop_activation_pct": 0.05, "trailing_stop_trail_pct": 0.03},
+    "trailing_wide": {"stop_loss_pct": 0.10, "take_profit_pct": 0.0,
+                      "trailing_stop_activation_pct": 0.08, "trailing_stop_trail_pct": 0.05},
+    "none": {"stop_loss_pct": 0.0, "take_profit_pct": 0.0,
+             "trailing_stop_activation_pct": 0.0, "trailing_stop_trail_pct": 0.0},
+}
+
 
 def _safe(v):
     """Make a value JSON-safe."""
@@ -350,6 +367,197 @@ def _avg_metric(per_symbol: dict[str, dict], metric: str) -> float:
         and not math.isnan(m.get(metric, 0))
     ]
     return sum(values) / len(values) if values else 0.0
+
+
+async def optimize_sl_tp(
+    strategy_name: str,
+    symbols: list[str],
+    period: str = "3y",
+    metric: str = "sharpe_ratio",
+    result_store: BacktestResultStore | None = None,
+    force: bool = False,
+) -> dict:
+    """Find the best SL/TP configuration for a strategy.
+
+    Tests each SL/TP preset from SL_TP_GRIDS using the strategy's
+    already-optimized signal parameters.
+    """
+    store = result_store or BacktestResultStore()
+    store_key = f"sl_tp_{strategy_name}"
+    store_symbol = ",".join(sorted(symbols))
+
+    if not force and store.exists(store_key, store_symbol, period, mode="sl_tp"):
+        stored = store.get(store_key, store_symbol, period, mode="sl_tp")
+        if stored:
+            return stored["result"]
+
+    cls = STRATEGY_CLASSES.get(strategy_name)
+    if not cls:
+        raise ValueError(f"Strategy {strategy_name} not found")
+
+    from backtest.data_loader import BacktestDataLoader
+    data_loader = BacktestDataLoader()
+    data_cache = data_loader.load_multiple(symbols, period=period)
+    loaded_symbols = list(data_cache.keys())
+
+    if not loaded_symbols:
+        raise ValueError("No data loaded")
+
+    # Generate signals once (same params for all SL/TP variants)
+    strategy = cls()
+    all_signals = {}
+    for symbol in loaded_symbols:
+        signals = {}
+        min_bars = strategy.min_candles_required
+        df = data_cache[symbol].df
+        for i in range(min_bars, len(df)):
+            window = df.iloc[:i + 1]
+            try:
+                from core.enums import SignalType as ST
+                signal = await strategy.analyze(window, symbol)
+                if signal.signal_type != ST.HOLD:
+                    signals[i] = signal
+            except Exception:
+                pass
+        all_signals[symbol] = signals
+
+    t0 = time.monotonic()
+    results = {}
+
+    for preset_name, sl_tp_config in SL_TP_GRIDS.items():
+        sim_config = SimConfig(
+            initial_equity=100_000,
+            max_position_pct=0.95,
+            max_total_positions=1,
+            **sl_tp_config,
+        )
+
+        preset_metrics = {}
+        for symbol in loaded_symbols:
+            from backtest.simulator import BacktestSimulator
+            from backtest.metrics import MetricsCalculator
+            simulator = BacktestSimulator(config=sim_config)
+            simulator.run(data_cache[symbol].df, all_signals[symbol], symbol)
+
+            m = MetricsCalculator.calculate(
+                equity_curve=simulator.equity_curve,
+                trades=simulator.trades,
+                initial_equity=sim_config.initial_equity,
+            )
+            preset_metrics[symbol] = {
+                "sharpe_ratio": m.sharpe_ratio,
+                "cagr": m.cagr,
+                "max_drawdown_pct": m.max_drawdown_pct,
+                "win_rate": m.win_rate,
+                "total_trades": m.total_trades,
+                "profit_factor": m.profit_factor,
+            }
+
+        avg = _avg_metric(preset_metrics, metric)
+        results[preset_name] = {
+            "config": sl_tp_config,
+            f"avg_{metric}": _safe(avg),
+            "avg_cagr": _safe(_avg_metric(preset_metrics, "cagr")),
+            "avg_win_rate": _safe(_avg_metric(preset_metrics, "win_rate")),
+            "per_symbol": {
+                sym: {k: _safe(v) for k, v in m.items()}
+                for sym, m in preset_metrics.items()
+            },
+        }
+
+    # Find best preset
+    best_preset = max(results.keys(), key=lambda k: results[k].get(f"avg_{metric}", float("-inf")))
+    elapsed = time.monotonic() - t0
+
+    response = {
+        "strategy": strategy_name,
+        "best_preset": best_preset,
+        "best_config": SL_TP_GRIDS[best_preset],
+        "all_presets": results,
+        "elapsed_sec": elapsed,
+    }
+
+    store.save(store_key, store_symbol, period, response, mode="sl_tp")
+    logger.info(
+        "SL/TP optimization for %s: best=%s (%s=%.3f) in %.1fs",
+        strategy_name, best_preset, metric,
+        results[best_preset].get(f"avg_{metric}", 0), elapsed,
+    )
+    return response
+
+
+async def run_walk_forward(
+    strategy_name: str,
+    symbol: str,
+    period: str = "5y",
+    n_splits: int = 3,
+    metric: str = "sharpe_ratio",
+    result_store: BacktestResultStore | None = None,
+    force: bool = False,
+) -> dict:
+    """Run walk-forward validation for a strategy to check overfitting."""
+    store = result_store or BacktestResultStore()
+    store_key = f"wf_{strategy_name}"
+
+    if not force and store.exists(store_key, symbol, period, mode="walk_forward"):
+        stored = store.get(store_key, symbol, period, mode="walk_forward")
+        if stored:
+            return stored["result"]
+
+    cls = STRATEGY_CLASSES.get(strategy_name)
+    if not cls:
+        raise ValueError(f"Strategy {strategy_name} not found")
+
+    grid = PARAM_GRIDS.get(strategy_name, {})
+    if not grid:
+        raise ValueError(f"No param grid for {strategy_name}")
+
+    sim_config = SimConfig(
+        initial_equity=100_000,
+        max_position_pct=0.95,
+        max_total_positions=1,
+    )
+    engine = BacktestEngine(sim_config=sim_config)
+    optimizer = StrategyOptimizer(engine=engine, sim_config=sim_config)
+
+    strategy = cls()
+    wf_result = await optimizer.walk_forward(
+        strategy=strategy,
+        symbol=symbol,
+        param_grid=grid,
+        total_period=period,
+        n_splits=n_splits,
+        metric=metric,
+    )
+
+    response = {
+        "strategy": strategy_name,
+        "symbol": symbol,
+        "n_splits": n_splits,
+        "avg_in_sample": {k: _safe(v) for k, v in wf_result.avg_in_sample.items()},
+        "avg_out_of_sample": {k: _safe(v) for k, v in wf_result.avg_out_of_sample.items()},
+        "robustness_ratio": {k: _safe(v) for k, v in wf_result.robustness_ratio.items()},
+        "splits": [
+            {
+                "train": f"{s.train_start} ~ {s.train_end}",
+                "test": f"{s.test_start} ~ {s.test_end}",
+                "best_params": s.best_params,
+                "in_sample": {k: _safe(v) for k, v in s.in_sample_metrics.items()},
+                "out_of_sample": {k: _safe(v) for k, v in s.out_of_sample_metrics.items()},
+            }
+            for s in wf_result.splits
+        ],
+        "elapsed_sec": wf_result.optimization_time_sec,
+    }
+
+    store.save(store_key, symbol, period, response, mode="walk_forward")
+    logger.info(
+        "Walk-forward for %s/%s: robustness(sharpe)=%.2f in %.1fs",
+        strategy_name, symbol,
+        wf_result.robustness_ratio.get("sharpe_ratio", 0),
+        wf_result.optimization_time_sec,
+    )
+    return response
 
 
 def _serialize_opt_result(r: StrategyOptResult) -> dict:

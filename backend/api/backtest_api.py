@@ -10,7 +10,10 @@ from backtest.engine import BacktestEngine
 from backtest.simulator import SimConfig
 from backtest.result_store import BacktestResultStore
 from backtest.adaptive_backtest import AdaptiveBacktestEngine
-from backtest.optimize_all import optimize_strategy, optimize_all, PARAM_GRIDS
+from backtest.optimize_all import (
+    optimize_strategy, optimize_all, PARAM_GRIDS, SL_TP_GRIDS,
+    optimize_sl_tp, run_walk_forward,
+)
 
 router = APIRouter(prefix="/backtest", tags=["backtest"])
 logger = logging.getLogger(__name__)
@@ -348,3 +351,69 @@ async def apply_optimized_params(request: Request):
         "count": len(applied),
         "strategies": applied,
     }
+
+
+# --- SL/TP Optimization ---
+
+
+class SlTpOptimizeRequest(BaseModel):
+    strategy_name: str
+    symbols: list[str] = ["AAPL", "MSFT", "NVDA", "JPM", "JNJ"]
+    period: str = "3y"
+    metric: str = "sharpe_ratio"
+    force: bool = False
+
+
+@router.post("/optimize/sl-tp")
+async def run_sl_tp_optimization(req: SlTpOptimizeRequest):
+    """Optimize stop-loss / take-profit / trailing stop for a strategy."""
+    try:
+        result = await optimize_sl_tp(
+            strategy_name=req.strategy_name,
+            symbols=req.symbols,
+            period=req.period,
+            metric=req.metric,
+            result_store=_result_store,
+            force=req.force,
+        )
+        return result
+    except Exception as e:
+        logger.error("SL/TP optimization failed: %s", e)
+        return {"error": str(e)}
+
+
+@router.get("/optimize/sl-tp/presets")
+async def get_sl_tp_presets():
+    """Get available SL/TP presets."""
+    return SL_TP_GRIDS
+
+
+# --- Walk-Forward Validation ---
+
+
+class WalkForwardRequest(BaseModel):
+    strategy_name: str
+    symbol: str = "AAPL"
+    period: str = "5y"
+    n_splits: int = 3
+    metric: str = "sharpe_ratio"
+    force: bool = False
+
+
+@router.post("/optimize/walk-forward")
+async def run_walk_forward_validation(req: WalkForwardRequest):
+    """Run walk-forward analysis to check for overfitting."""
+    try:
+        result = await run_walk_forward(
+            strategy_name=req.strategy_name,
+            symbol=req.symbol,
+            period=req.period,
+            n_splits=req.n_splits,
+            metric=req.metric,
+            result_store=_result_store,
+            force=req.force,
+        )
+        return result
+    except Exception as e:
+        logger.error("Walk-forward failed: %s", e)
+        return {"error": str(e)}

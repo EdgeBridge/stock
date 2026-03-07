@@ -23,6 +23,7 @@ class SimPosition:
     avg_price: float
     entry_date: str
     strategy_name: str = ""
+    highest_price: float = 0.0  # Track peak for trailing stop
 
 
 @dataclass
@@ -33,6 +34,11 @@ class SimConfig:
     fx_spread_pct: float = 0.25  # KRW/USD spread
     max_position_pct: float = 0.10  # max 10% per position
     max_total_positions: int = 20
+    # Stop-loss / take-profit / trailing stop
+    stop_loss_pct: float = 0.0  # 0 = disabled, e.g. 0.08 = 8% stop
+    take_profit_pct: float = 0.0  # 0 = disabled, e.g. 0.20 = 20% TP
+    trailing_stop_activation_pct: float = 0.0  # 0 = disabled
+    trailing_stop_trail_pct: float = 0.0  # trail distance from peak
 
 
 class BacktestSimulator:
@@ -78,13 +84,57 @@ class BacktestSimulator:
             row = df.iloc[i]
             date = df.index[i]
             price = float(row["close"])
+            high = float(row["high"]) if "high" in row.index else price
+            low = float(row["low"]) if "low" in row.index else price
+
+            # Check SL/TP/trailing stop on existing positions
+            self._check_risk_exits(symbol, low, high, price, date)
 
             signal = signals.get(i)
             if signal:
                 self._process_signal(signal, symbol, price, date)
 
+            # Update highest price for trailing stop
+            pos = self._positions.get(symbol)
+            if pos and high > pos.highest_price:
+                pos.highest_price = high
+
             # Update equity
             self._update_equity(price, symbol, date)
+
+    def _check_risk_exits(
+        self, symbol: str, low: float, high: float, close: float, date
+    ) -> None:
+        """Check stop-loss, take-profit, and trailing stop triggers."""
+        pos = self._positions.get(symbol)
+        if not pos:
+            return
+
+        cfg = self._config
+
+        # Stop-loss: triggered if low breaches SL level
+        if cfg.stop_loss_pct > 0:
+            sl_price = pos.avg_price * (1 - cfg.stop_loss_pct)
+            if low <= sl_price:
+                self._close_position(symbol, sl_price, date)
+                return
+
+        # Take-profit: triggered if high breaches TP level
+        if cfg.take_profit_pct > 0:
+            tp_price = pos.avg_price * (1 + cfg.take_profit_pct)
+            if high >= tp_price:
+                self._close_position(symbol, tp_price, date)
+                return
+
+        # Trailing stop
+        if cfg.trailing_stop_activation_pct > 0 and cfg.trailing_stop_trail_pct > 0:
+            peak = max(pos.highest_price, high)
+            gain_from_entry = (peak - pos.avg_price) / pos.avg_price
+            if gain_from_entry >= cfg.trailing_stop_activation_pct:
+                trail_price = peak * (1 - cfg.trailing_stop_trail_pct)
+                if low <= trail_price:
+                    self._close_position(symbol, trail_price, date)
+                    return
 
     def _process_signal(
         self, signal: Signal, symbol: str, price: float, date
@@ -125,6 +175,7 @@ class BacktestSimulator:
             avg_price=exec_price,
             entry_date=str(date),
             strategy_name=signal.strategy_name,
+            highest_price=exec_price,
         )
 
     def _close_position(self, symbol: str, price: float, date) -> None:
