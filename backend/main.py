@@ -103,6 +103,18 @@ async def lifespan(app: FastAPI):
     registry = StrategyRegistry()
     app.state.registry = registry
 
+    # Notification service
+    notif_cfg = config.notification
+    notification = NotificationService(
+        enabled=notif_cfg.enabled,
+        provider=notif_cfg.provider,
+        telegram_bot_token=notif_cfg.telegram_bot_token,
+        telegram_chat_id=notif_cfg.telegram_chat_id,
+        discord_webhook_url=notif_cfg.discord_webhook_url,
+        slack_webhook_url=notif_cfg.slack_webhook_url,
+    )
+    app.state.notification = notification
+
     # Engine components
     risk_manager = RiskManager()
     order_manager = OrderManager(adapter=adapter, risk_manager=risk_manager, notification=notification)
@@ -123,18 +135,6 @@ async def lifespan(app: FastAPI):
 
     health.register_check("adapter", check_adapter)
     app.state.health = health
-
-    # Notification service
-    notif_cfg = config.notification
-    notification = NotificationService(
-        enabled=notif_cfg.enabled,
-        provider=notif_cfg.provider,
-        telegram_bot_token=notif_cfg.telegram_bot_token,
-        telegram_chat_id=notif_cfg.telegram_chat_id,
-        discord_webhook_url=notif_cfg.discord_webhook_url,
-        slack_webhook_url=notif_cfg.slack_webhook_url,
-    )
-    app.state.notification = notification
 
     # Position tracker
     position_tracker = PositionTracker(
