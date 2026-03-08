@@ -62,10 +62,13 @@ async def test_evaluation_loop_survives_ohlcv_error():
     await adapter.initialize()
 
     market_data = AsyncMock(spec=MarketDataService)
-    # First call fails, second succeeds with empty df
+    # Factor score update calls get_ohlcv for each symbol first (2 calls),
+    # then evaluate_symbol calls for each symbol (2 calls) = 4 total
     market_data.get_ohlcv = AsyncMock(side_effect=[
-        ConnectionError("API down"),
-        MagicMock(empty=True),
+        ConnectionError("API down"),  # factor: AAPL
+        MagicMock(empty=True),        # factor: MSFT
+        MagicMock(empty=True),        # evaluate: AAPL
+        MagicMock(empty=True),        # evaluate: MSFT
     ])
 
     loop = EvaluationLoop(
@@ -81,7 +84,7 @@ async def test_evaluation_loop_survives_ohlcv_error():
 
     # Should not raise despite errors
     await loop._evaluate_all()
-    assert market_data.get_ohlcv.call_count == 2
+    assert market_data.get_ohlcv.call_count == 4
 
 
 @pytest.mark.asyncio

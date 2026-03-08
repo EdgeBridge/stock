@@ -199,3 +199,55 @@ async def etf_engine_status(request: Request):
     if not etf_engine:
         return {"status": "not_configured"}
     return etf_engine.get_status()
+
+
+@router.get("/analytics/factors")
+async def factor_scores(request: Request):
+    """Get current factor model scores for watchlist stocks."""
+    eval_loop = getattr(request.app.state, "evaluation_loop", None)
+    if not eval_loop:
+        return {"status": "not_configured"}
+
+    scores = eval_loop.factor_scores
+    return {
+        "count": len(scores),
+        "scores": [
+            {
+                "symbol": s.symbol,
+                "momentum": s.momentum,
+                "value": s.value,
+                "quality": s.quality,
+                "low_volatility": s.low_volatility,
+                "composite": s.composite,
+                "rank": s.rank,
+            }
+            for s in sorted(scores.values(), key=lambda x: x.rank)
+        ],
+    }
+
+
+@router.get("/analytics/signal-quality")
+async def signal_quality(request: Request):
+    """Get strategy signal quality metrics."""
+    eval_loop = getattr(request.app.state, "evaluation_loop", None)
+    if not eval_loop:
+        return {"status": "not_configured"}
+
+    tracker = eval_loop.signal_quality
+    all_metrics = tracker.get_all_metrics()
+    return {
+        "strategies": {
+            name: {
+                "win_rate": m.win_rate,
+                "avg_win": m.avg_win,
+                "avg_loss": m.avg_loss,
+                "profit_factor": m.profit_factor,
+                "total_trades": m.total_trades,
+                "quality_score": m.quality_score,
+                "has_edge": m.has_edge,
+            }
+            for name, m in all_metrics.items()
+        },
+        "active": tracker.get_active_strategies(),
+        "gated": tracker.get_gated_strategies(),
+    }

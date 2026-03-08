@@ -1,7 +1,7 @@
 """Risk manager for position sizing, stop-loss, and portfolio limits.
 
 Enforces:
-- Per-position max allocation
+- Per-position max allocation (fixed or Kelly-based)
 - Total portfolio exposure limits
 - Stop-loss / take-profit / trailing stop
 - Daily loss limit
@@ -9,6 +9,8 @@ Enforces:
 
 import logging
 from dataclasses import dataclass
+
+from analytics.position_sizing import KellyPositionSizer, KellyResult
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,9 @@ class RiskManager:
     def __init__(self, params: RiskParams | None = None):
         self._params = params or RiskParams()
         self._daily_pnl: float = 0.0
+        self._kelly = KellyPositionSizer(
+            max_position_pct=self._params.max_position_pct,
+        )
 
     def calculate_position_size(
         self,
@@ -96,6 +101,119 @@ class RiskManager:
             allocation_usd=quantity * price,
             risk_per_share=risk_per_share,
             reason="OK",
+            allowed=True,
+        )
+
+    def calculate_kelly_position_size(
+        self,
+        symbol: str,
+        price: float,
+        portfolio_value: float,
+        cash_available: float,
+        current_positions: int,
+        win_rate: float = 0.0,
+        avg_win: float = 0.0,
+        avg_loss: float = 0.0,
+        signal_confidence: float = 0.5,
+        factor_score: float = 0.0,
+    ) -> PositionSizeResult:
+        """Kelly-enhanced position sizing.
+
+        Uses Kelly Criterion when trade history is available,
+        falls back to fixed sizing otherwise. Factor score and
+        signal confidence scale position size up/down.
+        """
+        # Standard risk checks first
+        if current_positions >= self._params.max_positions:
+            return PositionSizeResult(
+                quantity=0, allocation_usd=0, risk_per_share=0,
+                reason=f"Max positions reached ({self._params.max_positions})",
+                allowed=False,
+            )
+
+        if self._daily_pnl < 0:
+            daily_loss_pct = abs(self._daily_pnl) / portfolio_value
+            if daily_loss_pct >= self._params.daily_loss_limit_pct:
+                return PositionSizeResult(
+                    quantity=0, allocation_usd=0, risk_per_share=0,
+                    reason=f"Daily loss limit hit ({daily_loss_pct:.1%})",
+                    allowed=False,
+                )
+
+        # Try Kelly sizing if we have trade history
+        if win_rate > 0 and avg_win > 0 and avg_loss > 0:
+            kelly_result = self._kelly.calculate(
+                win_rate=win_rate,
+                avg_win=avg_win,
+                avg_loss=avg_loss,
+                signal_confidence=signal_confidence,
+                factor_score=factor_score,
+                portfolio_value=portfolio_value,
+            )
+
+            if kelly_result.final_allocation_pct > 0:
+                allocation = portfolio_value * kelly_result.final_allocation_pct
+                allocation = min(allocation, cash_available * 0.95)
+
+                if allocation > 0 and price > 0:
+                    quantity = int(allocation / price)
+                    if quantity > 0:
+                        logger.info(
+                            "Kelly sizing %s: kelly=%.3f, conf_boost=%.2f, "
+                            "factor_boost=%.2f, alloc=%.1f%%",
+                            symbol, kelly_result.kelly_fraction,
+                            kelly_result.confidence_boost,
+                            kelly_result.factor_boost,
+                            kelly_result.final_allocation_pct * 100,
+                        )
+                        return PositionSizeResult(
+                            quantity=quantity,
+                            allocation_usd=quantity * price,
+                            risk_per_share=price * self._params.default_stop_loss_pct,
+                            reason=f"Kelly (f={kelly_result.kelly_fraction:.3f})",
+                            allowed=True,
+                        )
+
+            if kelly_result.kelly_fraction <= 0:
+                return PositionSizeResult(
+                    quantity=0, allocation_usd=0, risk_per_share=0,
+                    reason=f"Kelly negative ({kelly_result.kelly_fraction:.3f}): no edge",
+                    allowed=False,
+                )
+
+        # Fallback: fixed sizing with factor/confidence adjustment
+        base_pct = self._params.max_position_pct
+        # Adjust by factor score: positive factor → up to 1.3x, negative → down to 0.7x
+        import numpy as np
+        factor_mult = 1.0 + 0.3 * np.tanh(factor_score) if factor_score != 0 else 1.0
+        # Adjust by confidence: scale linearly 0.5-1.0 → 0.7-1.0
+        conf_mult = 0.7 + 0.3 * min(signal_confidence, 1.0) if signal_confidence > 0 else 0.7
+        adjusted_pct = base_pct * factor_mult * conf_mult
+        adjusted_pct = min(adjusted_pct, self._params.max_position_pct)
+
+        allocation = portfolio_value * adjusted_pct
+        allocation = min(allocation, cash_available * 0.95)
+
+        if allocation <= 0 or price <= 0:
+            return PositionSizeResult(
+                quantity=0, allocation_usd=0, risk_per_share=0,
+                reason="No cash available",
+                allowed=False,
+            )
+
+        quantity = int(allocation / price)
+        if quantity <= 0:
+            return PositionSizeResult(
+                quantity=0, allocation_usd=0, risk_per_share=0,
+                reason="Price too high for allocation",
+                allowed=False,
+            )
+
+        return PositionSizeResult(
+            quantity=quantity,
+            allocation_usd=quantity * price,
+            risk_per_share=price * self._params.default_stop_loss_pct,
+            reason=f"Fixed+factors (conf={conf_mult:.2f}, factor={factor_mult:.2f})",
             allowed=True,
         )
 

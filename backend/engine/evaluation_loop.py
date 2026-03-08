@@ -24,6 +24,8 @@ from engine.order_manager import OrderManager
 from engine.risk_manager import RiskManager
 from engine.stock_classifier import StockClassifier
 from engine.adaptive_weights import AdaptiveWeightManager
+from analytics.factor_model import MultiFactorModel, FactorScores
+from analytics.signal_quality import SignalQualityTracker
 from core.enums import SignalType
 
 logger = logging.getLogger(__name__)
@@ -45,6 +47,8 @@ class EvaluationLoop:
         market_state: str = "uptrend",
         interval_sec: int = 300,
         adaptive_weights: AdaptiveWeightManager | None = None,
+        factor_model: MultiFactorModel | None = None,
+        signal_quality: SignalQualityTracker | None = None,
     ):
         self._adapter = adapter
         self._market_data = market_data
@@ -59,8 +63,13 @@ class EvaluationLoop:
         self._running = False
         self._classifier = StockClassifier()
         self._adaptive = adaptive_weights or AdaptiveWeightManager()
+        self._factor_model = factor_model or MultiFactorModel()
+        self._signal_quality = signal_quality or SignalQualityTracker()
+        self._factor_scores: dict[str, FactorScores] = {}
         self._last_classify_time: dict[str, float] = {}
         self._reclassify_interval = 86400  # re-classify every 24h
+        self._last_factor_update: float = 0.0
+        self._factor_update_interval = 3600  # update factor scores hourly
 
     @property
     def running(self) -> bool:
@@ -153,13 +162,44 @@ class EvaluationLoop:
 
     async def _evaluate_all(self) -> None:
         """Evaluate all symbols in watchlist."""
+        # Update factor scores periodically
+        now = time.time()
+        if now - self._last_factor_update > self._factor_update_interval:
+            await self._update_factor_scores()
+            self._last_factor_update = now
+
         for symbol in self._watchlist:
             await self.evaluate_symbol(symbol)
+
+    async def _update_factor_scores(self) -> None:
+        """Compute cross-sectional factor scores for the watchlist."""
+        price_data = {}
+        for symbol in self._watchlist:
+            try:
+                df = await self._market_data.get_ohlcv(symbol, limit=260)
+                if not df.empty:
+                    price_data[symbol] = df
+            except Exception:
+                pass
+
+        if len(price_data) < 3:
+            return
+
+        try:
+            scores = self._factor_model.score_universe(price_data)
+            self._factor_scores = {s.symbol: s for s in scores}
+            logger.info(
+                "Factor scores updated: %d stocks, top=%s",
+                len(scores),
+                [f"{s.symbol}({s.composite:+.2f})" for s in scores[:3]],
+            )
+        except Exception as e:
+            logger.warning("Factor score update failed: %s", e)
 
     async def _execute_signal(
         self, signal, symbol: str, df: pd.DataFrame
     ) -> None:
-        """Execute a combined signal."""
+        """Execute a combined signal with Kelly-enhanced position sizing."""
         if signal.signal_type == SignalType.HOLD:
             return
 
@@ -169,13 +209,42 @@ class EvaluationLoop:
             balance = await self._market_data.get_balance()
             positions = await self._market_data.get_positions()
 
+            # Get factor score for this stock
+            factor = self._factor_scores.get(symbol)
+            factor_score = factor.composite if factor else 0.0
+
+            # Get strategy quality metrics for Kelly inputs
+            strategy_name = signal.strategy_name
+            metrics = self._signal_quality.get_metrics(strategy_name)
+            win_rate, avg_win, avg_loss = metrics.kelly_inputs
+
+            # Use Kelly-enhanced sizing
+            sizing = self._risk_manager.calculate_kelly_position_size(
+                symbol=symbol,
+                price=price,
+                portfolio_value=balance.total,
+                cash_available=balance.available,
+                current_positions=len(positions),
+                win_rate=win_rate,
+                avg_win=avg_win,
+                avg_loss=avg_loss,
+                signal_confidence=signal.confidence,
+                factor_score=factor_score,
+            )
+
+            if not sizing.allowed:
+                logger.info(
+                    "Buy rejected for %s: %s", symbol, sizing.reason,
+                )
+                return
+
             await self._order_manager.place_buy(
                 symbol=symbol,
                 price=price,
                 portfolio_value=balance.total,
                 cash_available=balance.available,
                 current_positions=len(positions),
-                strategy_name=signal.strategy_name,
+                strategy_name=strategy_name,
             )
 
         elif signal.signal_type == SignalType.SELL:
@@ -188,3 +257,17 @@ class EvaluationLoop:
                     price=price,
                     strategy_name=signal.strategy_name,
                 )
+
+    def record_trade_result(
+        self, strategy: str, symbol: str, return_pct: float,
+    ) -> None:
+        """Record a trade result for signal quality tracking."""
+        self._signal_quality.record_trade(strategy, symbol, return_pct)
+
+    @property
+    def factor_scores(self) -> dict[str, FactorScores]:
+        return dict(self._factor_scores)
+
+    @property
+    def signal_quality(self) -> SignalQualityTracker:
+        return self._signal_quality

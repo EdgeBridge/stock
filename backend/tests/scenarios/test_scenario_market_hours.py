@@ -118,7 +118,8 @@ async def test_evaluate_all_calls_each_symbol():
     )
 
     await loop._evaluate_all()
-    assert market_data.get_ohlcv.call_count == 3
+    # 3 calls from evaluate_symbol + 3 calls from _update_factor_scores
+    assert market_data.get_ohlcv.call_count == 6
 
 
 @pytest.mark.asyncio
