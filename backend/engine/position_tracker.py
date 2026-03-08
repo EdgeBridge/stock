@@ -181,10 +181,22 @@ class PositionTracker:
             self.untrack(tracked.symbol)
 
             if self._notification:
-                await self._notification.notify_stop_loss(
-                    tracked.symbol, tracked.quantity,
-                    tracked.entry_price, price, pnl,
-                )
+                if reason == "stop_loss":
+                    await self._notification.notify_stop_loss(
+                        tracked.symbol, tracked.quantity,
+                        tracked.entry_price, price, pnl,
+                    )
+                elif reason == "take_profit":
+                    await self._notification.notify_take_profit(
+                        tracked.symbol, tracked.quantity,
+                        tracked.entry_price, price, pnl,
+                    )
+                elif reason == "trailing_stop":
+                    await self._notification.notify_trailing_stop(
+                        tracked.symbol, tracked.quantity,
+                        tracked.entry_price, price,
+                        tracked.highest_price, pnl,
+                    )
 
     @property
     def tracked_symbols(self) -> list[str]:

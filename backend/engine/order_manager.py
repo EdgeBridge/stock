@@ -42,9 +42,11 @@ class OrderManager:
         self,
         adapter: ExchangeAdapter,
         risk_manager: RiskManager,
+        notification=None,
     ):
         self._adapter = adapter
         self._risk = risk_manager
+        self._notification = notification
         self._active_orders: dict[str, ManagedOrder] = {}
 
     async def place_buy(
@@ -71,6 +73,8 @@ class OrderManager:
 
         if not sizing.allowed:
             logger.info("Buy rejected for %s: %s", symbol, sizing.reason)
+            if self._notification:
+                await self._notification.notify_order_rejected(symbol, sizing.reason)
             return None
 
         try:
@@ -99,6 +103,10 @@ class OrderManager:
                 "Buy order placed: %s %d shares @ $%.2f (%s)",
                 symbol, sizing.quantity, price, strategy_name,
             )
+            if self._notification:
+                await self._notification.notify_trade_executed(
+                    symbol, "BUY", sizing.quantity, price, strategy_name,
+                )
             if _trade_recorder:
                 _trade_recorder({
                     "symbol": symbol, "side": "BUY", "quantity": sizing.quantity,
@@ -148,6 +156,10 @@ class OrderManager:
                 "Sell order placed: %s %d shares @ %s (%s)",
                 symbol, quantity, f"${price:.2f}" if price else "market", strategy_name,
             )
+            if self._notification:
+                await self._notification.notify_trade_executed(
+                    symbol, "SELL", quantity, price or 0, strategy_name,
+                )
             if _trade_recorder:
                 _trade_recorder({
                     "symbol": symbol, "side": "SELL", "quantity": quantity,

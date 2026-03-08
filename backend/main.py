@@ -105,7 +105,7 @@ async def lifespan(app: FastAPI):
 
     # Engine components
     risk_manager = RiskManager()
-    order_manager = OrderManager(adapter=adapter, risk_manager=risk_manager)
+    order_manager = OrderManager(adapter=adapter, risk_manager=risk_manager, notification=notification)
     app.state.risk_manager = risk_manager
     app.state.order_manager = order_manager
     app.state.combiner = SignalCombiner()

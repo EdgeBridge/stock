@@ -27,6 +27,9 @@ async def start_engine(request: Request):
     if scheduler.running:
         return {"status": "already_running"}
     asyncio.create_task(scheduler.start())
+    notification = getattr(request.app.state, "notification", None)
+    if notification:
+        await notification.notify_system_event("engine_start", "Trading engine started")
     return {"status": "started"}
 
 
@@ -39,6 +42,9 @@ async def stop_engine(request: Request):
     if not scheduler.running:
         return {"status": "already_stopped"}
     await scheduler.stop()
+    notification = getattr(request.app.state, "notification", None)
+    if notification:
+        await notification.notify_system_event("engine_stop", "Trading engine stopped")
     return {"status": "stopped"}
 
 
