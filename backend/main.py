@@ -175,12 +175,21 @@ async def lifespan(app: FastAPI):
     )
     app.state.portfolio_manager = portfolio_manager
 
-    # Scanner pipeline
+    # Scanner pipeline (with AI agent if LLM enabled)
     enricher = FundamentalEnricher()
+    ai_agent = None
+    if config.llm.enabled and config.llm.api_key:
+        from agents.market_analyst import MarketAnalystAgent
+        ai_agent = MarketAnalystAgent(
+            api_key=config.llm.api_key,
+            model=config.llm.model,
+        )
+        logger.info("AI agent enabled (model=%s)", config.llm.model)
     scanner_pipeline = ScannerPipeline(
         market_data=market_data,
         indicator_svc=indicator_svc,
         enricher=enricher,
+        ai_agent=ai_agent,
     )
     app.state.scanner_pipeline = scanner_pipeline
 
