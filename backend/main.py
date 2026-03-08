@@ -28,6 +28,7 @@ from scanner.pipeline import ScannerPipeline
 from scanner.fundamental_enricher import FundamentalEnricher
 from scanner.stock_scanner import StockScanner
 from scanner.sector_analyzer import SectorAnalyzer
+from scanner.universe_expander import UniverseExpander
 from data.market_state import MarketStateDetector
 from data.external_data_service import ExternalDataService
 from data.fred_service import FREDService
@@ -197,9 +198,11 @@ async def lifespan(app: FastAPI):
     stock_scanner = StockScanner(adapter=adapter, market_data=market_data)
     sector_analyzer = SectorAnalyzer()
     external_data = ExternalDataService()
+    universe_expander = UniverseExpander(sector_analyzer=sector_analyzer)
     app.state.stock_scanner = stock_scanner
     app.state.sector_analyzer = sector_analyzer
     app.state.external_data = external_data
+    app.state.universe_expander = universe_expander
 
     # Market state detector
     market_state_detector = MarketStateDetector()
@@ -315,27 +318,30 @@ async def lifespan(app: FastAPI):
     async def task_after_hours_scan():
         """T4a: Post-market stock analysis & watchlist update.
 
-        Runs 3-layer pipeline on a broad universe to find tomorrow's candidates.
+        Runs 3-layer pipeline on a dynamically discovered universe.
+        Uses yfinance screeners + sector rotation to find candidates.
         Top candidates are auto-added to watchlist.
         """
         from db.trade_repository import TradeRepository
 
-        # Broad universe: current watchlist + popular large-caps
-        base_universe = [
-            "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "TSLA", "META",
-            "JPM", "JNJ", "XOM", "UNH", "V", "MA", "HD", "PG",
-            "COST", "ABBV", "CRM", "AMD", "NFLX", "ADBE", "AVGO",
-            "LLY", "MRK", "PEP", "KO", "WMT", "DIS", "INTC", "CSCO",
-        ]
         try:
-            # Merge with existing watchlist
+            # Get existing watchlist
             async with session_factory() as session:
                 repo = TradeRepository(session)
                 existing = await repo.get_watchlist(active_only=True)
-                existing_syms = {w.symbol for w in existing}
+                existing_syms = [w.symbol for w in existing]
 
-            universe = list(existing_syms | set(base_universe))
-            logger.info("After-hours scan: %d symbols in universe", len(universe))
+            # Dynamic universe expansion
+            sector_data = await external_data.get_sector_performance()
+            universe_result = await universe_expander.expand(
+                existing_watchlist=existing_syms,
+                sector_data=sector_data,
+            )
+            universe = universe_result.symbols
+            logger.info(
+                "After-hours scan: %d symbols in universe (discovered=%d)",
+                len(universe), universe_result.total_discovered,
+            )
 
             # Run 3-layer pipeline (grade C to cast a wider net)
             candidates = await scanner_pipeline.run_full_scan(

@@ -73,3 +73,23 @@ async def sector_performance():
                 "return_1m": info.get("return_1m", 0),
             })
     return result
+
+
+@router.get("/universe")
+async def discover_universe():
+    """Discover stocks dynamically using screeners + sector rotation."""
+    from scanner.universe_expander import UniverseExpander
+    from scanner.sector_analyzer import SectorAnalyzer
+    from data.external_data_service import ExternalDataService
+
+    external = ExternalDataService()
+    sector_data = await external.get_sector_performance()
+
+    expander = UniverseExpander(sector_analyzer=SectorAnalyzer())
+    result = await expander.expand(sector_data=sector_data)
+
+    return {
+        "total": len(result.symbols),
+        "symbols": result.symbols,
+        "sources": {k: len(v) for k, v in result.sources.items()},
+    }
