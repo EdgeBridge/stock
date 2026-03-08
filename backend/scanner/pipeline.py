@@ -1,13 +1,19 @@
 """Scanner Pipeline Orchestrator.
 
 Chains the 3 screening layers into a single pipeline:
-  Layer 1: IndicatorScreener  (technical scoring)
+  Layer 1: IndicatorScreener  (technical scoring, yfinance data)
   Layer 2: FundamentalEnricher (yfinance fundamentals)
   Layer 3: MarketAnalystAgent  (Claude AI analysis, optional)
+
+Uses yfinance for bulk screening (no rate limits).
+KIS API is reserved for order execution and real-time quotes only.
 """
 
 import logging
 from dataclasses import asdict
+
+import yfinance as yf
+import pandas as pd
 
 from data.market_data_service import MarketDataService
 from data.indicator_service import IndicatorService
@@ -16,6 +22,24 @@ from scanner.fundamental_enricher import FundamentalEnricher
 from agents.market_analyst import MarketAnalystAgent
 
 logger = logging.getLogger(__name__)
+
+
+def _fetch_yfinance_ohlcv(symbol: str, period: str = "1y") -> pd.DataFrame:
+    """Fetch OHLCV from yfinance (no rate limit)."""
+    try:
+        ticker = yf.Ticker(symbol)
+        df = ticker.history(period=period, interval="1d")
+        if df.empty:
+            return pd.DataFrame()
+        df.columns = [c.lower() for c in df.columns]
+        # Ensure standard column names
+        for col in ["open", "high", "low", "close", "volume"]:
+            if col not in df.columns:
+                return pd.DataFrame()
+        return df[["open", "high", "low", "close", "volume"]]
+    except Exception as e:
+        logger.debug("yfinance fetch failed for %s: %s", symbol, e)
+        return pd.DataFrame()
 
 
 class ScannerPipeline:
@@ -42,6 +66,10 @@ class ScannerPipeline:
     ) -> list[dict]:
         """Run all 3 layers and return ranked candidates.
 
+        Layer 1 uses yfinance for bulk data (no rate limits).
+        Layer 2 uses yfinance for fundamentals.
+        KIS API is not used during scanning.
+
         Args:
             symbols: List of stock tickers to scan.
             min_grade: Minimum grade to pass Layer 1 (default "B").
@@ -54,13 +82,13 @@ class ScannerPipeline:
             logger.info("Scanner pipeline: no symbols provided")
             return []
 
-        # Layer 1: Score all symbols with IndicatorScreener
-        logger.info("Layer 1: Screening %d symbols", len(symbols))
+        # Layer 1: Score all symbols with IndicatorScreener (yfinance data)
+        logger.info("Layer 1: Screening %d symbols (yfinance)", len(symbols))
         screener_scores = []
         for symbol in symbols:
             try:
-                df = await self._market_data.get_ohlcv(symbol, limit=250)
-                if df.empty:
+                df = _fetch_yfinance_ohlcv(symbol, period="1y")
+                if df.empty or len(df) < 50:
                     continue
                 df = self._indicator_svc.add_all_indicators(df)
                 score = self._screener.score(df, symbol)
@@ -79,14 +107,18 @@ class ScannerPipeline:
         if not filtered:
             return []
 
-        # Layer 2: Enrich top candidates with FundamentalEnricher
+        # Layer 2: Enrich top candidates with FundamentalEnricher (yfinance)
         logger.info("Layer 2: Enriching %d candidates", len(filtered))
         enrich_input = []
         for s in filtered:
+            # Get price from the screener data (last close) — no KIS call
+            price = 0.0
             try:
-                price = await self._market_data.get_price(s.symbol)
+                df = _fetch_yfinance_ohlcv(s.symbol, period="5d")
+                if not df.empty:
+                    price = float(df.iloc[-1]["close"])
             except Exception:
-                price = 0.0
+                pass
             enrich_input.append((s.symbol, s.total_score, price))
 
         enriched = await self._enricher.enrich_batch(enrich_input)

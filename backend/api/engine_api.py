@@ -164,6 +164,25 @@ async def run_evaluation(request: Request):
         return {"status": "error", "detail": str(e)}
 
 
+@router.post("/run-task/{task_name}")
+async def run_task(task_name: str, request: Request):
+    """Manually trigger a scheduler task by name."""
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if not scheduler:
+        return {"status": "error", "detail": "Scheduler not initialized"}
+
+    task = next((t for t in scheduler._tasks if t.name == task_name), None)
+    if not task:
+        available = [t.name for t in scheduler._tasks]
+        return {"status": "error", "detail": f"Task '{task_name}' not found", "available": available}
+
+    try:
+        await task.fn()
+        return {"status": "ok", "task": task_name}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
+
+
 @router.get("/websocket")
 async def websocket_status(request: Request):
     """Get KIS WebSocket connection status."""

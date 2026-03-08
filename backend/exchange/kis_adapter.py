@@ -414,23 +414,43 @@ class KISAdapter(ExchangeAdapter):
         )
 
     async def _get(
-        self, path: str, tr_id: str, params: dict[str, str]
+        self, path: str, tr_id: str, params: dict[str, str],
+        max_retries: int = 3,
     ) -> dict[str, Any]:
         url = f"{self._config.base_url}{path}"
-        headers = self._auth.get_auth_headers(tr_id)
-        async with self._session.get(url, headers=headers, params=params) as resp:
-            data = await resp.json()
-            if data.get("rt_cd") != "0":
-                logger.warning("KIS API error: %s %s", data.get("msg_cd"), data.get("msg1"))
+        for attempt in range(max_retries):
+            headers = self._auth.get_auth_headers(tr_id)
+            async with self._session.get(url, headers=headers, params=params) as resp:
+                data = await resp.json()
+            if data.get("rt_cd") == "0":
+                return data
+            msg_cd = data.get("msg_cd", "")
+            if msg_cd == "EGW00201" and attempt < max_retries - 1:
+                import asyncio
+                wait = 0.3 * (attempt + 1)
+                await asyncio.sleep(wait)
+                continue
+            logger.warning("KIS API error: %s %s", msg_cd, data.get("msg1"))
             return data
+        return data
 
     async def _post(
-        self, path: str, tr_id: str, body: dict, hashkey: str = ""
+        self, path: str, tr_id: str, body: dict, hashkey: str = "",
+        max_retries: int = 3,
     ) -> dict[str, Any]:
         url = f"{self._config.base_url}{path}"
-        headers = self._auth.get_auth_headers(tr_id, hashkey)
-        async with self._session.post(url, headers=headers, json=body) as resp:
-            data = await resp.json()
-            if data.get("rt_cd") != "0":
-                logger.warning("KIS API error: %s %s", data.get("msg_cd"), data.get("msg1"))
+        for attempt in range(max_retries):
+            headers = self._auth.get_auth_headers(tr_id, hashkey)
+            async with self._session.post(url, headers=headers, json=body) as resp:
+                data = await resp.json()
+            if data.get("rt_cd") == "0":
+                return data
+            msg_cd = data.get("msg_cd", "")
+            if msg_cd == "EGW00201" and attempt < max_retries - 1:
+                import asyncio
+                wait = 0.3 * (attempt + 1)
+                await asyncio.sleep(wait)
+                continue
+            logger.warning("KIS API error: %s %s", msg_cd, data.get("msg1"))
             return data
+        return data

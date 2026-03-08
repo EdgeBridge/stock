@@ -445,6 +445,7 @@ async def lifespan(app: FastAPI):
 
     # Load watchlist into evaluation loop from DB
     try:
+        from db.trade_repository import TradeRepository
         async with session_factory() as session:
             repo = TradeRepository(session)
             wl = await repo.get_watchlist(active_only=True)

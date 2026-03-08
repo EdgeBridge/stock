@@ -16,8 +16,8 @@ from services.rate_limiter import RateLimiter
 logger = logging.getLogger(__name__)
 
 # Cache TTLs
-TICKER_CACHE_TTL = 10      # seconds
-OHLCV_CACHE_TTL = 60       # seconds
+TICKER_CACHE_TTL = 10       # seconds
+OHLCV_CACHE_TTL = 300       # 5 min (daily data doesn't change fast)
 
 
 class MarketDataService:
