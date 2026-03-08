@@ -29,6 +29,8 @@ from scanner.fundamental_enricher import FundamentalEnricher
 from scanner.stock_scanner import StockScanner
 from scanner.sector_analyzer import SectorAnalyzer
 from scanner.universe_expander import UniverseExpander
+from scanner.etf_universe import ETFUniverse
+from engine.etf_engine import ETFEngine
 from data.market_state import MarketStateDetector
 from data.external_data_service import ExternalDataService
 from data.fred_service import FREDService
@@ -198,11 +200,25 @@ async def lifespan(app: FastAPI):
     stock_scanner = StockScanner(adapter=adapter, market_data=market_data)
     sector_analyzer = SectorAnalyzer()
     external_data = ExternalDataService()
-    universe_expander = UniverseExpander(sector_analyzer=sector_analyzer)
+    etf_universe = ETFUniverse()
+    universe_expander = UniverseExpander(
+        etf_universe=etf_universe, sector_analyzer=sector_analyzer,
+    )
     app.state.stock_scanner = stock_scanner
     app.state.sector_analyzer = sector_analyzer
     app.state.external_data = external_data
     app.state.universe_expander = universe_expander
+
+    # ETF Engine (leveraged pair switching + sector ETF rotation)
+    etf_engine = ETFEngine(
+        market_data=market_data,
+        order_manager=order_manager,
+        etf_universe=etf_universe,
+        sector_analyzer=sector_analyzer,
+        notification=notification,
+    )
+    app.state.etf_engine = etf_engine
+    logger.info("ETF Engine initialized")
 
     # Market state detector
     market_state_detector = MarketStateDetector()
@@ -284,6 +300,34 @@ async def lifespan(app: FastAPI):
                 )
         except Exception as e:
             logger.error("Market state update failed: %s", e)
+
+    async def task_etf_evaluation():
+        """ETF Engine: regime-based leveraged pair + sector ETF rotation."""
+        try:
+            # Get current market state
+            spy_df = await market_data.get_ohlcv("SPY", limit=250)
+            if spy_df.empty:
+                return
+            state = market_state_detector.detect(spy_df)
+
+            # Get sector data for sector rotation
+            sector_data = await external_data.get_sector_performance()
+
+            # Run ETF engine evaluation
+            actions = await etf_engine.evaluate(
+                market_state=state,
+                sector_data=sector_data,
+            )
+
+            total = sum(len(v) for v in actions.values())
+            if total > 0:
+                logger.info(
+                    "ETF Engine: %d actions (regime=%d, sector=%d, risk=%d)",
+                    total, len(actions["regime"]),
+                    len(actions["sector"]), len(actions["risk"]),
+                )
+        except Exception as e:
+            logger.error("ETF evaluation failed: %s", e)
 
     async def task_intraday_hot_scan():
         """T2: Intraday hot scan — find active stocks during session."""
@@ -411,6 +455,10 @@ async def lifespan(app: FastAPI):
 
     scheduler.add_task(
         "market_state_update", task_market_state_update,
+        interval_sec=900, phases=[MarketPhase.REGULAR],
+    )
+    scheduler.add_task(
+        "etf_evaluation", task_etf_evaluation,
         interval_sec=900, phases=[MarketPhase.REGULAR],
     )
     scheduler.add_task(

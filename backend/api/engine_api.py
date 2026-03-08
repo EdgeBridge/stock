@@ -190,3 +190,12 @@ async def websocket_status(request: Request):
     if not ws:
         return {"status": "not_configured"}
     return ws.get_status()
+
+
+@router.get("/etf")
+async def etf_engine_status(request: Request):
+    """Get ETF engine status: regime, sector rotation, managed positions."""
+    etf_engine = getattr(request.app.state, "etf_engine", None)
+    if not etf_engine:
+        return {"status": "not_configured"}
+    return etf_engine.get_status()

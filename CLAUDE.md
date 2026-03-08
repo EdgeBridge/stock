@@ -52,10 +52,15 @@ Architecture inherited from ~/coin project (crypto trading bot).
 
 ### Key Architecture Decisions
 - KIS API rate limit: 20 req/sec (real), 5 req/sec (paper) — use RateLimiter
-- KIS WebSocket: max 41 subscriptions per session — priority-based rotation
-- US stock real-time data via KIS is delayed (~15min) — supplement with yfinance
+- KIS WebSocket: max 41 subscriptions per session, market-hours only, 4h max session
+- yfinance-first for bulk data (no rate limits), KIS reserved for orders/balance only
 - 3-Layer screening: IndicatorScreener (tech only) -> FundamentalEnricher (yfinance) -> AI (Claude)
-- Dual engine: US Stock Engine (individual stocks) + ETF Engine (leveraged/inverse)
+- Dual engine: US Stock Engine (individual stocks) + ETF Engine (leveraged/inverse + sector ETFs)
+  - ETF Engine: engine/etf_engine.py — regime-based leveraged pair switching + sector ETF rotation
+  - Leveraged pairs: TQQQ/SQQQ, SOXL/SOXS, UPRO/SPXU, TECL/TECS (auto-switch on regime change)
+  - Sector ETFs: XLK, XLF, XLE, etc. (buy top sectors, sell bottom sectors)
+  - ETF risk rules: max 10-day hold for leveraged, max 30% portfolio, max 15% single ETF
+- Dynamic universe: scanner/universe_expander.py — yfinance screeners + sector-weighted discovery
 - All strategy params in config/strategies.yaml with runtime hot-reload
 - 13 strategies total: 10 original + 3 ported from coin project (cis_momentum, larry_williams, bnf_deviation)
 - Coin strategy adaptations: 4h crypto → 1D stocks, thresholds adjusted (e.g. BNF deviation -10%→-5%)
@@ -66,6 +71,7 @@ Architecture inherited from ~/coin project (crypto trading bot).
 - Donchian breakout: uses previous bar's channel (pandas-ta donchian includes current bar)
 - Bollinger squeeze: squeeze_min_bars=3 (daily timeframe; 6 was too strict)
 - Backtest verification: backtest/verify_strategies.py — 13 strategies × 8 stocks × 3yr
+- Scheduler tasks: 15 total (health_check, position_check, daily_reset, evaluation_loop, daily_scan, market_state_update, etf_evaluation, portfolio_snapshot, intraday_hot_scan, sector_analysis, after_hours_scan, daily_briefing, macro_update, ws_lifecycle)
 
 ### Reference
 - ~/coin: Crypto trading bot (architecture reference)
