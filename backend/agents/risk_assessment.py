@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from services.agent_context import AgentContextService
     from services.llm import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -79,11 +80,19 @@ class RiskAssessment:
     summary: str = ""
 
 
+AGENT_TYPE = "risk"
+
+
 class RiskAssessmentAgent:
     """AI agent for portfolio risk assessment using LLMClient."""
 
-    def __init__(self, llm_client: LLMClient | None = None):
+    def __init__(
+        self,
+        llm_client: LLMClient | None = None,
+        context_service: AgentContextService | None = None,
+    ):
         self._llm_client = llm_client
+        self._ctx = context_service
 
     async def assess_portfolio(
         self,
@@ -97,8 +106,19 @@ class RiskAssessmentAgent:
             logger.warning("No LLM client configured, returning default risk assessment")
             return RiskAssessment()
 
+        # Load past risk context
+        memory_context = ""
+        if self._ctx:
+            try:
+                memory_context = await self._ctx.build_context(
+                    AGENT_TYPE, max_tokens=1000,
+                )
+            except Exception as e:
+                logger.debug("Failed to load agent context: %s", e)
+
         user_prompt = self._build_portfolio_prompt(
             positions, portfolio_summary, market_context, recent_trades,
+            memory_context,
         )
 
         try:
@@ -107,7 +127,26 @@ class RiskAssessmentAgent:
                 system=SYSTEM_PROMPT,
                 max_tokens=1024,
             )
-            return self._parse_response(response.text or "")
+            result = self._parse_response(response.text or "")
+
+            # Save risk insight
+            if self._ctx and result.summary:
+                try:
+                    importance = 5
+                    if result.overall_risk_level == "CRITICAL":
+                        importance = 10
+                    elif result.overall_risk_level == "HIGH":
+                        importance = 8
+                    await self._ctx.save(
+                        AGENT_TYPE, "market", None,
+                        f"Risk={result.overall_risk_level}(score={result.risk_score}): "
+                        f"{result.summary[:200]}",
+                        importance=importance,
+                    )
+                except Exception as e:
+                    logger.debug("Failed to save risk insight: %s", e)
+
+            return result
 
         except Exception as e:
             logger.error("Risk assessment failed: %s", e)
@@ -168,6 +207,7 @@ Should this trade be approved from a risk management perspective? Respond as JSO
         portfolio_summary: dict,
         market_context: dict,
         recent_trades: list[dict] | None,
+        memory_context: str = "",
     ) -> str:
         parts = [
             "Assess the risk of this portfolio:\n",
@@ -182,6 +222,9 @@ Should this trade be approved from a risk management perspective? Respond as JSO
         if recent_trades:
             parts.append("\n## Recent Trades:")
             parts.append(json.dumps(recent_trades, indent=2, default=str))
+
+        if memory_context:
+            parts.append(f"\n{memory_context}")
 
         parts.append("\nProvide your comprehensive risk assessment as JSON.")
         return "\n".join(parts)

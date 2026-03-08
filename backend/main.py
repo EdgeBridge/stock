@@ -192,12 +192,20 @@ async def lifespan(app: FastAPI):
         logger.info("LLM client enabled: %s", " -> ".join(providers))
     app.state.llm_client = llm_client
 
+    # Agent context service (persistent memory for AI agents)
+    agent_ctx = None
+    if llm_client:
+        from services.agent_context import AgentContextService
+        agent_ctx = AgentContextService(session_factory)
+        logger.info("Agent context service enabled")
+    app.state.agent_context = agent_ctx
+
     # Scanner pipeline (with AI agent if LLM enabled)
     enricher = FundamentalEnricher()
     ai_agent = None
     if llm_client:
         from agents.market_analyst import MarketAnalystAgent
-        ai_agent = MarketAnalystAgent(llm_client=llm_client)
+        ai_agent = MarketAnalystAgent(llm_client=llm_client, context_service=agent_ctx)
         logger.info("AI agent enabled")
     scanner_pipeline = ScannerPipeline(
         market_data=market_data,

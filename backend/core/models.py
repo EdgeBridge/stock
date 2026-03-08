@@ -136,6 +136,26 @@ class AgentLog(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class AgentMemory(Base):
+    """Persistent memory for AI agents — stores insights for future context."""
+    __tablename__ = "agent_memory"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    agent_type = Column(String(30), nullable=False)    # market_analyst, risk, trade_review
+    category = Column(String(30), nullable=False)      # symbol, sector, market, lesson
+    symbol = Column(String(20))                        # null for market/lesson
+    content = Column(Text, nullable=False)             # insight text
+    token_count = Column(Integer, nullable=False, default=0)
+    importance = Column(Integer, nullable=False, default=5)  # 1-10 priority
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)      # auto-cleanup
+
+    __table_args__ = (
+        Index("idx_agent_memory_lookup", "agent_type", "category", "symbol"),
+        Index("idx_agent_memory_expires", "expires_at"),
+    )
+
+
 class Event(Base):
     __tablename__ = "events"
 

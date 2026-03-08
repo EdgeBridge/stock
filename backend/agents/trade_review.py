@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from services.agent_context import AgentContextService
     from services.llm import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -80,11 +81,19 @@ class TradeReview:
     summary: str = ""
 
 
+AGENT_TYPE = "trade_review"
+
+
 class TradeReviewAgent:
     """AI agent for post-trade review and learning using LLMClient."""
 
-    def __init__(self, llm_client: LLMClient | None = None):
+    def __init__(
+        self,
+        llm_client: LLMClient | None = None,
+        context_service: AgentContextService | None = None,
+    ):
         self._llm_client = llm_client
+        self._ctx = context_service
 
     async def review_trade(
         self,
@@ -108,9 +117,20 @@ class TradeReviewAgent:
             logger.warning("No LLM client configured, returning default trade review")
             return TradeReview(symbol=symbol, trade_date=trade_date, side=side)
 
+        # Load past lessons for this symbol/strategy
+        memory_context = ""
+        if self._ctx:
+            try:
+                memory_context = await self._ctx.build_context(
+                    AGENT_TYPE, symbol=symbol, max_tokens=1000,
+                )
+            except Exception as e:
+                logger.debug("Failed to load agent context: %s", e)
+
         user_prompt = self._build_prompt(
             symbol, side, entry_price, exit_price, quantity,
             strategy_name, pnl, holding_days, market_context, indicator_data,
+            memory_context,
         )
 
         try:
@@ -119,7 +139,24 @@ class TradeReviewAgent:
                 system=SYSTEM_PROMPT,
                 max_tokens=1024,
             )
-            return self._parse_response(symbol, side, response.text or "")
+            result = self._parse_response(symbol, side, response.text or "")
+
+            # Save lessons to memory
+            if self._ctx and result.lessons:
+                try:
+                    importance = 6 if result.grade in ("A", "B") else 7
+                    lesson_text = (
+                        f"[{strategy_name}] {side} {symbol} grade={result.grade}: "
+                        + "; ".join(result.lessons[:3])
+                    )
+                    await self._ctx.save(
+                        AGENT_TYPE, "lesson", symbol, lesson_text[:300],
+                        importance=importance, ttl_days=30,
+                    )
+                except Exception as e:
+                    logger.debug("Failed to save trade lesson: %s", e)
+
+            return result
 
         except Exception as e:
             logger.error("Trade review failed for %s: %s", symbol, e)
@@ -182,11 +219,12 @@ Provide your daily trade review as JSON."""
         holding_days: int,
         market_context: dict,
         indicator_data: dict,
+        memory_context: str = "",
     ) -> str:
         exit_str = f"${exit_price:.2f}" if exit_price is not None else "N/A (open)"
         pnl_pct = (pnl / (entry_price * quantity) * 100) if entry_price * quantity else 0
 
-        return f"""Review this {side.upper()} trade for {symbol}:
+        parts = [f"""Review this {side.upper()} trade for {symbol}:
 
 ## Trade Details:
 - Side: {side}
@@ -201,9 +239,13 @@ Provide your daily trade review as JSON."""
 {json.dumps(market_context, indent=2, default=str)}
 
 ## Technical Indicators at Trade Time:
-{json.dumps(indicator_data, indent=2, default=str)}
+{json.dumps(indicator_data, indent=2, default=str)}"""]
 
-Provide your trade review as JSON."""
+        if memory_context:
+            parts.append(f"\n{memory_context}")
+
+        parts.append("\nProvide your trade review as JSON.")
+        return "\n".join(parts)
 
     def _parse_response(self, symbol: str, side: str, text: str) -> TradeReview:
         """Parse LLM's JSON response into TradeReview."""

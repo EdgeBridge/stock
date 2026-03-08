@@ -3,6 +3,9 @@
 Layer 3 of the screening pipeline: LLM-based comprehensive analysis.
 Combines indicator scores, fundamental data, and market context
 to produce actionable trade recommendations.
+
+Supports persistent memory: saves key insights after each analysis
+and injects relevant past context into future prompts.
 """
 
 from __future__ import annotations
@@ -13,9 +16,12 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from services.agent_context import AgentContextService
     from services.llm import LLMClient
 
 logger = logging.getLogger(__name__)
+
+AGENT_TYPE = "market_analyst"
 
 SYSTEM_PROMPT = """You are a professional US stock market analyst AI assistant.
 You analyze stocks using a combination of technical indicators, fundamental data,
@@ -67,8 +73,13 @@ class AIRecommendation:
 class MarketAnalystAgent:
     """AI agent for comprehensive stock analysis using LLMClient."""
 
-    def __init__(self, llm_client: LLMClient | None = None):
+    def __init__(
+        self,
+        llm_client: LLMClient | None = None,
+        context_service: AgentContextService | None = None,
+    ):
         self._llm_client = llm_client
+        self._ctx = context_service
 
     async def analyze(
         self,
@@ -91,8 +102,20 @@ class MarketAnalystAgent:
             logger.warning("No LLM client configured, returning default recommendation")
             return AIRecommendation(symbol=symbol)
 
+        # Build context from past memories
+        memory_context = ""
+        if self._ctx:
+            try:
+                sector = fundamental_data.get("sector", "")
+                memory_context = await self._ctx.build_context(
+                    AGENT_TYPE, symbol=symbol, sector=sector, max_tokens=1500,
+                )
+            except Exception as e:
+                logger.debug("Failed to load agent context: %s", e)
+
         user_prompt = self._build_prompt(
-            symbol, indicator_score, fundamental_data, market_context, current_price,
+            symbol, indicator_score, fundamental_data,
+            market_context, current_price, memory_context,
         )
 
         try:
@@ -101,11 +124,39 @@ class MarketAnalystAgent:
                 system=SYSTEM_PROMPT,
                 max_tokens=1024,
             )
-            return self._parse_response(symbol, response.text or "")
+            result = self._parse_response(symbol, response.text or "")
+
+            # Save insight to memory (fire-and-forget)
+            if self._ctx and result.summary:
+                await self._save_insight(symbol, result)
+
+            return result
 
         except Exception as e:
             logger.error("AI analysis failed for %s: %s", symbol, e)
             return AIRecommendation(symbol=symbol)
+
+    async def _save_insight(self, symbol: str, result: AIRecommendation) -> None:
+        """Extract and save key insight from analysis result."""
+        try:
+            # Importance based on conviction + non-HOLD recommendation
+            importance = 5
+            if result.conviction == "HIGH":
+                importance = 8
+            elif result.conviction == "MEDIUM":
+                importance = 6
+            if result.recommendation in ("STRONG_BUY", "STRONG_SELL"):
+                importance = min(10, importance + 2)
+
+            insight = (
+                f"{result.recommendation}(score={result.score}, "
+                f"conviction={result.conviction}): {result.summary[:200]}"
+            )
+            await self._ctx.save(
+                AGENT_TYPE, "symbol", symbol, insight, importance=importance,
+            )
+        except Exception as e:
+            logger.debug("Failed to save agent insight: %s", e)
 
     def _build_prompt(
         self,
@@ -114,18 +165,20 @@ class MarketAnalystAgent:
         fundamental_data: dict,
         market_context: dict,
         current_price: float,
+        memory_context: str = "",
     ) -> str:
-        return f"""Analyze {symbol} (current price: ${current_price:.2f})
+        parts = [
+            f"Analyze {symbol} (current price: ${current_price:.2f})",
+            f"\n## Technical Indicator Score: {indicator_score:.0f}/100",
+            f"\n## Fundamental Data:\n{json.dumps(fundamental_data, indent=2, default=str)}",
+            f"\n## Market Context:\n{json.dumps(market_context, indent=2, default=str)}",
+        ]
 
-## Technical Indicator Score: {indicator_score:.0f}/100
+        if memory_context:
+            parts.append(f"\n{memory_context}")
 
-## Fundamental Data:
-{json.dumps(fundamental_data, indent=2, default=str)}
-
-## Market Context:
-{json.dumps(market_context, indent=2, default=str)}
-
-Provide your comprehensive analysis and recommendation as JSON."""
+        parts.append("\nProvide your comprehensive analysis and recommendation as JSON.")
+        return "\n".join(parts)
 
     def _parse_response(self, symbol: str, text: str) -> AIRecommendation:
         """Parse LLM's JSON response into AIRecommendation."""
