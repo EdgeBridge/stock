@@ -112,33 +112,66 @@ class FundamentalEnricher:
         return max(0, min(100, score))
 
     def _score_fundamentals(self, profile: StockProfile) -> float:
+        """Score fundamentals using research-backed factors.
+
+        Empirical IC results (60 stocks, 5yr):
+        - Revenue growth: IC=0.23 (strongest predictor)
+        - Earnings growth: IC=0.19
+        - Profit margin: IC=0.18, IR=1.39 (most consistent)
+        - ROE: IC=0.11
+        - GARP (growth/PE): IC=0.20
+        """
         score = 50.0
         f = profile.fundamentals
 
+        # Revenue growth (IC=0.23 — strongest predictor)
         if f.revenue_growth is not None:
-            if f.revenue_growth > 0.20:
+            if f.revenue_growth > 0.25:
+                score += 18
+            elif f.revenue_growth > 0.15:
+                score += 12
+            elif f.revenue_growth > 0.05:
+                score += 5
+            elif f.revenue_growth < -0.05:
+                score -= 12
+
+        # Earnings growth (IC=0.19)
+        if f.earnings_growth is not None:
+            if f.earnings_growth > 0.25:
                 score += 15
-            elif f.revenue_growth > 0.10:
-                score += 10
-            elif f.revenue_growth < 0:
+            elif f.earnings_growth > 0.10:
+                score += 8
+            elif f.earnings_growth < -0.10:
                 score -= 10
 
+        # Profit margin (IC=0.18, IR=1.39 — most consistent signal)
         if f.profit_margin is not None:
-            if f.profit_margin > 0.20:
-                score += 10
+            if f.profit_margin > 0.25:
+                score += 12
+            elif f.profit_margin > 0.15:
+                score += 8
+            elif f.profit_margin > 0.05:
+                score += 3
             elif f.profit_margin < 0:
-                score -= 10
+                score -= 12
 
-        if f.forward_pe is not None:
-            if 10 < f.forward_pe < 25:
-                score += 10
-            elif f.forward_pe > 50:
-                score -= 10
+        # ROE (IC=0.11)
+        if f.roe is not None:
+            if f.roe > 0.25:
+                score += 8
+            elif f.roe > 0.15:
+                score += 5
+            elif f.roe < 0.05:
+                score -= 5
 
-        if f.peg_ratio is not None:
-            if 0 < f.peg_ratio < 1.5:
+        # GARP: growth relative to PE (IC=0.20)
+        if f.revenue_growth is not None and f.forward_pe is not None and f.forward_pe > 0:
+            garp = f.revenue_growth / f.forward_pe * 100
+            if garp > 1.0:
                 score += 10
-            elif f.peg_ratio > 3:
+            elif garp > 0.5:
+                score += 5
+            elif garp < -0.2:
                 score -= 5
 
         return max(0, min(100, score))

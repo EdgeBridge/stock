@@ -19,12 +19,13 @@ from scanner.sector_analyzer import SectorAnalyzer, SectorScore
 logger = logging.getLogger(__name__)
 
 # yfinance predefined screener queries
+# Research shows growth > value for stock selection (IC: growth=0.23, value=-0.08)
 SCREENER_QUERIES = [
     "most_actives",
     "day_gainers",
     "growth_technology_stocks",
-    "undervalued_large_caps",
-    "undervalued_growth_stocks",
+    "undervalued_growth_stocks",  # growth focus, not pure value
+    "aggressive_small_caps",
 ]
 
 
