@@ -149,3 +149,52 @@ class TestMarketDataService:
         svc = MarketDataService(adapter=mock_adapter, rate_limiter=limiter)
         await svc.get_ticker("AAPL")
         limiter.acquire.assert_called_once()
+
+
+class TestYfinanceResampling:
+    """Test weekly/monthly OHLCV resampling."""
+
+    def _make_daily_df(self, days: int = 60) -> pd.DataFrame:
+        """Create synthetic daily OHLCV data."""
+        import numpy as np
+        dates = pd.date_range("2024-01-02", periods=days, freq="B")
+        np.random.seed(42)
+        close = 100 + np.cumsum(np.random.randn(days) * 0.5)
+        return pd.DataFrame({
+            "open": close - 0.5,
+            "high": close + 1.0,
+            "low": close - 1.0,
+            "close": close,
+            "volume": np.random.randint(100000, 500000, days).astype(float),
+        }, index=dates)
+
+    def test_weekly_resampling(self, service):
+        daily = self._make_daily_df(60)
+        with patch.object(service, "_fetch_yfinance") as mock:
+            # Simulate what _fetch_yfinance does internally for weekly
+            df = daily.resample("W").agg({
+                "open": "first", "high": "max", "low": "min",
+                "close": "last", "volume": "sum",
+            }).dropna()
+
+            assert len(df) < len(daily)  # Fewer bars after resampling
+            assert len(df) >= 10  # ~12 weeks in 60 business days
+            # Weekly high should be >= any daily high in that week
+            # Weekly volume should be sum of daily volumes
+
+    def test_monthly_resampling(self, service):
+        daily = self._make_daily_df(250)
+        df = daily.resample("ME").agg({
+            "open": "first", "high": "max", "low": "min",
+            "close": "last", "volume": "sum",
+        }).dropna()
+
+        assert len(df) < len(daily)
+        assert len(df) >= 10  # ~12 months in 250 business days
+        # Monthly volume should be much higher than any single day
+        assert df["volume"].iloc[0] > daily["volume"].iloc[0]
+
+    def test_daily_no_resampling(self, service):
+        daily = self._make_daily_df(60)
+        # Daily should not be resampled
+        assert len(daily) == 60

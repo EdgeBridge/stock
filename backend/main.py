@@ -2,6 +2,7 @@
 
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -359,12 +360,77 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Sector analysis failed: %s", e)
 
+    async def _cleanup_watchlist(
+        existing: list, candidate_symbols: list[str],
+    ) -> list[str]:
+        """Auto-remove scanner-added stocks that no longer qualify.
+
+        Rules:
+        - Only remove stocks added by scanner (source='scanner')
+        - Never remove manually added stocks
+        - Never remove stocks with open positions
+        - Remove if: scanner-added + not in current candidates + added >7 days ago
+        - Cap watchlist at 60 active symbols
+        """
+        from db.trade_repository import TradeRepository
+        from datetime import timedelta
+
+        now = datetime.utcnow()
+        max_watchlist = 60
+        min_age_days = 7  # Don't remove recently added
+
+        # Get current positions to protect
+        try:
+            positions = await market_data.get_positions()
+            held_symbols = {p.symbol for p in positions if p.quantity > 0}
+        except Exception:
+            held_symbols = set()
+
+        removable = []
+        for item in existing:
+            # Never remove manual adds or held positions
+            if item.source != "scanner":
+                continue
+            if item.symbol in held_symbols:
+                continue
+            # Don't remove if recently added
+            if item.added_at and (now - item.added_at) < timedelta(days=min_age_days):
+                continue
+            # Remove if not in current top candidates
+            if item.symbol not in candidate_symbols:
+                removable.append(item)
+
+        # If still under limit, only remove the weakest
+        active_count = sum(1 for w in existing if w.is_active)
+        if active_count <= max_watchlist and not removable:
+            return []
+
+        # If over limit, remove enough to get back under
+        if active_count > max_watchlist:
+            # Sort by oldest first (stale scanner picks)
+            removable.sort(key=lambda w: w.added_at or now)
+            to_remove = removable[:active_count - max_watchlist + 5]  # Remove 5 extra buffer
+        else:
+            # Under limit but have removable: trim stale scanner picks
+            removable.sort(key=lambda w: w.added_at or now)
+            to_remove = removable[:max(len(removable) // 2, 1)]  # Remove half of stale
+
+        removed = []
+        async with session_factory() as session:
+            repo = TradeRepository(session)
+            for item in to_remove:
+                await repo.remove_from_watchlist(item.symbol)
+                removed.append(item.symbol)
+
+        return removed
+
     async def task_after_hours_scan():
         """T4a: Post-market stock analysis & watchlist update.
 
         Runs 3-layer pipeline on a dynamically discovered universe.
         Uses yfinance screeners + sector rotation to find candidates.
         Top candidates are auto-added to watchlist.
+        Stale scanner-added stocks are auto-removed.
         """
         from db.trade_repository import TradeRepository
 
@@ -394,6 +460,10 @@ async def lifespan(app: FastAPI):
 
             if not candidates:
                 logger.info("After-hours scan: no candidates found")
+                # Still run cleanup even if no new candidates
+                removed = await _cleanup_watchlist(existing, [])
+                if removed:
+                    logger.info("Watchlist cleanup: removed %s", removed)
                 return
 
             # Auto-add top candidates to watchlist
@@ -407,6 +477,9 @@ async def lifespan(app: FastAPI):
                             symbol=sym, source="scanner",
                         )
                         added.append(sym)
+
+            # Auto-remove stale scanner-added stocks
+            removed = await _cleanup_watchlist(existing, top_symbols)
 
             # Update evaluation loop watchlist
             async with session_factory() as session:
@@ -426,11 +499,13 @@ async def lifespan(app: FastAPI):
                 )
             if added:
                 msg += f"\nNew watchlist adds: {', '.join(added)}"
+            if removed:
+                msg += f"\nAuto-removed (stale): {', '.join(removed)}"
 
             await notification.notify_system_event("after_hours_scan", msg)
             logger.info(
-                "After-hours scan: %d candidates, %d new adds",
-                len(candidates), len(added),
+                "After-hours scan: %d candidates, +%d added, -%d removed",
+                len(candidates), len(added), len(removed),
             )
         except Exception as e:
             logger.error("After-hours scan failed: %s", e)

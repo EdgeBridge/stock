@@ -117,8 +117,21 @@ class MarketDataService:
                 if col not in df.columns:
                     return pd.DataFrame()
 
-            df = df[["open", "high", "low", "close", "volume"]].tail(limit)
-            return df
+            df = df[["open", "high", "low", "close", "volume"]]
+
+            # Resample to weekly or monthly if requested
+            if timeframe == "1W":
+                df = df.resample("W").agg({
+                    "open": "first", "high": "max", "low": "min",
+                    "close": "last", "volume": "sum",
+                }).dropna()
+            elif timeframe == "1M":
+                df = df.resample("ME").agg({
+                    "open": "first", "high": "max", "low": "min",
+                    "close": "last", "volume": "sum",
+                }).dropna()
+
+            return df.tail(limit)
         except Exception as e:
             logger.debug("yfinance fetch failed for %s: %s", symbol, e)
             return pd.DataFrame()
