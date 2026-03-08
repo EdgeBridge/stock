@@ -147,6 +147,34 @@ class TestEngineAPI:
 
 
 class TestWatchlistAPI:
+    @pytest.fixture(autouse=True)
+    def _mock_db(self):
+        """Mock get_session_factory to use in-memory SQLite."""
+        import asyncio
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from core.models import Base
+
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+
+        loop = asyncio.new_event_loop()
+        try:
+            async def _setup():
+                async with engine.begin() as conn:
+                    await conn.run_sync(Base.metadata.create_all)
+            loop.run_until_complete(_setup())
+        finally:
+            loop.close()
+
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        with patch("api.watchlist.get_session_factory", return_value=factory):
+            yield
+
+        loop2 = asyncio.new_event_loop()
+        try:
+            loop2.run_until_complete(engine.dispose())
+        finally:
+            loop2.close()
+
     def test_watchlist_crud(self, client):
         # Get empty
         resp = client.get("/api/v1/watchlist/")
