@@ -1,22 +1,23 @@
-"""Multi-Factor Scoring Model.
+"""Multi-Factor Scoring Model (Research-Backed).
 
-Ranks stocks systematically using quantitative factors:
-1. Momentum Factor — price momentum across multiple timeframes
-2. Value Factor — valuation metrics (PE, PB, FCF yield)
-3. Quality Factor — profitability and financial health
-4. Low Volatility Factor — inverse of realized volatility
+Ranks stocks using empirically validated factors.
+Based on 5-year factor research (60 stocks, quarterly IC analysis):
 
-Each factor produces a z-score (cross-sectional ranking).
-Combined factor score determines stock attractiveness.
+Top Predictive Factors:
+1. Growth Factor (IC=0.22) — revenue & earnings growth
+2. GARP Factor (IC=0.20) — growth at reasonable price
+3. Profitability Factor (IC=0.18, IR=1.39) — margins & ROE (most consistent)
+4. Quality Composite (IC=0.17, IR=1.21) — combined quality metrics
+5. Momentum (IC=0.05-0.10) — weak alone, useful in combos
 
-References:
-- Fama-French 3-factor model (market, size, value)
-- Carhart 4-factor model (+momentum)
-- AQR quality-minus-junk (profitability, payout, safety)
+Removed (empirically harmful):
+- Low Volatility (IC=-0.10) — high-vol stocks outperform
+- Pure Value/cheap PE (IC=-0.08) — value trap
+- Low Debt (IC=0.00) — no predictive power
 """
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -28,21 +29,28 @@ logger = logging.getLogger(__name__)
 class FactorScores:
     """Per-stock factor scores (z-scores, higher = better)."""
     symbol: str
-    momentum: float = 0.0
-    value: float = 0.0
-    quality: float = 0.0
-    low_volatility: float = 0.0
+    growth: float = 0.0          # Revenue + earnings growth
+    profitability: float = 0.0   # Profit margin + ROE
+    garp: float = 0.0            # Growth at reasonable price
+    momentum: float = 0.0        # Price momentum (6m)
     composite: float = 0.0
     rank: int = 0
 
 
 @dataclass
 class FactorWeights:
-    """Weights for combining factors into composite score."""
-    momentum: float = 0.30
-    value: float = 0.25
-    quality: float = 0.25
-    low_volatility: float = 0.20
+    """Weights for combining factors into composite score.
+
+    Based on IC research results:
+    - growth: IC=0.22, spread=+18%/6m
+    - profitability: IC=0.18, IR=1.39 (most consistent)
+    - garp: IC=0.20, IR=1.02
+    - momentum: IC=0.10, useful as confirming signal
+    """
+    growth: float = 0.35
+    profitability: float = 0.30
+    garp: float = 0.20
+    momentum: float = 0.15
 
 
 class MultiFactorModel:
@@ -59,8 +67,8 @@ class MultiFactorModel:
         """Score and rank a universe of stocks by factor model.
 
         Args:
-            price_data: {symbol: OHLCV DataFrame} with at least 252 bars.
-            fundamental_data: {symbol: {pe, pb, roe, debt_to_equity, ...}}.
+            price_data: {symbol: OHLCV DataFrame} with at least 126 bars.
+            fundamental_data: {symbol: {revenueGrowth, profitMargins, ...}}.
 
         Returns:
             List of FactorScores sorted by composite score descending.
@@ -69,36 +77,37 @@ class MultiFactorModel:
             return []
 
         symbols = list(price_data.keys())
+        fund = fundamental_data or {}
 
         # Compute raw factor values
+        growth_raw = self._compute_growth(fund, symbols)
+        profit_raw = self._compute_profitability(fund, symbols)
+        garp_raw = self._compute_garp(fund, symbols)
         momentum_raw = self._compute_momentum(price_data)
-        volatility_raw = self._compute_volatility(price_data)
-        value_raw = self._compute_value(fundamental_data or {}, symbols)
-        quality_raw = self._compute_quality(fundamental_data or {}, symbols)
 
         # Cross-sectional z-score normalization
+        growth_z = self._zscore(growth_raw)
+        profit_z = self._zscore(profit_raw)
+        garp_z = self._zscore(garp_raw)
         momentum_z = self._zscore(momentum_raw)
-        vol_z = self._zscore({s: -v for s, v in volatility_raw.items()})  # Invert: lower vol = higher score
-        value_z = self._zscore(value_raw)
-        quality_z = self._zscore(quality_raw)
 
         # Composite score
         w = self._weights
         results = []
         for sym in symbols:
+            g = growth_z.get(sym, 0.0)
+            p = profit_z.get(sym, 0.0)
+            ga = garp_z.get(sym, 0.0)
             m = momentum_z.get(sym, 0.0)
-            v = value_z.get(sym, 0.0)
-            q = quality_z.get(sym, 0.0)
-            lv = vol_z.get(sym, 0.0)
             composite = (
-                m * w.momentum + v * w.value + q * w.quality + lv * w.low_volatility
+                g * w.growth + p * w.profitability + ga * w.garp + m * w.momentum
             )
             results.append(FactorScores(
                 symbol=sym,
+                growth=round(g, 3),
+                profitability=round(p, 3),
+                garp=round(ga, 3),
                 momentum=round(m, 3),
-                value=round(v, 3),
-                quality=round(q, 3),
-                low_volatility=round(lv, 3),
                 composite=round(composite, 3),
             ))
 
@@ -109,108 +118,91 @@ class MultiFactorModel:
 
         return results
 
-    def _compute_momentum(self, price_data: dict[str, pd.DataFrame]) -> dict[str, float]:
-        """Multi-timeframe momentum factor.
-
-        Composite of:
-        - 12-month return excluding last month (classic momentum)
-        - 6-month return
-        - 1-month return (mean-reversion offset)
-        """
-        scores = {}
-        for sym, df in price_data.items():
-            if len(df) < 252:
-                scores[sym] = 0.0
-                continue
-
-            close = df["close"]
-            current = float(close.iloc[-1])
-
-            # 12-month return ex last month (skip recent reversal)
-            if len(close) >= 252:
-                ret_12m = current / float(close.iloc[-252]) - 1
-                ret_1m = current / float(close.iloc[-21]) - 1
-                mom_12_1 = ret_12m - ret_1m  # Classic 12-1 momentum
-            else:
-                mom_12_1 = 0.0
-
-            # 6-month return
-            if len(close) >= 126:
-                ret_6m = current / float(close.iloc[-126]) - 1
-            else:
-                ret_6m = 0.0
-
-            # Weighted composite
-            scores[sym] = mom_12_1 * 0.5 + ret_6m * 0.3 + ret_1m * 0.2 if len(close) >= 252 else ret_6m
-
-        return scores
-
-    def _compute_volatility(self, price_data: dict[str, pd.DataFrame]) -> dict[str, float]:
-        """Realized volatility (annualized standard deviation of daily returns)."""
-        scores = {}
-        for sym, df in price_data.items():
-            if len(df) < 60:
-                scores[sym] = 0.5  # Default moderate
-                continue
-            returns = df["close"].pct_change().dropna().tail(60)
-            scores[sym] = float(returns.std() * np.sqrt(252))
-        return scores
-
-    def _compute_value(
+    def _compute_growth(
         self, fundamentals: dict[str, dict], symbols: list[str],
     ) -> dict[str, float]:
-        """Value factor from fundamental data.
+        """Growth factor: revenue growth + earnings growth.
 
-        Uses:
-        - Earnings yield (1/PE) — higher = cheaper
-        - Book yield (1/PB) — higher = cheaper
-        - FCF yield — higher = better
+        IC=0.23 (revenue), IC=0.19 (earnings) — strongest predictors.
         """
         scores = {}
         for sym in symbols:
             data = fundamentals.get(sym, {})
-            pe = data.get("pe_ratio") or data.get("trailingPE")
-            pb = data.get("pb_ratio") or data.get("priceToBook")
-            fcf_yield = data.get("fcf_yield")
+            rev = data.get("revenue_growth") or data.get("revenueGrowth")
+            earn = data.get("earnings_growth") or data.get("earningsGrowth")
 
             components = []
-            if pe and pe > 0:
-                components.append(1.0 / pe)  # Earnings yield
-            if pb and pb > 0:
-                components.append(1.0 / pb)  # Book yield
-            if fcf_yield:
-                components.append(fcf_yield)
+            if rev is not None:
+                components.append(min(float(rev), 1.0))  # Cap at 100%
+            if earn is not None:
+                components.append(min(float(earn), 1.0))
 
             scores[sym] = float(np.mean(components)) if components else 0.0
 
         return scores
 
-    def _compute_quality(
+    def _compute_profitability(
         self, fundamentals: dict[str, dict], symbols: list[str],
     ) -> dict[str, float]:
-        """Quality factor: profitability + financial health.
+        """Profitability factor: profit margin + ROE.
 
-        Uses:
-        - ROE (return on equity)
-        - Profit margin
-        - Debt-to-equity (inverse, lower = better)
-        - Revenue growth
+        IC=0.18 (margin, IR=1.39 most consistent), IC=0.11 (ROE).
         """
         scores = {}
         for sym in symbols:
             data = fundamentals.get(sym, {})
-            roe = data.get("roe") or data.get("returnOnEquity") or 0
-            margin = data.get("profit_margin") or data.get("profitMargins") or 0
-            de = data.get("debt_to_equity") or data.get("debtToEquity") or 1
-            growth = data.get("revenue_growth") or data.get("revenueGrowth") or 0
+            margin = data.get("profit_margin") or data.get("profitMargins")
+            roe = data.get("roe") or data.get("returnOnEquity")
 
-            # Normalize each component
-            roe_score = min(roe, 0.5)  # Cap at 50% ROE
-            margin_score = min(margin, 0.4)  # Cap at 40% margin
-            de_score = max(0, 1.0 - de) if de < 2 else -0.5  # Penalize high debt
-            growth_score = min(growth, 0.5)  # Cap at 50% growth
+            components = []
+            if margin is not None:
+                components.append(min(float(margin), 0.5))  # Cap at 50%
+            if roe is not None:
+                components.append(min(float(roe), 0.5))  # Cap at 50%
 
-            scores[sym] = float(np.mean([roe_score, margin_score, de_score, growth_score]))
+            scores[sym] = float(np.mean(components)) if components else 0.0
+
+        return scores
+
+    def _compute_garp(
+        self, fundamentals: dict[str, dict], symbols: list[str],
+    ) -> dict[str, float]:
+        """GARP factor: Growth at Reasonable Price (growth / PE).
+
+        IC=0.20, IR=1.02 — high growth relative to valuation.
+        """
+        scores = {}
+        for sym in symbols:
+            data = fundamentals.get(sym, {})
+            rev = data.get("revenue_growth") or data.get("revenueGrowth")
+            pe = data.get("pe_ratio") or data.get("forwardPE") or data.get("trailingPE")
+
+            if rev is not None and pe and float(pe) > 0:
+                scores[sym] = float(rev) / float(pe)
+            else:
+                scores[sym] = 0.0
+
+        return scores
+
+    def _compute_momentum(self, price_data: dict[str, pd.DataFrame]) -> dict[str, float]:
+        """Momentum factor: 6-month return.
+
+        IC=0.10 — weak alone but useful as confirming signal.
+        Uses 6m return (simpler, similar IC to 12-1 momentum).
+        """
+        scores = {}
+        for sym, df in price_data.items():
+            close = df["close"]
+            current = float(close.iloc[-1])
+
+            if len(close) >= 126:
+                ret_6m = current / float(close.iloc[-126]) - 1
+                scores[sym] = ret_6m
+            elif len(close) >= 63:
+                ret_3m = current / float(close.iloc[-63]) - 1
+                scores[sym] = ret_3m
+            else:
+                scores[sym] = 0.0
 
         return scores
 

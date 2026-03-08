@@ -214,10 +214,10 @@ async def factor_scores(request: Request):
         "scores": [
             {
                 "symbol": s.symbol,
+                "growth": s.growth,
+                "profitability": s.profitability,
+                "garp": s.garp,
                 "momentum": s.momentum,
-                "value": s.value,
-                "quality": s.quality,
-                "low_volatility": s.low_volatility,
                 "composite": s.composite,
                 "rank": s.rank,
             }

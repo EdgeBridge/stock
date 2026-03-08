@@ -105,12 +105,12 @@ def load_fundamentals(symbols: list[str]) -> dict[str, dict]:
             ticker = yf.Ticker(sym)
             info = ticker.info or {}
             fundamentals[sym] = {
-                "trailingPE": info.get("trailingPE"),
-                "priceToBook": info.get("priceToBook"),
-                "returnOnEquity": info.get("returnOnEquity"),
-                "profitMargins": info.get("profitMargins"),
-                "debtToEquity": info.get("debtToEquity"),
                 "revenueGrowth": info.get("revenueGrowth"),
+                "earningsGrowth": info.get("earningsGrowth"),
+                "profitMargins": info.get("profitMargins"),
+                "returnOnEquity": info.get("returnOnEquity"),
+                "forwardPE": info.get("forwardPE"),
+                "trailingPE": info.get("trailingPE"),
             }
         except Exception:
             fundamentals[sym] = {}
@@ -172,7 +172,7 @@ def simulate_factor_selection(
 
     name = "factor_selection"
     if weights:
-        name = f"factor_mom{int(weights.momentum*100)}"
+        name = f"factor_grow{int(weights.growth*100)}"
     return _simulate_portfolio(
         price_data, selected_per_period=select_fn,
         name=name, position_size_fn=None,
@@ -192,7 +192,7 @@ def simulate_factor_kelly(
     Quarterly rebalance with low-turnover logic.
     """
     model = MultiFactorModel(
-        weights=FactorWeights(momentum=0.50, value=0.15, quality=0.25, low_volatility=0.10),
+        weights=FactorWeights(growth=0.35, profitability=0.30, garp=0.20, momentum=0.15),
     )
     all_symbols = list(price_data.keys())
     median_rank = len(all_symbols) // 2
@@ -258,7 +258,7 @@ def simulate_momentum_heavy(
     """Momentum-heavy factor weights (70% momentum)."""
     return simulate_factor_selection(
         price_data, fundamentals, top_n, rebalance_days,
-        weights=FactorWeights(momentum=0.70, value=0.10, quality=0.10, low_volatility=0.10),
+        weights=FactorWeights(growth=0.15, profitability=0.15, garp=0.10, momentum=0.60),
     )
 
 
@@ -319,7 +319,7 @@ def simulate_concentrated(
 ) -> QuantBacktestResult:
     """Concentrated portfolio: top 5 stocks, quarterly rebalance, keep winners."""
     model = MultiFactorModel(
-        weights=FactorWeights(momentum=0.50, value=0.15, quality=0.25, low_volatility=0.10),
+        weights=FactorWeights(growth=0.35, profitability=0.30, garp=0.20, momentum=0.15),
     )
     all_symbols = list(price_data.keys())
     median_rank = len(all_symbols) // 2
@@ -568,7 +568,7 @@ def simulate_momentum_quality(
     """
     common_dates, closes, all_symbols = _align_data(price_data)
     model = MultiFactorModel(
-        weights=FactorWeights(momentum=0.60, value=0.05, quality=0.30, low_volatility=0.05),
+        weights=FactorWeights(growth=0.30, profitability=0.25, garp=0.20, momentum=0.25),
     )
 
     equity = INITIAL_EQUITY

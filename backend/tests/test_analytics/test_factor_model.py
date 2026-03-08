@@ -1,4 +1,4 @@
-"""Tests for Multi-Factor Scoring Model."""
+"""Tests for Multi-Factor Scoring Model (Research-Backed)."""
 
 import numpy as np
 import pandas as pd
@@ -40,19 +40,19 @@ def price_data():
 def fundamental_data():
     return {
         "WINNER": {
-            "trailingPE": 18, "priceToBook": 4.0, "fcf_yield": 0.06,
-            "returnOnEquity": 0.25, "profitMargins": 0.20,
-            "debtToEquity": 0.5, "revenueGrowth": 0.15,
+            "revenueGrowth": 0.25, "earningsGrowth": 0.30,
+            "profitMargins": 0.22, "returnOnEquity": 0.28,
+            "forwardPE": 20,
         },
         "LOSER": {
-            "trailingPE": 35, "priceToBook": 8.0, "fcf_yield": 0.01,
-            "returnOnEquity": 0.05, "profitMargins": 0.05,
-            "debtToEquity": 1.8, "revenueGrowth": -0.05,
+            "revenueGrowth": -0.05, "earningsGrowth": -0.10,
+            "profitMargins": 0.05, "returnOnEquity": 0.04,
+            "forwardPE": 40,
         },
         "STEADY": {
-            "trailingPE": 15, "priceToBook": 2.5, "fcf_yield": 0.08,
-            "returnOnEquity": 0.18, "profitMargins": 0.15,
-            "debtToEquity": 0.3, "revenueGrowth": 0.08,
+            "revenueGrowth": 0.10, "earningsGrowth": 0.12,
+            "profitMargins": 0.18, "returnOnEquity": 0.20,
+            "forwardPE": 15,
         },
     }
 
@@ -60,6 +60,9 @@ def fundamental_data():
 class TestFactorScores:
     def test_default_values(self):
         fs = FactorScores(symbol="AAPL")
+        assert fs.growth == 0.0
+        assert fs.profitability == 0.0
+        assert fs.garp == 0.0
         assert fs.momentum == 0.0
         assert fs.composite == 0.0
         assert fs.rank == 0
@@ -68,12 +71,19 @@ class TestFactorScores:
 class TestFactorWeights:
     def test_default_sum_to_one(self):
         w = FactorWeights()
-        total = w.momentum + w.value + w.quality + w.low_volatility
+        total = w.growth + w.profitability + w.garp + w.momentum
         assert abs(total - 1.0) < 1e-9
 
     def test_custom_weights(self):
-        w = FactorWeights(momentum=0.5, value=0.2, quality=0.2, low_volatility=0.1)
-        assert w.momentum == 0.5
+        w = FactorWeights(growth=0.5, profitability=0.2, garp=0.2, momentum=0.1)
+        assert w.growth == 0.5
+
+    def test_research_backed_defaults(self):
+        w = FactorWeights()
+        assert w.growth == 0.35   # Highest IC
+        assert w.profitability == 0.30  # Most consistent
+        assert w.garp == 0.20
+        assert w.momentum == 0.15  # Weakest predictor
 
 
 class TestScoreUniverse:
@@ -99,10 +109,11 @@ class TestScoreUniverse:
     def test_without_fundamentals(self, model, price_data):
         results = model.score_universe(price_data)
         assert len(results) == 3
-        # Value and quality factors should be zero for all
+        # Growth, profitability, GARP should be zero without fundamentals
         for r in results:
-            assert r.value == 0.0
-            assert r.quality == 0.0
+            assert r.growth == 0.0
+            assert r.profitability == 0.0
+            assert r.garp == 0.0
 
     def test_short_price_data_handled(self, model):
         short_df = pd.DataFrame({
@@ -111,6 +122,58 @@ class TestScoreUniverse:
         results = model.score_universe({"SHORT": short_df})
         assert len(results) == 1
         assert results[0].momentum == 0.0
+
+
+class TestGrowth:
+    def test_high_growth_scores_higher(self, model, fundamental_data):
+        symbols = list(fundamental_data.keys())
+        scores = model._compute_growth(fundamental_data, symbols)
+        assert scores["WINNER"] > scores["STEADY"]
+        assert scores["STEADY"] > scores["LOSER"]
+
+    def test_missing_fundamentals_return_zero(self, model):
+        scores = model._compute_growth({}, ["AAPL"])
+        assert scores["AAPL"] == 0.0
+
+    def test_growth_capped_at_100pct(self, model):
+        data = {"HYPER": {"revenueGrowth": 2.0, "earningsGrowth": 3.0}}
+        scores = model._compute_growth(data, ["HYPER"])
+        assert scores["HYPER"] == 1.0  # Capped at 100%
+
+    def test_negative_growth(self, model):
+        data = {"DECLINING": {"revenueGrowth": -0.15, "earningsGrowth": -0.20}}
+        scores = model._compute_growth(data, ["DECLINING"])
+        assert scores["DECLINING"] < 0
+
+
+class TestProfitability:
+    def test_high_margin_scores_higher(self, model, fundamental_data):
+        symbols = list(fundamental_data.keys())
+        scores = model._compute_profitability(fundamental_data, symbols)
+        assert scores["WINNER"] > scores["LOSER"]
+
+    def test_missing_fundamentals_return_zero(self, model):
+        scores = model._compute_profitability({}, ["AAPL"])
+        assert scores["AAPL"] == 0.0
+
+    def test_margin_capped(self, model):
+        data = {"RICH": {"profitMargins": 0.9, "returnOnEquity": 0.8}}
+        scores = model._compute_profitability(data, ["RICH"])
+        assert scores["RICH"] == 0.5  # Both capped at 0.5
+
+
+class TestGARP:
+    def test_high_growth_low_pe_wins(self, model, fundamental_data):
+        symbols = list(fundamental_data.keys())
+        scores = model._compute_garp(fundamental_data, symbols)
+        # WINNER: 0.25/20=0.0125, STEADY: 0.10/15=0.0067, LOSER: -0.05/40=-0.00125
+        assert scores["WINNER"] > scores["STEADY"]
+        assert scores["STEADY"] > scores["LOSER"]
+
+    def test_no_pe_returns_zero(self, model):
+        data = {"NODATA": {"revenueGrowth": 0.2}}
+        scores = model._compute_garp(data, ["NODATA"])
+        assert scores["NODATA"] == 0.0
 
 
 class TestMomentum:
@@ -123,40 +186,11 @@ class TestMomentum:
         scores = model._compute_momentum({"SHORT": short_df})
         assert scores["SHORT"] == 0.0
 
-
-class TestVolatility:
-    def test_high_vol_stock_higher(self, model, price_data):
-        scores = model._compute_volatility(price_data)
-        assert scores["LOSER"] > scores["STEADY"]
-
-    def test_default_for_short_data(self, model):
-        short_df = pd.DataFrame({"close": [100 + i for i in range(10)]})
-        scores = model._compute_volatility({"SHORT": short_df})
-        assert scores["SHORT"] == 0.5
-
-
-class TestValue:
-    def test_cheaper_stock_scores_higher(self, model, fundamental_data):
-        symbols = list(fundamental_data.keys())
-        scores = model._compute_value(fundamental_data, symbols)
-        # STEADY has PE=15, PB=2.5 (cheapest) -> highest value score
-        assert scores["STEADY"] > scores["LOSER"]
-
-    def test_missing_fundamentals_return_zero(self, model):
-        scores = model._compute_value({}, ["AAPL"])
-        assert scores["AAPL"] == 0.0
-
-
-class TestQuality:
-    def test_high_quality_stock_scores_higher(self, model, fundamental_data):
-        symbols = list(fundamental_data.keys())
-        scores = model._compute_quality(fundamental_data, symbols)
-        assert scores["WINNER"] > scores["LOSER"]
-
-    def test_high_debt_penalized(self, model):
-        data = {"DEBT": {"debtToEquity": 3.0, "returnOnEquity": 0.1}}
-        scores = model._compute_quality(data, ["DEBT"])
-        assert scores["DEBT"] < 0  # High debt penalty
+    def test_uses_3m_when_6m_unavailable(self, model):
+        # 80 bars: enough for 3m (63) but not 6m (126)
+        df = pd.DataFrame({"close": [100 + i * 0.5 for i in range(80)]})
+        scores = model._compute_momentum({"MED": df})
+        assert scores["MED"] > 0  # Uptrend detected
 
 
 class TestZScore:
@@ -191,10 +225,16 @@ class TestGetTopN:
 
 
 class TestCustomWeights:
-    def test_momentum_heavy_weights(self, price_data, fundamental_data):
-        # Heavily momentum-weighted model should favor WINNER even more
-        heavy_mom = MultiFactorModel(weights=FactorWeights(
-            momentum=0.70, value=0.10, quality=0.10, low_volatility=0.10,
+    def test_growth_heavy_weights(self, price_data, fundamental_data):
+        heavy = MultiFactorModel(weights=FactorWeights(
+            growth=0.70, profitability=0.10, garp=0.10, momentum=0.10,
         ))
-        results = heavy_mom.score_universe(price_data, fundamental_data)
+        results = heavy.score_universe(price_data, fundamental_data)
         assert results[0].symbol == "WINNER"
+
+    def test_momentum_only(self, price_data, fundamental_data):
+        mom_only = MultiFactorModel(weights=FactorWeights(
+            growth=0.0, profitability=0.0, garp=0.0, momentum=1.0,
+        ))
+        results = mom_only.score_universe(price_data, fundamental_data)
+        assert results[0].symbol == "WINNER"  # Best price momentum
