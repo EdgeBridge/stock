@@ -7,10 +7,12 @@ Wraps 한국투자증권 Open API endpoints for:
 - Scanner (volume surge, price movers, new highs/lows)
 """
 
+import json
 import logging
 from typing import Any
 
 import aiohttp
+from aiohttp import ContentTypeError
 
 from config import KISConfig
 from dataclasses import dataclass
@@ -529,7 +531,7 @@ class KISAdapter(ExchangeAdapter):
                     return data
                 try:
                     data = await resp.json()
-                except Exception:
+                except (json.JSONDecodeError, ContentTypeError, ValueError):
                     data = {"rt_cd": "-1", "msg1": "Invalid JSON response"}
                     return data
             if data.get("rt_cd") == "0":
@@ -561,7 +563,7 @@ class KISAdapter(ExchangeAdapter):
                     return data
                 try:
                     data = await resp.json()
-                except Exception:
+                except (json.JSONDecodeError, ContentTypeError, ValueError):
                     data = {"rt_cd": "-1", "msg1": "Invalid JSON response"}
                     return data
             if data.get("rt_cd") == "0":

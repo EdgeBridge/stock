@@ -103,7 +103,11 @@ class KISAuth:
 
         async with self._session.post(url, json=body) as resp:
             data = await resp.json()
-            self._approval_key = data["approval_key"]
+            key = data.get("approval_key")
+            if not key:
+                logger.error("KIS approval key missing from response: %s", data)
+                raise RuntimeError("Failed to obtain KIS WebSocket approval key")
+            self._approval_key = key
 
         if self._redis:
             await self._redis.set(

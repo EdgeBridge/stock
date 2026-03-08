@@ -758,9 +758,20 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("Failed to load watchlist: %s", e)
 
-    # Auto-start scheduler
+    # Auto-start scheduler (store task ref to detect crashes)
     import asyncio
-    asyncio.create_task(scheduler.start())
+    _scheduler_task = asyncio.create_task(scheduler.start(), name="scheduler")
+
+    def _on_scheduler_done(task: asyncio.Task):
+        if task.cancelled():
+            logger.warning("Scheduler task was cancelled")
+        elif task.exception():
+            logger.error("Scheduler task crashed: %s", task.exception())
+        else:
+            logger.info("Scheduler task finished normally")
+
+    _scheduler_task.add_done_callback(_on_scheduler_done)
+    app.state.scheduler_task = _scheduler_task
     logger.info("Scheduler auto-started")
 
     # Install WebSocket log handler for real-time log streaming

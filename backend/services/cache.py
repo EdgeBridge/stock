@@ -8,6 +8,8 @@ import redis.asyncio as redis
 
 logger = logging.getLogger(__name__)
 
+REDIS_SOCKET_TIMEOUT = 5  # seconds — prevent hang on slow/dead Redis
+
 
 class CacheService:
     """Async Redis cache with typed helpers."""
@@ -17,7 +19,12 @@ class CacheService:
         self._redis: redis.Redis | None = None
 
     async def initialize(self) -> None:
-        self._redis = redis.from_url(self._url, decode_responses=True)
+        self._redis = redis.from_url(
+            self._url,
+            decode_responses=True,
+            socket_timeout=REDIS_SOCKET_TIMEOUT,
+            socket_connect_timeout=REDIS_SOCKET_TIMEOUT,
+        )
         try:
             await self._redis.ping()
             logger.info("Redis connected: %s", self._url)

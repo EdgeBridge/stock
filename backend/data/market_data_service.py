@@ -9,6 +9,7 @@ Data source strategy:
 - Balance/Positions: KIS API with short-TTL cache + rate limiter
 """
 
+import asyncio
 import time
 import logging
 from typing import Any
@@ -25,6 +26,7 @@ TICKER_CACHE_TTL = 10       # seconds
 OHLCV_CACHE_TTL = 300       # 5 min (daily data doesn't change fast)
 BALANCE_CACHE_TTL = 30      # seconds
 POSITIONS_CACHE_TTL = 30    # seconds
+API_CALL_TIMEOUT = 30       # seconds — max wait for a single adapter call
 
 
 class MarketDataService:
@@ -52,7 +54,10 @@ class MarketDataService:
             return cached[0]
 
         await self._rate_limiter.acquire()
-        ticker = await self._adapter.fetch_ticker(symbol, exchange)
+        ticker = await asyncio.wait_for(
+            self._adapter.fetch_ticker(symbol, exchange),
+            timeout=API_CALL_TIMEOUT,
+        )
         self._ticker_cache[cache_key] = (ticker, now)
         return ticker
 
@@ -79,7 +84,10 @@ class MarketDataService:
 
         # Fallback to KIS
         await self._rate_limiter.acquire()
-        candles = await self._adapter.fetch_ohlcv(symbol, timeframe, limit, exchange)
+        candles = await asyncio.wait_for(
+            self._adapter.fetch_ohlcv(symbol, timeframe, limit, exchange),
+            timeout=API_CALL_TIMEOUT,
+        )
 
         if not candles:
             df = pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
@@ -145,7 +153,10 @@ class MarketDataService:
             return self._balance_cache[0]
 
         await self._rate_limiter.acquire()
-        balance = await self._adapter.fetch_balance()
+        balance = await asyncio.wait_for(
+            self._adapter.fetch_balance(),
+            timeout=API_CALL_TIMEOUT,
+        )
         self._balance_cache = (balance, now)
         return balance
 
@@ -156,7 +167,10 @@ class MarketDataService:
             return self._positions_cache[0]
 
         await self._rate_limiter.acquire()
-        positions = await self._adapter.fetch_positions()
+        positions = await asyncio.wait_for(
+            self._adapter.fetch_positions(),
+            timeout=API_CALL_TIMEOUT,
+        )
         self._positions_cache = (positions, now)
         return positions
 

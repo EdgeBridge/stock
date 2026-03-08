@@ -97,6 +97,7 @@ class PositionTracker:
 
             current_price = pos.current_price
             if current_price <= 0:
+                logger.warning("Position %s has invalid price (%.2f), skipping check", symbol, current_price)
                 continue
 
             # Update highest price for trailing stop

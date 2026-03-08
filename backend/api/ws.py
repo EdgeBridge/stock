@@ -48,11 +48,12 @@ class WebSocketLogHandler(logging.Handler):
         entry = json.dumps(payload, default=str)
 
         # Schedule broadcast (non-blocking)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # No event loop running
         for ws in list(_log_clients):
-            try:
-                asyncio.get_event_loop().create_task(_safe_send(ws, entry))
-            except RuntimeError:
-                pass
+            loop.create_task(_safe_send(ws, entry))
 
 
 async def _safe_send(ws: WebSocket, data: str):
