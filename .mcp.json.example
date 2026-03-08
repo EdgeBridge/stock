@@ -6,6 +6,7 @@
       "cwd": "${PROJECT_ROOT}/backend",
       "env": {
         "USSTOCK_API_URL": "http://localhost:8001",
+        "AUTH_API_TOKEN": "your-api-token-here",
         "PYTHONPATH": "${PROJECT_ROOT}/backend"
       }
     }

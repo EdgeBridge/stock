@@ -1,6 +1,7 @@
 """Order manager - handles order creation, tracking, and lifecycle.
 
 Bridges strategy signals with exchange adapter for order execution.
+Includes duplicate order prevention, partial fill tracking, and slippage monitoring.
 """
 
 import logging
@@ -30,7 +31,9 @@ class ManagedOrder:
     price: float | None
     strategy_name: str
     status: str = "pending"
+    filled_quantity: int = 0
     filled_price: float | None = None
+    slippage: float = 0.0
     created_at: str = ""
     exchange: str = "NASD"
 
@@ -49,6 +52,14 @@ class OrderManager:
         self._notification = notification
         self._active_orders: dict[str, ManagedOrder] = {}
 
+    def has_pending_order(self, symbol: str, side: str | None = None) -> bool:
+        """Check if there is already a pending/submitted order for this symbol."""
+        for o in self._active_orders.values():
+            if o.symbol == symbol and o.status in ("pending", "submitted"):
+                if side is None or o.side == side:
+                    return True
+        return False
+
     async def place_buy(
         self,
         symbol: str,
@@ -61,7 +72,12 @@ class OrderManager:
         exchange: str = "NASD",
         atr: float | None = None,
     ) -> ManagedOrder | None:
-        """Place a buy order after risk checks."""
+        """Place a buy order after risk checks and deduplication."""
+        # Duplicate check: prevent double-buying same symbol
+        if self.has_pending_order(symbol, "BUY"):
+            logger.info("Buy skipped for %s: pending order already exists", symbol)
+            return None
+
         sizing = self._risk.calculate_position_size(
             symbol=symbol,
             price=price,
@@ -86,6 +102,13 @@ class OrderManager:
                 exchange=exchange,
             )
 
+            # Track slippage (filled_price vs intended price)
+            slippage = 0.0
+            if result.filled_price and price:
+                slippage = result.filled_price - price
+
+            filled_qty = int(result.filled_quantity) if result.filled_quantity else 0
+
             order = ManagedOrder(
                 order_id=result.order_id,
                 symbol=symbol,
@@ -94,15 +117,28 @@ class OrderManager:
                 price=price,
                 strategy_name=strategy_name,
                 status=result.status,
+                filled_quantity=filled_qty,
                 filled_price=result.filled_price,
+                slippage=slippage,
                 created_at=datetime.now().isoformat(),
                 exchange=exchange,
             )
             self._active_orders[result.order_id] = order
-            logger.info(
-                "Buy order placed: %s %d shares @ $%.2f (%s)",
-                symbol, sizing.quantity, price, strategy_name,
-            )
+
+            if slippage != 0:
+                logger.info(
+                    "Buy order placed: %s %d shares @ $%.2f (filled=%d @ $%.2f, "
+                    "slippage=$%.4f) (%s)",
+                    symbol, sizing.quantity, price,
+                    filled_qty, result.filled_price or 0, slippage,
+                    strategy_name,
+                )
+            else:
+                logger.info(
+                    "Buy order placed: %s %d shares @ $%.2f (%s)",
+                    symbol, sizing.quantity, price, strategy_name,
+                )
+
             if self._notification:
                 await self._notification.notify_trade_executed(
                     symbol, "BUY", sizing.quantity, price, strategy_name,
@@ -111,6 +147,8 @@ class OrderManager:
                 _trade_recorder({
                     "symbol": symbol, "side": "BUY", "quantity": sizing.quantity,
                     "price": price, "filled_price": result.filled_price,
+                    "filled_quantity": filled_qty,
+                    "slippage": slippage,
                     "strategy": strategy_name, "status": result.status,
                     "created_at": order.created_at,
                 })
@@ -139,6 +177,13 @@ class OrderManager:
                 exchange=exchange,
             )
 
+            # Track slippage
+            slippage = 0.0
+            if result.filled_price and price:
+                slippage = result.filled_price - price
+
+            filled_qty = int(result.filled_quantity) if result.filled_quantity else 0
+
             order = ManagedOrder(
                 order_id=result.order_id,
                 symbol=symbol,
@@ -147,7 +192,9 @@ class OrderManager:
                 price=price,
                 strategy_name=strategy_name,
                 status=result.status,
+                filled_quantity=filled_qty,
                 filled_price=result.filled_price,
+                slippage=slippage,
                 created_at=datetime.now().isoformat(),
                 exchange=exchange,
             )
@@ -164,6 +211,8 @@ class OrderManager:
                 _trade_recorder({
                     "symbol": symbol, "side": "SELL", "quantity": quantity,
                     "price": price, "filled_price": result.filled_price,
+                    "filled_quantity": filled_qty,
+                    "slippage": slippage,
                     "strategy": strategy_name, "status": result.status,
                     "pnl": None,  # caller can update
                     "created_at": order.created_at,
@@ -194,10 +243,54 @@ class OrderManager:
             result = await self._adapter.fetch_order(order_id, symbol)
             managed.status = result.status
             managed.filled_price = result.filled_price
+            managed.filled_quantity = int(result.filled_quantity) if result.filled_quantity else 0
+            if result.filled_price and managed.price:
+                managed.slippage = result.filled_price - managed.price
             return managed
         except Exception as e:
             logger.error("Failed to sync order %s: %s", order_id, e)
             return managed
+
+    async def reconcile_all(self) -> list[dict]:
+        """Sync all active orders with exchange. Returns list of state changes."""
+        if not self._active_orders:
+            return []
+
+        changes = []
+        for order_id, order in list(self._active_orders.items()):
+            if order.status in ("filled", "cancelled"):
+                continue
+            try:
+                result = await self._adapter.fetch_order(order_id, order.symbol)
+                old_status = order.status
+                order.status = result.status
+                order.filled_price = result.filled_price
+                order.filled_quantity = int(result.filled_quantity) if result.filled_quantity else 0
+                if result.filled_price and order.price:
+                    order.slippage = result.filled_price - order.price
+
+                if old_status != result.status:
+                    changes.append({
+                        "order_id": order_id,
+                        "symbol": order.symbol,
+                        "side": order.side,
+                        "old_status": old_status,
+                        "new_status": result.status,
+                        "filled_quantity": order.filled_quantity,
+                        "quantity": order.quantity,
+                    })
+                    logger.info(
+                        "Order %s (%s %s): %s -> %s (filled=%d/%d)",
+                        order_id, order.side, order.symbol,
+                        old_status, result.status,
+                        order.filled_quantity, order.quantity,
+                    )
+            except Exception as e:
+                logger.error("Reconcile failed for order %s: %s", order_id, e)
+
+        # Clean up completed orders
+        self.clear_completed()
+        return changes
 
     @property
     def active_orders(self) -> dict[str, ManagedOrder]:

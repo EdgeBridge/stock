@@ -206,6 +206,11 @@ class EvaluationLoop:
         price = float(df.iloc[-1]["close"])
 
         if signal.signal_type == SignalType.BUY:
+            # Skip if there's already a pending buy order for this symbol
+            if self._order_manager.has_pending_order(symbol, "BUY"):
+                logger.debug("Skipping BUY for %s: pending order exists", symbol)
+                return
+
             balance = await self._market_data.get_balance()
             positions = await self._market_data.get_positions()
 

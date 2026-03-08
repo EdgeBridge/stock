@@ -288,6 +288,11 @@ async def lifespan(app: FastAPI):
         await portfolio_manager.save_snapshot()
         logger.debug("Portfolio snapshot saved")
 
+    async def task_order_reconciliation():
+        changes = await order_manager.reconcile_all()
+        if changes:
+            logger.info("Order reconciliation: %d status changes", len(changes))
+
     async def task_market_state_update():
         """T0: Update market regime from SPY data."""
         try:
@@ -542,6 +547,10 @@ async def lifespan(app: FastAPI):
         interval_sec=3600, phases=[MarketPhase.REGULAR],
     )
     scheduler.add_task(
+        "order_reconciliation", task_order_reconciliation,
+        interval_sec=120, phases=[MarketPhase.REGULAR],
+    )
+    scheduler.add_task(
         "intraday_hot_scan", task_intraday_hot_scan,
         interval_sec=1800, phases=[MarketPhase.REGULAR],
     )
@@ -669,6 +678,38 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def auth_middleware(request, call_next):
+    """Bearer token authentication for API endpoints.
+
+    Skips auth for: /health, /docs, /openapi.json, /redoc, WebSocket.
+    If AUTH_API_TOKEN is not set, auth is disabled (backward compatible).
+    """
+    from fastapi.responses import JSONResponse
+
+    config = getattr(getattr(request, "app", None), "state", None)
+    token = getattr(config, "config", None)
+    api_token = token.auth.api_token if token else ""
+
+    if not api_token:
+        return await call_next(request)
+
+    path = request.url.path
+    skip_paths = ("/health", "/docs", "/openapi.json", "/redoc")
+    if path in skip_paths or path.startswith("/api/v1/ws"):
+        return await call_next(request)
+
+    if path.startswith("/api/"):
+        auth_header = request.headers.get("authorization", "")
+        if auth_header != f"Bearer {api_token}":
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Unauthorized"},
+            )
+
+    return await call_next(request)
 
 
 @app.get("/health")

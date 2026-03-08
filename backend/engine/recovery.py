@@ -152,6 +152,7 @@ class TaskRecovery:
         backoff_max: float = 60.0,
         circuit: CircuitBreaker | None = None,
         on_failure=None,
+        on_recovery=None,
     ):
         self.name = name
         self.fn = fn
@@ -160,6 +161,7 @@ class TaskRecovery:
         self.backoff_max = backoff_max
         self.circuit = circuit or CircuitBreaker(name)
         self._on_failure = on_failure
+        self._on_recovery = on_recovery
         self._consecutive_failures = 0
         self._total_failures = 0
         self._total_successes = 0
@@ -179,11 +181,20 @@ class TaskRecovery:
         last_error = None
         for attempt in range(self.max_retries + 1):
             try:
-                if self.circuit.state == CircuitState.HALF_OPEN:
+                was_half_open = self.circuit.state == CircuitState.HALF_OPEN
+                if was_half_open:
                     self.circuit._half_open_calls += 1
 
                 await self.fn()
                 self.circuit.record_success()
+
+                # Notify on recovery from HALF_OPEN (was previously OPEN)
+                if was_half_open and self._on_recovery:
+                    try:
+                        await self._on_recovery(self.name)
+                    except Exception:
+                        pass
+
                 self._consecutive_failures = 0
                 self._total_successes += 1
                 return True
@@ -262,6 +273,7 @@ class RecoveryManager:
             backoff_base=backoff_base,
             circuit=circuit,
             on_failure=self._handle_failure,
+            on_recovery=self._handle_recovery,
         )
         self._recoveries[name] = recovery
         return recovery
@@ -281,6 +293,15 @@ class RecoveryManager:
                 component=task_name,
                 error=str(error),
                 details=f"Circuit breaker state: {circuit_state}",
+            )
+
+    async def _handle_recovery(self, task_name: str) -> None:
+        """Called when a task recovers after circuit was open."""
+        logger.info("Task %s: circuit recovered", task_name)
+        if self._notification:
+            await self._notification.notify_system_event(
+                "circuit_recovered",
+                f"Task '{task_name}' has recovered and is running normally again.",
             )
 
     def reset_circuit(self, name: str) -> bool:

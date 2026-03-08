@@ -18,8 +18,9 @@ from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger(__name__)
 
-# Backend API base URL
+# Backend API base URL and auth
 API_BASE = os.getenv("USSTOCK_API_URL", "http://localhost:8001")
+API_TOKEN = os.getenv("AUTH_API_TOKEN", "")
 
 mcp = FastMCP(
     "US Stock Trading",
@@ -41,7 +42,10 @@ async def _api(
 ) -> dict[str, Any]:
     """Call the FastAPI backend."""
     url = f"{API_BASE}{path}"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    headers = {}
+    if API_TOKEN:
+        headers["Authorization"] = f"Bearer {API_TOKEN}"
+    async with httpx.AsyncClient(timeout=30.0, headers=headers) as client:
         if method == "GET":
             resp = await client.get(url, params=params)
         elif method == "POST":

@@ -496,6 +496,47 @@ class TestRecoveryManager:
         recovery = mgr.wrap_task("task1", fn, max_retries=0)
 
         assert recovery._on_failure == mgr._handle_failure
+        assert recovery._on_recovery == mgr._handle_recovery
+
+    @pytest.mark.asyncio
+    @patch("engine.recovery.time.monotonic")
+    @patch("engine.recovery.asyncio.sleep", new_callable=AsyncMock)
+    async def test_recovery_notification_sent(self, mock_sleep, mock_mono):
+        """Verify notification sent when circuit recovers from OPEN."""
+        notif = AsyncMock()
+        notif.notify_system_error = AsyncMock()
+        notif.notify_system_event = AsyncMock()
+        mgr = RecoveryManager(notification=notif)
+
+        call_count = 0
+
+        async def failing_then_ok():
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 1:
+                raise RuntimeError("fail")
+
+        mock_mono.return_value = 100.0
+        recovery = mgr.wrap_task(
+            "test_task", failing_then_ok,
+            max_retries=0, failure_threshold=1, cooldown_sec=10.0,
+        )
+
+        # Fail -> OPEN
+        await recovery.execute()
+        assert recovery.circuit._state == CircuitState.OPEN
+
+        # Advance past cooldown -> HALF_OPEN, next call succeeds
+        mock_mono.return_value = 111.0
+        result = await recovery.execute()
+        assert result is True
+        assert recovery.circuit._state == CircuitState.CLOSED
+
+        # Recovery notification sent
+        notif.notify_system_event.assert_awaited_once_with(
+            "circuit_recovered",
+            "Task 'test_task' has recovered and is running normally again.",
+        )
 
     @pytest.mark.asyncio
     @patch("engine.recovery.asyncio.sleep", new_callable=AsyncMock)
