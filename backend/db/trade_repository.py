@@ -1,7 +1,7 @@
 """Trade and order persistence using SQLAlchemy async."""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -87,6 +87,17 @@ class TradeRepository:
 
     async def get_open_orders(self) -> list[Order]:
         stmt = select(Order).where(Order.status.in_(["pending", "open"]))
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_recent_trades(self, hours: int = 24) -> list[Order]:
+        """Get filled trades from the last N hours."""
+        cutoff = datetime.utcnow() - timedelta(hours=hours)
+        stmt = (
+            select(Order)
+            .where(Order.status == "filled", Order.filled_at >= cutoff)
+            .order_by(desc(Order.filled_at))
+        )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 

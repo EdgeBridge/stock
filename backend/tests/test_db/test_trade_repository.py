@@ -123,3 +123,32 @@ async def test_watchlist_add_duplicate_reactivates(repo):
 async def test_watchlist_remove_nonexistent(repo):
     result = await repo.remove_from_watchlist("FAKE")
     assert result is False
+
+
+@pytest.mark.asyncio
+async def test_get_recent_trades(repo):
+    """get_recent_trades returns only filled orders within time window."""
+    from datetime import datetime
+
+    # Filled order — should appear
+    order = await repo.save_order(
+        symbol="AAPL", side="buy", order_type="market",
+        quantity=10, price=180.0, status="pending",
+    )
+    await repo.update_order_status(order.id, status="filled", filled_price=180.0)
+
+    # Pending order — should NOT appear
+    await repo.save_order(
+        symbol="MSFT", side="buy", order_type="limit",
+        quantity=5, price=400.0, status="pending",
+    )
+
+    recent = await repo.get_recent_trades(hours=24)
+    assert len(recent) == 1
+    assert recent[0].symbol == "AAPL"
+
+
+@pytest.mark.asyncio
+async def test_get_recent_trades_empty(repo):
+    recent = await repo.get_recent_trades(hours=24)
+    assert recent == []

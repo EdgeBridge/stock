@@ -242,9 +242,9 @@
 │   │   └── ...
 │   │
 │   ├── agents/
-│   │   ├── market_analyst.py    # 시장 분석 (LLMClient 사용)
-│   │   ├── risk_assessment.py   # 리스크 평가 (LLMClient 사용)
-│   │   └── trade_review.py      # 매매 리뷰 (LLMClient 사용)
+│   │   ├── market_analyst.py    # 시장 분석 (LLMClient + AgentContext)
+│   │   ├── risk_assessment.py   # 리스크 평가 + 매매 전 리스크 체크
+│   │   └── trade_review.py      # 매매 리뷰 (일일 리뷰, 교훈 저장)
 │   │
 │   ├── backtest/
 │   │   ├── engine.py             # 백테스트 엔진

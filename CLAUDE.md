@@ -76,7 +76,8 @@ Architecture inherited from ~/coin project (crypto trading bot).
 - Donchian breakout: uses previous bar's channel (pandas-ta donchian includes current bar)
 - Bollinger squeeze: squeeze_min_bars=3 (daily timeframe; 6 was too strict)
 - Backtest verification: backtest/verify_strategies.py — 13 strategies × 8 stocks × 3yr
-- Scheduler tasks: 16 total (health_check, position_check, daily_reset, evaluation_loop, daily_scan, market_state_update, etf_evaluation, portfolio_snapshot, intraday_hot_scan, sector_analysis, after_hours_scan, daily_briefing, macro_update, ws_lifecycle, order_reconciliation)
+- Scheduler tasks: 18 total (health_check, position_check, daily_reset, evaluation_loop, daily_scan, market_state_update, etf_evaluation, portfolio_snapshot, intraday_hot_scan, sector_analysis, after_hours_scan, daily_briefing, macro_update, ws_lifecycle, order_reconciliation, trade_review, agent_memory_cleanup)
+- AI agent integration: RiskAssessmentAgent pre-trade check in evaluation_loop (non-blocking, errors default to approved), TradeReviewAgent daily review (after-hours), agent memory cleanup (daily, CLOSED phase)
 
 ### Reference
 - ~/coin: Crypto trading bot (architecture reference)

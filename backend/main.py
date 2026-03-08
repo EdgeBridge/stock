@@ -169,6 +169,7 @@ async def lifespan(app: FastAPI):
         order_manager=order_manager,
         risk_manager=risk_manager,
         adaptive_weights=adaptive_weights,
+        risk_agent=risk_agent,
     )
     app.state.evaluation_loop = evaluation_loop
 
@@ -200,13 +201,23 @@ async def lifespan(app: FastAPI):
         logger.info("Agent context service enabled")
     app.state.agent_context = agent_ctx
 
-    # Scanner pipeline (with AI agent if LLM enabled)
-    enricher = FundamentalEnricher()
+    # AI agents (market analyst, risk assessment, trade review)
     ai_agent = None
+    risk_agent = None
+    trade_review_agent = None
     if llm_client:
         from agents.market_analyst import MarketAnalystAgent
+        from agents.risk_assessment import RiskAssessmentAgent
+        from agents.trade_review import TradeReviewAgent
         ai_agent = MarketAnalystAgent(llm_client=llm_client, context_service=agent_ctx)
-        logger.info("AI agent enabled")
+        risk_agent = RiskAssessmentAgent(llm_client=llm_client, context_service=agent_ctx)
+        trade_review_agent = TradeReviewAgent(llm_client=llm_client, context_service=agent_ctx)
+        logger.info("AI agents enabled (analyst, risk, trade_review)")
+    app.state.risk_agent = risk_agent
+    app.state.trade_review_agent = trade_review_agent
+
+    # Scanner pipeline (with AI agent if LLM enabled)
+    enricher = FundamentalEnricher()
     scanner_pipeline = ScannerPipeline(
         market_data=market_data,
         indicator_svc=indicator_svc,
@@ -640,6 +651,92 @@ async def lifespan(app: FastAPI):
     scheduler.add_task(
         "ws_lifecycle", task_ws_lifecycle,
         interval_sec=300, phases=None,  # always — manages its own phase logic
+    )
+
+    # Trade review: review completed trades after hours
+    async def task_trade_review():
+        """Review recent completed trades using AI trade review agent."""
+        if not trade_review_agent:
+            return
+        try:
+            from db.trade_repository import TradeRepository
+            async with session_factory() as session:
+                repo = TradeRepository(session)
+                # Get trades completed in the last 24h
+                recent_trades = await repo.get_recent_trades(hours=24)
+
+            if not recent_trades:
+                return
+
+            trade_dicts = [
+                {
+                    "symbol": t.symbol,
+                    "side": t.side,
+                    "price": t.price,
+                    "quantity": t.quantity,
+                    "strategy": t.strategy_name,
+                    "pnl": getattr(t, "pnl", 0),
+                    "executed_at": str(t.executed_at),
+                }
+                for t in recent_trades
+            ]
+
+            # Daily summary review
+            balance = await market_data.get_balance()
+            summary = await trade_review_agent.review_daily_trades(
+                trades=trade_dicts,
+                portfolio_summary={
+                    "total_value": balance.total,
+                    "cash": balance.available,
+                },
+            )
+            logger.info(
+                "Daily trade review: grade=%s score=%d trades=%d",
+                summary.get("overall_grade", "?"),
+                summary.get("overall_score", 0),
+                summary.get("total_trades", 0),
+            )
+
+            # Send review via notification
+            if summary.get("summary"):
+                msg = (
+                    f"Daily Trade Review: {summary['overall_grade']} "
+                    f"(score={summary['overall_score']})\n"
+                    f"Trades: {summary['total_trades']}\n"
+                    f"{summary['summary']}"
+                )
+                await notification.notify_system_event("trade_review", msg)
+
+        except Exception as e:
+            logger.error("Trade review task failed: %s", e)
+
+    scheduler.add_task(
+        "trade_review", task_trade_review,
+        interval_sec=86400, phases=[MarketPhase.AFTER_HOURS],
+    )
+
+    # Agent memory cleanup: remove expired + enforce limits
+    async def task_agent_memory_cleanup():
+        """Clean up expired agent memories and enforce per-agent limits."""
+        if not agent_ctx:
+            return
+        try:
+            expired = await agent_ctx.cleanup_expired()
+            total_trimmed = 0
+            for agent_type in ("market_analyst", "risk", "trade_review"):
+                trimmed = await agent_ctx.enforce_limits(agent_type)
+                total_trimmed += trimmed
+            if expired or total_trimmed:
+                logger.info(
+                    "Agent memory cleanup: %d expired, %d trimmed",
+                    expired, total_trimmed,
+                )
+        except Exception as e:
+            logger.error("Agent memory cleanup failed: %s", e)
+
+    scheduler.add_task(
+        "agent_memory_cleanup", task_agent_memory_cleanup,
+        interval_sec=86400, phases=[MarketPhase.CLOSED],
     )
 
     app.state.scheduler = scheduler

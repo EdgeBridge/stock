@@ -9,9 +9,12 @@ Uses per-stock adaptive weights:
 3. SignalCombiner uses per-stock weights instead of global market weights
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import time
+from typing import TYPE_CHECKING
 
 import pandas as pd
 
@@ -27,6 +30,9 @@ from engine.adaptive_weights import AdaptiveWeightManager
 from analytics.factor_model import MultiFactorModel, FactorScores
 from analytics.signal_quality import SignalQualityTracker
 from core.enums import SignalType
+
+if TYPE_CHECKING:
+    from agents.risk_assessment import RiskAssessmentAgent
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +55,7 @@ class EvaluationLoop:
         adaptive_weights: AdaptiveWeightManager | None = None,
         factor_model: MultiFactorModel | None = None,
         signal_quality: SignalQualityTracker | None = None,
+        risk_agent: RiskAssessmentAgent | None = None,
     ):
         self._adapter = adapter
         self._market_data = market_data
@@ -65,6 +72,7 @@ class EvaluationLoop:
         self._adaptive = adaptive_weights or AdaptiveWeightManager()
         self._factor_model = factor_model or MultiFactorModel()
         self._signal_quality = signal_quality or SignalQualityTracker()
+        self._risk_agent = risk_agent
         self._factor_scores: dict[str, FactorScores] = {}
         self._last_classify_time: dict[str, float] = {}
         self._reclassify_interval = 86400  # re-classify every 24h
@@ -242,6 +250,31 @@ class EvaluationLoop:
                     "Buy rejected for %s: %s", symbol, sizing.reason,
                 )
                 return
+
+            # AI pre-trade risk check (non-blocking: failures default to approved)
+            if self._risk_agent:
+                try:
+                    risk_check = await self._risk_agent.assess_pre_trade(
+                        symbol=symbol,
+                        proposed_size=sizing.allocation_usd,
+                        current_positions=[
+                            {"symbol": p.symbol, "value": p.current_price * p.quantity}
+                            for p in positions
+                        ],
+                        portfolio_summary={
+                            "total_value": balance.total,
+                            "cash": balance.available,
+                            "positions": len(positions),
+                        },
+                    )
+                    if not risk_check.get("approved", True):
+                        logger.info(
+                            "Buy blocked by risk agent for %s: %s",
+                            symbol, risk_check.get("reason", ""),
+                        )
+                        return
+                except Exception as e:
+                    logger.debug("Risk agent pre-trade check error: %s", e)
 
             await self._order_manager.place_buy(
                 symbol=symbol,

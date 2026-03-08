@@ -147,3 +147,118 @@ class TestEvaluationLoop:
             await task
         except asyncio.CancelledError:
             pass
+
+
+class TestRiskAgentIntegration:
+    """Test AI risk agent pre-trade check in evaluation loop."""
+
+    @pytest.fixture
+    def risk_agent_approved(self):
+        agent = AsyncMock()
+        agent.assess_pre_trade = AsyncMock(return_value={
+            "approved": True,
+            "risk_level": "LOW",
+            "reason": "Acceptable risk",
+            "suggested_size": 5000,
+            "warnings": [],
+        })
+        return agent
+
+    @pytest.fixture
+    def risk_agent_rejected(self):
+        agent = AsyncMock()
+        agent.assess_pre_trade = AsyncMock(return_value={
+            "approved": False,
+            "risk_level": "CRITICAL",
+            "reason": "Over-concentrated in tech sector",
+            "suggested_size": 0,
+            "warnings": ["Sector concentration too high"],
+        })
+        return agent
+
+    @pytest.fixture
+    def loop_with_risk(self, mock_adapter, mock_market_data, mock_registry, risk_agent_approved):
+        from data.indicator_service import IndicatorService
+        from strategies.combiner import SignalCombiner
+
+        risk = RiskManager()
+        order_mgr = OrderManager(adapter=mock_adapter, risk_manager=risk)
+
+        return EvaluationLoop(
+            adapter=mock_adapter,
+            market_data=mock_market_data,
+            indicator_svc=IndicatorService(),
+            registry=mock_registry,
+            combiner=SignalCombiner(),
+            order_manager=order_mgr,
+            risk_manager=risk,
+            watchlist=["AAPL"],
+            risk_agent=risk_agent_approved,
+        )
+
+    async def test_buy_proceeds_when_risk_approved(
+        self, loop_with_risk, mock_adapter, risk_agent_approved,
+    ):
+        await loop_with_risk.evaluate_symbol("AAPL")
+        # Risk agent was called
+        risk_agent_approved.assess_pre_trade.assert_called_once()
+        # Buy order went through
+        mock_adapter.create_buy_order.assert_called_once()
+
+    async def test_buy_blocked_when_risk_rejected(
+        self, mock_adapter, mock_market_data, mock_registry, risk_agent_rejected,
+    ):
+        from data.indicator_service import IndicatorService
+        from strategies.combiner import SignalCombiner
+
+        risk = RiskManager()
+        order_mgr = OrderManager(adapter=mock_adapter, risk_manager=risk)
+        loop = EvaluationLoop(
+            adapter=mock_adapter,
+            market_data=mock_market_data,
+            indicator_svc=IndicatorService(),
+            registry=mock_registry,
+            combiner=SignalCombiner(),
+            order_manager=order_mgr,
+            risk_manager=risk,
+            watchlist=["AAPL"],
+            risk_agent=risk_agent_rejected,
+        )
+        await loop.evaluate_symbol("AAPL")
+        # Risk agent was called
+        risk_agent_rejected.assess_pre_trade.assert_called_once()
+        # Buy was NOT placed
+        mock_adapter.create_buy_order.assert_not_called()
+
+    async def test_buy_proceeds_when_risk_agent_errors(
+        self, mock_adapter, mock_market_data, mock_registry,
+    ):
+        """If risk agent throws an exception, the trade should still proceed."""
+        from data.indicator_service import IndicatorService
+        from strategies.combiner import SignalCombiner
+
+        agent = AsyncMock()
+        agent.assess_pre_trade = AsyncMock(side_effect=RuntimeError("LLM timeout"))
+
+        risk = RiskManager()
+        order_mgr = OrderManager(adapter=mock_adapter, risk_manager=risk)
+        loop = EvaluationLoop(
+            adapter=mock_adapter,
+            market_data=mock_market_data,
+            indicator_svc=IndicatorService(),
+            registry=mock_registry,
+            combiner=SignalCombiner(),
+            order_manager=order_mgr,
+            risk_manager=risk,
+            watchlist=["AAPL"],
+            risk_agent=agent,
+        )
+        await loop.evaluate_symbol("AAPL")
+        # Buy should still go through despite agent error
+        mock_adapter.create_buy_order.assert_called_once()
+
+    async def test_no_risk_check_without_agent(self, eval_loop, mock_adapter):
+        """Without risk_agent, buy proceeds normally (no crash)."""
+        assert eval_loop._risk_agent is None
+        await eval_loop.evaluate_symbol("AAPL")
+        mock_adapter.create_buy_order.assert_called_once()
