@@ -4,17 +4,24 @@ Discovers stocks dynamically using:
 1. yfinance predefined screeners (most_actives, day_gainers, growth_technology, etc.)
 2. Sector rotation — expand holdings in top-performing sectors
 3. ETF Universe config — sector top_holdings as baseline
+4. KIS ranking APIs — volume surge, gainers, new highs (rate-limit aware)
 
 Replaces the hardcoded 30-stock base_universe in after_hours_scan.
 """
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import yfinance as yf
 
 from scanner.etf_universe import ETFUniverse
 from scanner.sector_analyzer import SectorAnalyzer, SectorScore
+
+if TYPE_CHECKING:
+    from exchange.kis_adapter import KISAdapter
+    from services.rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +34,9 @@ SCREENER_QUERIES = [
     "undervalued_growth_stocks",  # growth focus, not pure value
     "aggressive_small_caps",
 ]
+
+# KIS screening: max symbols per API call (first page only, no pagination)
+KIS_SCREEN_LIMIT = 15
 
 
 @dataclass
@@ -44,11 +54,15 @@ class UniverseExpander:
         self,
         etf_universe: ETFUniverse | None = None,
         sector_analyzer: SectorAnalyzer | None = None,
+        kis_adapter: "KISAdapter | None" = None,
+        rate_limiter: "RateLimiter | None" = None,
         max_per_screener: int = 15,
         max_total: int = 80,
     ):
         self._etf = etf_universe or ETFUniverse()
         self._sector_analyzer = sector_analyzer or SectorAnalyzer()
+        self._kis = kis_adapter
+        self._rate_limiter = rate_limiter
         self._max_per_screener = max_per_screener
         self._max_total = max_total
 
@@ -84,6 +98,12 @@ class UniverseExpander:
         sources["screeners"] = screener_symbols
         all_symbols.update(screener_symbols)
 
+        # Source 4: KIS ranking APIs (optional, rate-limit aware)
+        kis_symbols = await self._run_kis_screening()
+        if kis_symbols:
+            sources["kis_ranking"] = kis_symbols
+            all_symbols.update(kis_symbols)
+
         # Filter: US stocks only, remove ETFs/non-equity
         filtered = self._filter_symbols(all_symbols)
 
@@ -93,11 +113,12 @@ class UniverseExpander:
             total_discovered=len(filtered),
         )
         logger.info(
-            "Universe expanded: %d symbols (watchlist=%d, sectors=%d, screeners=%d)",
+            "Universe expanded: %d symbols (watchlist=%d, sectors=%d, screeners=%d, kis=%d)",
             len(result.symbols),
             len(sources.get("watchlist", [])),
             len(sector_holdings),
             len(screener_symbols),
+            len(kis_symbols),
         )
         return result
 
@@ -162,6 +183,39 @@ class UniverseExpander:
                 )
             except Exception as e:
                 logger.debug("Screener '%s' failed: %s", query, e)
+
+        return list(dict.fromkeys(discovered))  # dedupe preserving order
+
+    async def _run_kis_screening(self) -> list[str]:
+        """Run KIS ranking APIs for additional stock discovery.
+
+        Rate-limit aware: acquires tokens before each call, uses lowest
+        priority. Only runs if KIS adapter is configured.
+        Returns symbols only (first page, no pagination).
+        """
+        if not self._kis:
+            return []
+
+        discovered: list[str] = []
+        calls = [
+            ("volume_surge", self._kis.fetch_volume_surge),
+            ("gainers", lambda exch="NAS": self._kis.fetch_updown_rate(exch, "up")),
+            ("new_highs", lambda exch="NAS": self._kis.fetch_new_highlow(exch, True)),
+        ]
+
+        for name, fetch_fn in calls:
+            try:
+                if self._rate_limiter:
+                    await self._rate_limiter.acquire()
+                stocks = await fetch_fn()
+                symbols = [
+                    s.symbol for s in stocks[:KIS_SCREEN_LIMIT]
+                    if s.symbol and "." not in s.symbol
+                ]
+                discovered.extend(symbols)
+                logger.debug("KIS '%s': found %d symbols", name, len(symbols))
+            except Exception as e:
+                logger.debug("KIS '%s' failed: %s", name, e)
 
         return list(dict.fromkeys(discovered))  # dedupe preserving order
 

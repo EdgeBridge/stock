@@ -204,6 +204,7 @@ async def lifespan(app: FastAPI):
     etf_universe = ETFUniverse()
     universe_expander = UniverseExpander(
         etf_universe=etf_universe, sector_analyzer=sector_analyzer,
+        kis_adapter=adapter, rate_limiter=rate_limiter,
     )
     app.state.stock_scanner = stock_scanner
     app.state.sector_analyzer = sector_analyzer

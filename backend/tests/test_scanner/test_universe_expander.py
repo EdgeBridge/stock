@@ -1,11 +1,12 @@
 """Tests for UniverseExpander."""
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 from scanner.universe_expander import UniverseExpander, UniverseResult
 from scanner.etf_universe import ETFUniverse, SectorETF
 from scanner.sector_analyzer import SectorAnalyzer
+from exchange.kis_adapter import RankedStock
 
 
 @pytest.fixture
@@ -127,11 +128,6 @@ class TestScreeners:
     @patch("scanner.universe_expander.yf.screen")
     def test_screeners_respect_max_per_screener(self, mock_screen, expander):
         mock_screen.return_value = {
-            "quotes": [{"symbol": f"SYM{i}"} for i in range(30)]
-        }
-        # max_per_screener=5 but SYM0, SYM1 etc have digits — filtered out
-        # Let's use alpha symbols
-        mock_screen.return_value = {
             "quotes": [{"symbol": s} for s in [
                 "AAPL", "MSFT", "NVDA", "AMZN", "TSLA",
                 "META", "GOOGL", "AMD", "NFLX", "CRM",
@@ -140,6 +136,137 @@ class TestScreeners:
         result = expander._run_screeners()
         # Per screener max is 5, but same mock for all 5 screeners → dedup
         assert len(set(result)) <= 10
+
+
+class TestKISScreening:
+    """Test KIS ranking API integration."""
+
+    @pytest.mark.asyncio
+    async def test_kis_screening_returns_symbols(self, mock_etf_universe):
+        """KIS screening returns symbols from ranking APIs."""
+        mock_kis = AsyncMock()
+        mock_kis.fetch_volume_surge.return_value = [
+            RankedStock(symbol="PLTR", source="volume_surge"),
+            RankedStock(symbol="SOFI", source="volume_surge"),
+        ]
+        mock_kis.fetch_updown_rate.return_value = [
+            RankedStock(symbol="RIVN", source="updown_up"),
+            RankedStock(symbol="PLTR", source="updown_up"),  # dup
+        ]
+        mock_kis.fetch_new_highlow.return_value = [
+            RankedStock(symbol="CRWD", source="new_high"),
+        ]
+        mock_limiter = AsyncMock()
+
+        expander = UniverseExpander(
+            etf_universe=mock_etf_universe,
+            kis_adapter=mock_kis,
+            rate_limiter=mock_limiter,
+            max_per_screener=5,
+            max_total=50,
+        )
+        result = await expander._run_kis_screening()
+
+        assert "PLTR" in result
+        assert "SOFI" in result
+        assert "RIVN" in result
+        assert "CRWD" in result
+        # PLTR should appear only once (deduped)
+        assert result.count("PLTR") == 1
+
+    @pytest.mark.asyncio
+    async def test_kis_screening_acquires_rate_limit(self, mock_etf_universe):
+        """Each KIS API call acquires rate limiter token."""
+        mock_kis = AsyncMock()
+        mock_kis.fetch_volume_surge.return_value = []
+        mock_kis.fetch_updown_rate.return_value = []
+        mock_kis.fetch_new_highlow.return_value = []
+        mock_limiter = AsyncMock()
+
+        expander = UniverseExpander(
+            etf_universe=mock_etf_universe,
+            kis_adapter=mock_kis,
+            rate_limiter=mock_limiter,
+            max_per_screener=5,
+            max_total=50,
+        )
+        await expander._run_kis_screening()
+
+        # 3 API calls = 3 rate limiter acquisitions
+        assert mock_limiter.acquire.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_kis_screening_skipped_without_adapter(self, expander):
+        """No KIS calls if adapter not configured."""
+        result = await expander._run_kis_screening()
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_kis_screening_handles_failure(self, mock_etf_universe):
+        """Partial failure doesn't break other calls."""
+        mock_kis = AsyncMock()
+        mock_kis.fetch_volume_surge.side_effect = Exception("timeout")
+        mock_kis.fetch_updown_rate.return_value = [
+            RankedStock(symbol="AMD", source="updown_up"),
+        ]
+        mock_kis.fetch_new_highlow.return_value = []
+        mock_limiter = AsyncMock()
+
+        expander = UniverseExpander(
+            etf_universe=mock_etf_universe,
+            kis_adapter=mock_kis,
+            rate_limiter=mock_limiter,
+            max_per_screener=5,
+            max_total=50,
+        )
+        result = await expander._run_kis_screening()
+
+        # volume_surge failed but updown_rate succeeded
+        assert "AMD" in result
+
+    @pytest.mark.asyncio
+    async def test_kis_screening_filters_non_us(self, mock_etf_universe):
+        """Non-US symbols (with dots) are filtered out."""
+        mock_kis = AsyncMock()
+        mock_kis.fetch_volume_surge.return_value = [
+            RankedStock(symbol="AAPL", source="volume_surge"),
+            RankedStock(symbol="7203.T", source="volume_surge"),
+        ]
+        mock_kis.fetch_updown_rate.return_value = []
+        mock_kis.fetch_new_highlow.return_value = []
+        mock_limiter = AsyncMock()
+
+        expander = UniverseExpander(
+            etf_universe=mock_etf_universe,
+            kis_adapter=mock_kis,
+            rate_limiter=mock_limiter,
+            max_per_screener=5,
+            max_total=50,
+        )
+        result = await expander._run_kis_screening()
+
+        assert "AAPL" in result
+        assert "7203.T" not in result
+
+    @pytest.mark.asyncio
+    async def test_kis_without_rate_limiter(self, mock_etf_universe):
+        """Works without rate limiter (just no throttling)."""
+        mock_kis = AsyncMock()
+        mock_kis.fetch_volume_surge.return_value = [
+            RankedStock(symbol="TSLA", source="volume_surge"),
+        ]
+        mock_kis.fetch_updown_rate.return_value = []
+        mock_kis.fetch_new_highlow.return_value = []
+
+        expander = UniverseExpander(
+            etf_universe=mock_etf_universe,
+            kis_adapter=mock_kis,
+            rate_limiter=None,
+            max_per_screener=5,
+            max_total=50,
+        )
+        result = await expander._run_kis_screening()
+        assert "TSLA" in result
 
 
 class TestFilterSymbols:
@@ -192,6 +319,38 @@ class TestExpand:
         assert "watchlist" in result.sources
         assert "screeners" in result.sources
         assert "sector_holdings" in result.sources
+
+    @patch("scanner.universe_expander.yf.screen")
+    @pytest.mark.asyncio
+    async def test_full_expand_with_kis(self, mock_screen, mock_etf_universe):
+        """Full expand includes KIS ranking source."""
+        mock_screen.return_value = {
+            "quotes": [{"symbol": "TSLA"}]
+        }
+        mock_kis = AsyncMock()
+        mock_kis.fetch_volume_surge.return_value = [
+            RankedStock(symbol="PLTR", source="volume_surge"),
+        ]
+        mock_kis.fetch_updown_rate.return_value = [
+            RankedStock(symbol="SOFI", source="updown_up"),
+        ]
+        mock_kis.fetch_new_highlow.return_value = []
+        mock_limiter = AsyncMock()
+
+        expander = UniverseExpander(
+            etf_universe=mock_etf_universe,
+            kis_adapter=mock_kis,
+            rate_limiter=mock_limiter,
+            max_per_screener=5,
+            max_total=50,
+        )
+        result = await expander.expand(existing_watchlist=["AAPL"])
+
+        assert "AAPL" in result.symbols
+        assert "TSLA" in result.symbols
+        assert "PLTR" in result.symbols
+        assert "SOFI" in result.symbols
+        assert "kis_ranking" in result.sources
 
     @patch("scanner.universe_expander.yf.screen")
     @pytest.mark.asyncio

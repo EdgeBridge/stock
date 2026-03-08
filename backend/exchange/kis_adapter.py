@@ -13,6 +13,8 @@ from typing import Any
 import aiohttp
 
 from config import KISConfig
+from dataclasses import dataclass
+
 from exchange.base import (
     Balance,
     Candle,
@@ -22,6 +24,17 @@ from exchange.base import (
     Position,
     Ticker,
 )
+
+
+@dataclass
+class RankedStock:
+    """A stock from KIS ranking/screening API."""
+    symbol: str
+    name: str = ""
+    price: float = 0.0
+    change_pct: float = 0.0
+    volume: float = 0.0
+    source: str = ""
 from exchange.kis_auth import KISAuth
 
 logger = logging.getLogger(__name__)
@@ -43,8 +56,10 @@ TR_ID_LIVE = {
     "BUYING_POWER": "TTTS3007R",
     "ORDER_HISTORY": "TTTS3035R",
     "PENDING_ORDERS": "TTTS3018R",
-    # Scanner
-    "VOLUME_SURGE": "HHDFS76410000",
+    # Scanner / Ranking
+    "VOLUME_SURGE": "HHDFS76270000",
+    "UPDOWN_RATE": "HHDFS76290000",
+    "NEW_HIGHLOW": "HHDFS76300000",
 }
 
 TR_ID_PAPER = {
@@ -364,6 +379,88 @@ class KISAdapter(ExchangeAdapter):
                     status="open",
                 )
             )
+        return results
+
+    # -- Scanner / Ranking --
+
+    async def fetch_volume_surge(
+        self, exchange: str = "NAS", limit: int = 20,
+    ) -> list[RankedStock]:
+        """Fetch stocks with surging volume."""
+        await self._auth.ensure_valid_token()
+        params = {
+            "AUTH": "",
+            "EXCD": exchange,
+            "MIXN": "5",        # 10 min window
+            "VOL_RANG": "1",    # >= 100 shares
+            "KEYB": "",
+        }
+        data = await self._get(
+            "/uapi/overseas-stock/v1/ranking/volume-surge",
+            self._tr["VOLUME_SURGE"],
+            params,
+        )
+        return self._parse_ranked(data, "volume_surge", limit)
+
+    async def fetch_updown_rate(
+        self, exchange: str = "NAS", direction: str = "up", limit: int = 20,
+    ) -> list[RankedStock]:
+        """Fetch stocks by price change rate (gainers or losers)."""
+        await self._auth.ensure_valid_token()
+        params = {
+            "AUTH": "",
+            "EXCD": exchange,
+            "NDAY": "0",        # today
+            "GUBN": "1" if direction == "up" else "0",
+            "VOL_RANG": "1",    # >= 100 shares
+            "KEYB": "",
+        }
+        data = await self._get(
+            "/uapi/overseas-stock/v1/ranking/updown-rate",
+            self._tr["UPDOWN_RATE"],
+            params,
+        )
+        return self._parse_ranked(data, f"updown_{direction}", limit)
+
+    async def fetch_new_highlow(
+        self, exchange: str = "NAS", high: bool = True, limit: int = 20,
+    ) -> list[RankedStock]:
+        """Fetch stocks hitting new highs or new lows."""
+        await self._auth.ensure_valid_token()
+        params = {
+            "AUTH": "",
+            "EXCD": exchange,
+            "MIXN": "9",        # 120 min window
+            "VOL_RANG": "1",    # >= 100 shares
+            "GUBN": "1" if high else "0",
+            "GUBN2": "1",       # sustained (not momentary)
+            "KEYB": "",
+        }
+        data = await self._get(
+            "/uapi/overseas-stock/v1/ranking/new-highlow",
+            self._tr["NEW_HIGHLOW"],
+            params,
+        )
+        return self._parse_ranked(data, "new_high" if high else "new_low", limit)
+
+    def _parse_ranked(
+        self, data: dict[str, Any], source: str, limit: int,
+    ) -> list[RankedStock]:
+        """Parse KIS ranking API response into RankedStock list."""
+        results: list[RankedStock] = []
+        for item in data.get("output2", data.get("output", []))[:limit]:
+            if isinstance(item, dict):
+                symbol = item.get("symb", item.get("stck_shrn_iscd", "")).strip()
+                if not symbol:
+                    continue
+                results.append(RankedStock(
+                    symbol=symbol,
+                    name=item.get("name", item.get("hts_kor_isnm", "")),
+                    price=float(item.get("last", item.get("stck_prpr", 0)) or 0),
+                    change_pct=float(item.get("rate", item.get("prdy_ctrt", 0)) or 0),
+                    volume=float(item.get("tvol", item.get("acml_vol", 0)) or 0),
+                    source=source,
+                ))
         return results
 
     # -- Private helpers --
