@@ -514,18 +514,29 @@ class KISAdapter(ExchangeAdapter):
         self, path: str, tr_id: str, params: dict[str, str],
         max_retries: int = 3,
     ) -> dict[str, Any]:
+        import asyncio
         url = f"{self._config.base_url}{path}"
+        data = {}
         for attempt in range(max_retries):
             headers = self._auth.get_auth_headers(tr_id)
             async with self._session.get(url, headers=headers, params=params) as resp:
-                data = await resp.json()
+                if resp.status >= 400:
+                    logger.warning("KIS HTTP %d for GET %s", resp.status, path)
+                    data = {"rt_cd": "-1", "msg1": f"HTTP {resp.status}"}
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(0.3 * (attempt + 1))
+                        continue
+                    return data
+                try:
+                    data = await resp.json()
+                except Exception:
+                    data = {"rt_cd": "-1", "msg1": "Invalid JSON response"}
+                    return data
             if data.get("rt_cd") == "0":
                 return data
             msg_cd = data.get("msg_cd", "")
             if msg_cd == "EGW00201" and attempt < max_retries - 1:
-                import asyncio
-                wait = 0.3 * (attempt + 1)
-                await asyncio.sleep(wait)
+                await asyncio.sleep(0.3 * (attempt + 1))
                 continue
             logger.warning("KIS API error: %s %s", msg_cd, data.get("msg1"))
             return data
@@ -535,18 +546,29 @@ class KISAdapter(ExchangeAdapter):
         self, path: str, tr_id: str, body: dict, hashkey: str = "",
         max_retries: int = 3,
     ) -> dict[str, Any]:
+        import asyncio
         url = f"{self._config.base_url}{path}"
+        data = {}
         for attempt in range(max_retries):
             headers = self._auth.get_auth_headers(tr_id, hashkey)
             async with self._session.post(url, headers=headers, json=body) as resp:
-                data = await resp.json()
+                if resp.status >= 400:
+                    logger.warning("KIS HTTP %d for POST %s", resp.status, path)
+                    data = {"rt_cd": "-1", "msg1": f"HTTP {resp.status}"}
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(0.3 * (attempt + 1))
+                        continue
+                    return data
+                try:
+                    data = await resp.json()
+                except Exception:
+                    data = {"rt_cd": "-1", "msg1": "Invalid JSON response"}
+                    return data
             if data.get("rt_cd") == "0":
                 return data
             msg_cd = data.get("msg_cd", "")
             if msg_cd == "EGW00201" and attempt < max_retries - 1:
-                import asyncio
-                wait = 0.3 * (attempt + 1)
-                await asyncio.sleep(wait)
+                await asyncio.sleep(0.3 * (attempt + 1))
                 continue
             logger.warning("KIS API error: %s %s", msg_cd, data.get("msg1"))
             return data

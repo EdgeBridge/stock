@@ -85,20 +85,23 @@ class ScannerPipeline:
         # Layer 1: Score all symbols with IndicatorScreener (yfinance data)
         logger.info("Layer 1: Screening %d symbols (yfinance)", len(symbols))
         screener_scores = []
+        last_prices: dict[str, float] = {}  # Cache prices from Layer 1
         for symbol in symbols:
             try:
                 df = _fetch_yfinance_ohlcv(symbol, period="1y")
                 if df.empty or len(df) < 50:
                     continue
+                last_prices[symbol] = float(df.iloc[-1]["close"])
                 df = self._indicator_svc.add_all_indicators(df)
                 score = self._screener.score(df, symbol)
                 screener_scores.append(score)
             except Exception as e:
                 logger.warning("Layer 1 failed for %s: %s", symbol, e)
 
-        # Filter by grade
-        self._screener._min_grade = min_grade
-        filtered = self._screener.filter_candidates(screener_scores, max_candidates=max_candidates)
+        # Filter by grade (pass as parameter to avoid mutating screener state)
+        filtered = self._screener.filter_candidates(
+            screener_scores, max_candidates=max_candidates, min_grade=min_grade,
+        )
         logger.info(
             "Layer 1 complete: %d/%d passed (min_grade=%s)",
             len(filtered), len(screener_scores), min_grade,
@@ -109,17 +112,10 @@ class ScannerPipeline:
 
         # Layer 2: Enrich top candidates with FundamentalEnricher (yfinance)
         logger.info("Layer 2: Enriching %d candidates", len(filtered))
-        enrich_input = []
-        for s in filtered:
-            # Get price from the screener data (last close) — no KIS call
-            price = 0.0
-            try:
-                df = _fetch_yfinance_ohlcv(s.symbol, period="5d")
-                if not df.empty:
-                    price = float(df.iloc[-1]["close"])
-            except Exception:
-                pass
-            enrich_input.append((s.symbol, s.total_score, price))
+        enrich_input = [
+            (s.symbol, s.total_score, last_prices.get(s.symbol, 0.0))
+            for s in filtered
+        ]
 
         enriched = await self._enricher.enrich_batch(enrich_input)
         logger.info("Layer 2 complete: %d enriched candidates", len(enriched))
@@ -140,6 +136,20 @@ class ScannerPipeline:
 
         # Layer 3: (optional) AI analysis on top 5
         if self._ai_agent and results:
+            # Build market context from SPY if available
+            market_ctx = {}
+            try:
+                spy_df = _fetch_yfinance_ohlcv("SPY", period="5d")
+                if not spy_df.empty:
+                    spy_price = float(spy_df.iloc[-1]["close"])
+                    spy_change = (spy_price / float(spy_df.iloc[-2]["close"]) - 1) * 100
+                    market_ctx = {
+                        "spy_price": spy_price,
+                        "spy_1d_change": round(spy_change, 2),
+                    }
+            except Exception:
+                pass
+
             top_n = min(5, len(results))
             logger.info("Layer 3: AI analysis on top %d candidates", top_n)
             for result in results[:top_n]:
@@ -152,7 +162,8 @@ class ScannerPipeline:
                             "fundamental_score": result["fundamental_score"],
                             "smart_money_score": result["smart_money_score"],
                         },
-                        market_context={},
+                        market_context=market_ctx,
+                        current_price=last_prices.get(result["symbol"], 0.0),
                     )
                     result["ai_recommendation"] = recommendation.recommendation
                     result["ai_score"] = recommendation.score

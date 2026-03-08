@@ -251,8 +251,10 @@ class TestTaskRecovery:
         assert fn.await_count == 2
         assert tr._total_successes == 1
         assert tr._total_failures == 1
-        # Check backoff sleep called with correct delay: 5.0 * 2^0 = 5.0
-        mock_sleep.assert_awaited_once_with(5.0)
+        # Check backoff sleep called with correct base delay + jitter (0-10%)
+        assert mock_sleep.await_count == 1
+        delay = mock_sleep.await_args_list[0].args[0]
+        assert 5.0 <= delay <= 5.5  # 5.0 base + up to 10% jitter
 
     @pytest.mark.asyncio
     @patch("engine.recovery.asyncio.sleep", new_callable=AsyncMock)
@@ -276,11 +278,13 @@ class TestTaskRecovery:
         tr = TaskRecovery("task1", fn, max_retries=3, backoff_base=10.0, backoff_max=25.0)
 
         await tr.execute()
-        # attempt 0: delay = 10 * 2^0 = 10
-        # attempt 1: delay = 10 * 2^1 = 20
-        # attempt 2: delay = min(10 * 2^2, 25) = 25  (capped)
+        # attempt 0: delay = 10 * 2^0 = 10 + jitter
+        # attempt 1: delay = 10 * 2^1 = 20 + jitter
+        # attempt 2: delay = min(10 * 2^2, 25) = 25 + jitter (capped)
         delays = [call.args[0] for call in mock_sleep.await_args_list]
-        assert delays == [10.0, 20.0, 25.0]
+        assert 10.0 <= delays[0] <= 11.0   # 10 + up to 10% jitter
+        assert 20.0 <= delays[1] <= 22.0   # 20 + up to 10% jitter
+        assert 25.0 <= delays[2] <= 27.5   # 25 (capped) + up to 10% jitter
 
     @pytest.mark.asyncio
     @patch("engine.recovery.asyncio.sleep", new_callable=AsyncMock)

@@ -7,6 +7,7 @@ Provides:
 
 import asyncio
 import logging
+import random
 import time
 from enum import Enum
 
@@ -204,10 +205,11 @@ class TaskRecovery:
                 self._total_failures += 1
 
                 if attempt < self.max_retries:
-                    delay = min(
+                    base_delay = min(
                         self.backoff_base * (2 ** attempt),
                         self.backoff_max,
                     )
+                    delay = base_delay + random.uniform(0, base_delay * 0.1)
                     logger.warning(
                         "Task %s failed (attempt %d/%d): %s. Retrying in %.1fs",
                         self.name, attempt + 1, self.max_retries + 1, e, delay,

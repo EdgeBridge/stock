@@ -105,26 +105,32 @@ class ETFEngine:
         """
         actions = {"regime": [], "sector": [], "risk": []}
 
+        # Fetch positions and balance once for all steps
+        positions = await self._market_data.get_positions()
+        balance = await self._market_data.get_balance()
+
         # Step 1: Check hold-day limits on existing positions
-        expired = await self._check_hold_limits()
+        expired = await self._check_hold_limits(positions)
         actions["risk"].extend(expired)
 
         # Step 2: Regime-based leveraged ETF management
-        regime_actions = await self._manage_regime_etfs(market_state)
+        regime_actions = await self._manage_regime_etfs(market_state, positions, balance)
         actions["regime"].extend(regime_actions)
 
         # Step 3: Sector ETF rotation
         if sector_data:
-            sector_actions = await self._manage_sector_etfs(sector_data)
+            sector_actions = await self._manage_sector_etfs(sector_data, positions, balance)
             actions["sector"].extend(sector_actions)
 
         # Step 4: Check total ETF exposure
-        exposure_actions = await self._check_exposure_limits()
+        exposure_actions = self._check_exposure_limits(positions, balance)
         actions["risk"].extend(exposure_actions)
 
         return actions
 
-    async def _manage_regime_etfs(self, state: MarketState) -> list[str]:
+    async def _manage_regime_etfs(
+        self, state: MarketState, positions=None, balance=None,
+    ) -> list[str]:
         """Switch leveraged ETFs based on market regime.
 
         Bull entry: SPY above SMA200 (confirmed) → buy TQQQ, SOXL
@@ -144,9 +150,11 @@ class ETFEngine:
             state.spy_distance_pct,
         )
 
-        # Get current positions
-        positions = await self._market_data.get_positions()
-        balance = await self._market_data.get_balance()
+        # Use provided positions/balance or fetch
+        if positions is None:
+            positions = await self._market_data.get_positions()
+        if balance is None:
+            balance = await self._market_data.get_balance()
         held_symbols = {p.symbol for p in positions}
         current_count = len(positions)
 
@@ -250,7 +258,9 @@ class ETFEngine:
 
         return actions
 
-    async def _manage_sector_etfs(self, sector_data: dict) -> list[str]:
+    async def _manage_sector_etfs(
+        self, sector_data: dict, positions=None, balance=None,
+    ) -> list[str]:
         """Rotate sector ETFs based on relative strength.
 
         Buy top N sector ETFs, sell bottom sectors.
@@ -275,8 +285,10 @@ class ETFEngine:
 
         logger.info("Sector rotation: top=%s, bottom=%s", top_names, bottom_names)
 
-        positions = await self._market_data.get_positions()
-        balance = await self._market_data.get_balance()
+        if positions is None:
+            positions = await self._market_data.get_positions()
+        if balance is None:
+            balance = await self._market_data.get_balance()
         held_symbols = {p.symbol for p in positions}
         current_count = len(positions)
 
@@ -351,7 +363,7 @@ class ETFEngine:
 
         return actions
 
-    async def _check_hold_limits(self) -> list[str]:
+    async def _check_hold_limits(self, positions=None) -> list[str]:
         """Sell leveraged ETFs held beyond max_hold_days."""
         actions = []
         now = time.time()
@@ -363,7 +375,8 @@ class ETFEngine:
                 continue
             hold_seconds = now - etf_pos.entry_date
             if hold_seconds > max_seconds:
-                positions = await self._market_data.get_positions()
+                if positions is None:
+                    positions = await self._market_data.get_positions()
                 pos = next((p for p in positions if p.symbol == sym), None)
                 if pos and pos.quantity > 0:
                     price = float(pos.current_price) if pos.current_price else 0
@@ -388,13 +401,11 @@ class ETFEngine:
 
         return actions
 
-    async def _check_exposure_limits(self) -> list[str]:
+    def _check_exposure_limits(self, positions=None, balance=None) -> list[str]:
         """Warn if total ETF exposure exceeds max_portfolio_pct."""
         actions = []
-        positions = await self._market_data.get_positions()
-        balance = await self._market_data.get_balance()
 
-        if balance.total <= 0:
+        if not balance or not positions or balance.total <= 0:
             return actions
 
         etf_value = 0.0

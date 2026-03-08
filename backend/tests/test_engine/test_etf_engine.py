@@ -253,24 +253,24 @@ class TestHoldLimits:
 class TestExposureLimits:
     """Test portfolio exposure limit checks."""
 
-    @pytest.mark.asyncio
-    async def test_warns_on_high_etf_exposure(self, engine, mock_market_data):
+    def test_warns_on_high_etf_exposure(self, engine, mock_market_data):
         # Total portfolio = 100k, ETF positions = 40k (40% > 30% limit)
         pos1 = MagicMock(symbol="TQQQ", quantity=200, current_price=100.0)
         pos2 = MagicMock(symbol="XLK", quantity=200, current_price=100.0)
-        mock_market_data.get_positions.return_value = [pos1, pos2]
+        positions = [pos1, pos2]
+        balance = MagicMock(total=100000, available=50000)
 
-        actions = await engine._check_exposure_limits()
+        actions = engine._check_exposure_limits(positions, balance)
         assert len(actions) == 1
         assert "exceeds" in actions[0]
 
-    @pytest.mark.asyncio
-    async def test_no_warning_within_limits(self, engine, mock_market_data):
+    def test_no_warning_within_limits(self, engine, mock_market_data):
         # Total = 100k, ETF = 10k (10% < 30% limit)
         pos = MagicMock(symbol="TQQQ", quantity=20, current_price=50.0)
-        mock_market_data.get_positions.return_value = [pos]
+        positions = [pos]
+        balance = MagicMock(total=100000, available=50000)
 
-        actions = await engine._check_exposure_limits()
+        actions = engine._check_exposure_limits(positions, balance)
         assert actions == []
 
 

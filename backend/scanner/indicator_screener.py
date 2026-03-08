@@ -86,11 +86,13 @@ class IndicatorScreener:
         )
 
     def filter_candidates(
-        self, scores: list[ScreenerScore], max_candidates: int = 50
+        self, scores: list[ScreenerScore], max_candidates: int = 50,
+        min_grade: str | None = None,
     ) -> list[ScreenerScore]:
         """Filter and rank candidates by score."""
         grade_order = {"A": 0, "B": 1, "C": 2, "D": 3, "F": 4}
-        min_rank = grade_order.get(self._min_grade, 1)
+        grade = min_grade or self._min_grade
+        min_rank = grade_order.get(grade, 1)
         filtered = [s for s in scores if grade_order.get(s.grade, 4) <= min_rank]
         filtered.sort(key=lambda s: s.total_score, reverse=True)
         return filtered[:max_candidates]

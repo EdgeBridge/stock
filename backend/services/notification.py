@@ -376,7 +376,7 @@ class NotificationService:
     ) -> bool:
         if level == AlertLevel.CRITICAL:
             return False
-        key = f"{category.value}:{symbol}"
+        key = f"{category.value}:{symbol or level.value}"
         now = time.monotonic()
         last = self._recent.get(key)
         if last is not None and (now - last) < self._throttle_seconds:

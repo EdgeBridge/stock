@@ -71,21 +71,30 @@ class OrderManager:
         order_type: str = "limit",
         exchange: str = "NASD",
         atr: float | None = None,
+        sizing_override: PositionSizeResult | None = None,
     ) -> ManagedOrder | None:
-        """Place a buy order after risk checks and deduplication."""
+        """Place a buy order after risk checks and deduplication.
+
+        Args:
+            sizing_override: Pre-computed sizing (e.g. from Kelly). Skips
+                internal sizing calculation when provided.
+        """
         # Duplicate check: prevent double-buying same symbol
         if self.has_pending_order(symbol, "BUY"):
             logger.info("Buy skipped for %s: pending order already exists", symbol)
             return None
 
-        sizing = self._risk.calculate_position_size(
-            symbol=symbol,
-            price=price,
-            portfolio_value=portfolio_value,
-            cash_available=cash_available,
-            current_positions=current_positions,
-            atr=atr,
-        )
+        if sizing_override is not None:
+            sizing = sizing_override
+        else:
+            sizing = self._risk.calculate_position_size(
+                symbol=symbol,
+                price=price,
+                portfolio_value=portfolio_value,
+                cash_available=cash_available,
+                current_positions=current_positions,
+                atr=atr,
+            )
 
         if not sizing.allowed:
             logger.info("Buy rejected for %s: %s", symbol, sizing.reason)
@@ -256,37 +265,52 @@ class OrderManager:
         if not self._active_orders:
             return []
 
-        changes = []
-        for order_id, order in list(self._active_orders.items()):
-            if order.status in ("filled", "cancelled"):
-                continue
-            try:
-                result = await self._adapter.fetch_order(order_id, order.symbol)
-                old_status = order.status
-                order.status = result.status
-                order.filled_price = result.filled_price
-                order.filled_quantity = int(result.filled_quantity) if result.filled_quantity else 0
-                if result.filled_price and order.price:
-                    order.slippage = result.filled_price - order.price
+        import asyncio
 
-                if old_status != result.status:
-                    changes.append({
-                        "order_id": order_id,
-                        "symbol": order.symbol,
-                        "side": order.side,
-                        "old_status": old_status,
-                        "new_status": result.status,
-                        "filled_quantity": order.filled_quantity,
-                        "quantity": order.quantity,
-                    })
-                    logger.info(
-                        "Order %s (%s %s): %s -> %s (filled=%d/%d)",
-                        order_id, order.side, order.symbol,
-                        old_status, result.status,
-                        order.filled_quantity, order.quantity,
-                    )
+        # Fetch all pending orders in parallel
+        pending = [
+            (oid, order) for oid, order in self._active_orders.items()
+            if order.status not in ("filled", "cancelled")
+        ]
+        if not pending:
+            return []
+
+        async def _fetch(oid: str, order: ManagedOrder):
+            try:
+                return oid, order, await self._adapter.fetch_order(oid, order.symbol)
             except Exception as e:
-                logger.error("Reconcile failed for order %s: %s", order_id, e)
+                logger.error("Reconcile failed for order %s: %s", oid, e)
+                return oid, order, None
+
+        results = await asyncio.gather(*[_fetch(oid, o) for oid, o in pending])
+
+        changes = []
+        for order_id, order, result in results:
+            if result is None:
+                continue
+            old_status = order.status
+            order.status = result.status
+            order.filled_price = result.filled_price
+            order.filled_quantity = int(result.filled_quantity) if result.filled_quantity else 0
+            if result.filled_price and order.price:
+                order.slippage = result.filled_price - order.price
+
+            if old_status != result.status:
+                changes.append({
+                    "order_id": order_id,
+                    "symbol": order.symbol,
+                    "side": order.side,
+                    "old_status": old_status,
+                    "new_status": result.status,
+                    "filled_quantity": order.filled_quantity,
+                    "quantity": order.quantity,
+                })
+                logger.info(
+                    "Order %s (%s %s): %s -> %s (filled=%d/%d)",
+                    order_id, order.side, order.symbol,
+                    old_status, result.status,
+                    order.filled_quantity, order.quantity,
+                )
 
         # Clean up completed orders
         self.clear_completed()

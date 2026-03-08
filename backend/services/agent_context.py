@@ -131,7 +131,7 @@ class AgentContextService:
         for m in all_memories:
             if symbol and m.symbol == symbol:
                 symbol_hits.append(m)
-            elif m.category == "sector" and sector and sector.lower() in (m.content.lower()):
+            elif m.category == "sector" and sector and m.symbol and m.symbol.lower() == sector.lower():
                 sector_hits.append(m)
             elif m.category == "market":
                 market_hits.append(m)

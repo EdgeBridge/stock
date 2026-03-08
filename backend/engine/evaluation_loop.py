@@ -283,6 +283,7 @@ class EvaluationLoop:
                 cash_available=balance.available,
                 current_positions=len(positions),
                 strategy_name=strategy_name,
+                sizing_override=sizing,
             )
 
         elif signal.signal_type == SignalType.SELL:

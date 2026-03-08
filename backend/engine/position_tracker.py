@@ -176,7 +176,10 @@ class PositionTracker:
         )
 
         if order:
-            pnl = (price - tracked.entry_price) * tracked.quantity
+            # Use actual filled quantity for PnL (handles partial fills)
+            fill_qty = order.filled_quantity or tracked.quantity
+            fill_price = order.filled_price or price
+            pnl = (fill_price - tracked.entry_price) * fill_qty
             self._risk.update_daily_pnl(pnl)
             self.untrack(tracked.symbol)
 
