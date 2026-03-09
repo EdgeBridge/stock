@@ -297,7 +297,22 @@ async def lifespan(app: FastAPI):
     app.state.kr_market_data = kr_market_data
     app.state.kr_order_manager = kr_order_manager
     app.state.kr_position_tracker = kr_position_tracker
-    logger.info("KR engine components initialized")
+
+    # KR ETF Engine
+    from pathlib import Path
+    kr_etf_config_path = Path(__file__).resolve().parent.parent / "config" / "kr_etf_universe.yaml"
+    kr_etf_universe = ETFUniverse(config_path=kr_etf_config_path)
+    kr_etf_engine = ETFEngine(
+        market_data=kr_market_data,
+        order_manager=kr_order_manager,
+        etf_universe=kr_etf_universe,
+        sector_analyzer=sector_analyzer,
+        notification=notification,
+    )
+    app.state.kr_etf_engine = kr_etf_engine
+    kr_market_state_detector = MarketStateDetector()
+    app.state.kr_market_state_detector = kr_market_state_detector
+    logger.info("KR engine components initialized (incl. ETF Engine)")
 
     # Recovery manager for circuit breakers
     recovery_mgr = RecoveryManager(notification=notification)
@@ -890,6 +905,36 @@ async def lifespan(app: FastAPI):
     scheduler.add_task(
         "kr_daily_scan", task_kr_daily_scan,
         interval_sec=86400, phases=[MarketPhase.PRE_MARKET], market="KR",
+    )
+
+    async def task_kr_etf_evaluation():
+        """KR ETF Engine: regime-based leveraged pair + sector ETF rotation."""
+        try:
+            # Use KODEX 200 (069500) as KOSPI proxy for regime detection
+            kospi_df = await kr_market_data.get_ohlcv("069500", limit=250)
+            if kospi_df.empty:
+                return
+            state = kr_market_state_detector.detect(kospi_df)
+
+            # Run KR ETF engine evaluation
+            actions = await kr_etf_engine.evaluate(
+                market_state=state,
+                sector_data=None,  # KR sector data from ETF universe config
+            )
+
+            total = sum(len(v) for v in actions.values())
+            if total > 0:
+                logger.info(
+                    "KR ETF Engine: %d actions (regime=%d, sector=%d, risk=%d)",
+                    total, len(actions["regime"]),
+                    len(actions["sector"]), len(actions["risk"]),
+                )
+        except Exception as e:
+            logger.error("KR ETF evaluation failed: %s", e)
+
+    scheduler.add_task(
+        "kr_etf_evaluation", task_kr_etf_evaluation,
+        interval_sec=900, phases=[MarketPhase.REGULAR], market="KR",
     )
 
     app.state.scheduler = scheduler

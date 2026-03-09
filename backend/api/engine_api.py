@@ -236,6 +236,29 @@ async def etf_engine_status(request: Request):
     return status
 
 
+@router.get("/etf/kr")
+async def kr_etf_engine_status(request: Request):
+    """Get KR ETF engine status."""
+    kr_etf_engine = getattr(request.app.state, "kr_etf_engine", None)
+    if not kr_etf_engine:
+        return {"status": "not_configured"}
+    status = kr_etf_engine.get_status()
+
+    kr_market_data = getattr(request.app.state, "kr_market_data", None)
+    if status["last_regime"] is None and kr_market_data:
+        detector = getattr(request.app.state, "kr_market_state_detector", None)
+        if detector:
+            try:
+                kospi_df = await kr_market_data.get_ohlcv("069500", limit=250)
+                if not kospi_df.empty:
+                    state = detector.detect(kospi_df)
+                    status["last_regime"] = state.regime.value
+            except Exception:
+                pass
+
+    return status
+
+
 @router.get("/analytics/factors")
 async def factor_scores(request: Request):
     """Get current factor model scores for watchlist stocks."""
