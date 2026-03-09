@@ -18,13 +18,18 @@ logger = logging.getLogger(__name__)
 class SignalCombiner:
     """Combine multiple strategy signals using weighted voting."""
 
-    def __init__(self, consensus_config: dict | None = None):
+    def __init__(
+        self,
+        consensus_config: dict | None = None,
+        min_active_ratio: float = 0.15,
+    ):
         cfg = consensus_config or {}
         self._consensus_enabled = cfg.get("enabled", False)
         self._min_group_signals = cfg.get("min_group_signals", 2)
         self._consensus_boost = cfg.get("consensus_boost", 0.30)
         self._discord_penalty = cfg.get("discord_penalty", 0.40)
         self._groups: dict[str, list[str]] = cfg.get("groups", {})
+        self._min_active_ratio = min_active_ratio
 
     def _apply_consensus(
         self, signals: list[Signal], weights: dict[str, float],
@@ -104,6 +109,7 @@ class SignalCombiner:
 
         buy_score = 0.0
         sell_score = 0.0
+        active_weight = 0.0
         total_weight = 0.0
         reasons = []
         all_indicators = {}
@@ -114,13 +120,16 @@ class SignalCombiner:
                 continue
 
             total_weight += w
-            weighted_conf = signal.confidence * w
 
             if signal.signal_type == SignalType.BUY:
+                weighted_conf = signal.confidence * w
                 buy_score += weighted_conf
+                active_weight += w
                 reasons.append(f"+{signal.strategy_name}({signal.confidence:.0%})")
             elif signal.signal_type == SignalType.SELL:
+                weighted_conf = signal.confidence * w
                 sell_score += weighted_conf
+                active_weight += w
                 reasons.append(f"-{signal.strategy_name}({signal.confidence:.0%})")
 
             # Collect indicators
@@ -131,17 +140,27 @@ class SignalCombiner:
         for group_name, score in agreement_scores.items():
             all_indicators[f"combiner.{group_name}_agreement"] = score
 
-        if total_weight == 0:
+        if active_weight == 0 or total_weight == 0:
             return Signal(
                 signal_type=SignalType.HOLD,
                 confidence=0.0,
                 strategy_name="combiner",
-                reason="No weighted strategies",
+                reason="No active signals",
             )
 
-        # Normalize
-        buy_norm = buy_score / total_weight
-        sell_norm = sell_score / total_weight
+        # Min active ratio: at least N% of strategies must be active (BUY/SELL)
+        active_ratio = active_weight / total_weight
+        if active_ratio < self._min_active_ratio:
+            return Signal(
+                signal_type=SignalType.HOLD,
+                confidence=max(buy_score, sell_score) / active_weight,
+                strategy_name="combiner",
+                reason=f"Active ratio too low ({active_ratio:.0%} < {self._min_active_ratio:.0%})",
+            )
+
+        # Normalize by active weight only (HOLD signals excluded from denominator)
+        buy_norm = buy_score / active_weight
+        sell_norm = sell_score / active_weight
 
         if buy_norm > sell_norm and buy_norm >= min_confidence:
             return Signal(

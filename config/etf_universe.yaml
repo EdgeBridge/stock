@@ -80,6 +80,19 @@ volatility:
   - UVXY  # 2x VIX
   - SVXY  # -0.5x VIX
 
+# Exchange codes for KIS API (NASD=Nasdaq, NYSE, AMEX=NYSE Arca)
+# Most ETFs trade on NYSE Arca (AMEX). Only list exceptions here.
+# ETFs not listed default to AMEX.
+exchanges:
+  TQQQ: NASD
+  SQQQ: NASD
+  QQQ: NASD
+  ARKK: NASD
+  SARK: NASD
+  SOXX: NASD
+  SHY: NASD
+  TLT: NASD
+
 # Risk limits for leveraged ETFs
 risk_rules:
   max_hold_days: 20        # No holding leveraged >20 days (backtest: 10d too short)

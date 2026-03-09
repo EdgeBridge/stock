@@ -211,6 +211,7 @@ class ETFEngine:
                         quantity=int(pos.quantity),
                         price=price,
                         strategy_name="etf_engine_regime",
+                        exchange=self._etf.get_exchange(sym),
                     )
                     if sell_result is None:
                         logger.warning("ETF Engine: SELL %s failed", sym)
@@ -243,6 +244,7 @@ class ETFEngine:
                         cash_available=alloc,
                         current_positions=current_count,
                         strategy_name="etf_engine_regime",
+                        exchange=self._etf.get_exchange(sym),
                     )
                     if result is None:
                         logger.warning("ETF Engine: BUY %s failed — skipping", sym)
@@ -319,6 +321,7 @@ class ETFEngine:
                         quantity=int(pos.quantity),
                         price=price,
                         strategy_name="etf_engine_sector",
+                        exchange=self._etf.get_exchange(etf_sym),
                     )
                     if sell_result is None:
                         logger.warning("ETF Engine: SELL %s (sector) failed", etf_sym)
@@ -353,6 +356,7 @@ class ETFEngine:
                     cash_available=alloc,
                     current_positions=current_count,
                     strategy_name="etf_engine_sector",
+                    exchange=self._etf.get_exchange(etf_sym),
                 )
                 if result is None:
                     logger.warning("ETF Engine: BUY %s (sector) failed — skipping", etf_sym)
@@ -402,6 +406,7 @@ class ETFEngine:
                         quantity=int(pos.quantity),
                         price=price,
                         strategy_name="etf_engine_hold_limit",
+                        exchange=self._etf.get_exchange(sym),
                     )
                     hold_days = hold_seconds / 86400
                     actions.append(

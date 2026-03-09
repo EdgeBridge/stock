@@ -83,6 +83,9 @@ class ETFUniverse:
         self._safe_haven = data.get("safe_haven", [])
         self._volatility = data.get("volatility", [])
 
+        # Exchange code overrides (default: AMEX for most ETFs)
+        self._exchanges: dict[str, str] = data.get("exchanges", {})
+
         # Risk rules
         rules = data.get("risk_rules", {})
         self._risk_rules = ETFRiskRules(**rules)
@@ -129,6 +132,13 @@ class ETFUniverse:
             if symbol in sec.top_holdings:
                 return name
         return None
+
+    def get_exchange(self, symbol: str) -> str:
+        """Get KIS exchange code for an ETF symbol.
+
+        Most ETFs trade on NYSE Arca (AMEX). Overrides loaded from config.
+        """
+        return self._exchanges.get(symbol, "AMEX")
 
     def is_leveraged(self, symbol: str) -> bool:
         """Check if a symbol is a leveraged ETF."""

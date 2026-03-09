@@ -121,7 +121,7 @@ class TestSignalCombiner:
         assert "a.test_val" in result.indicators
         assert "b.test_val" in result.indicators
 
-    def test_hold_signals_dont_contribute(self):
+    def test_hold_signals_excluded_from_denominator(self):
         combiner = SignalCombiner()
         signals = [
             _signal("a", SignalType.HOLD, 0.5),
@@ -129,8 +129,23 @@ class TestSignalCombiner:
         ]
         weights = {"a": 0.5, "b": 0.5}
         result = combiner.combine(signals, weights)
-        # Only b contributes buy, a is hold (neither buy nor sell)
-        assert result.signal_type == SignalType.HOLD  # buy_norm = 0.4, below 0.5
+        # HOLD excluded from denominator: buy_norm = 0.4/0.5 = 0.8 → BUY
+        assert result.signal_type == SignalType.BUY
+        assert result.confidence == pytest.approx(0.8)
+
+    def test_active_ratio_too_low(self):
+        combiner = SignalCombiner(min_active_ratio=0.50)
+        signals = [
+            _signal("a", SignalType.HOLD, 0.5),
+            _signal("b", SignalType.HOLD, 0.5),
+            _signal("c", SignalType.HOLD, 0.5),
+            _signal("d", SignalType.BUY, 0.9),
+        ]
+        weights = {"a": 0.25, "b": 0.25, "c": 0.25, "d": 0.25}
+        result = combiner.combine(signals, weights)
+        # Only 25% active (1/4), below 50% threshold → HOLD
+        assert result.signal_type == SignalType.HOLD
+        assert "Active ratio too low" in result.reason
 
 
 class TestConsensusSignalCombiner:
