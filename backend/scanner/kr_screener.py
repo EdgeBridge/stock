@@ -1,19 +1,70 @@
-"""Korean stock screener using pykrx.
+"""Korean stock screener using yfinance + curated universe.
+
+Since KRX direct scraping (pykrx) is blocked from this server,
+we use yfinance for Korean stock data and maintain a curated
+universe of major KOSPI/KOSDAQ stocks.
 
 Discovers KR stocks by:
-1. Market cap ranking (시가총액 상위)
-2. Trading value ranking (거래대금 상위)
-3. Fundamental screening (저PER, 고배당)
+1. Curated universe (대형주 + 업종대표주)
+2. yfinance screening (market cap, volume, fundamentals)
 """
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
 
-import pandas as pd
-from pykrx import stock as pykrx_stock
+import yfinance as yf
+
+from data.kr_symbol_mapper import to_yfinance
 
 logger = logging.getLogger(__name__)
+
+
+# Curated KR stock universe — major KOSPI/KOSDAQ stocks
+# Format: (symbol, exchange, name)
+_KR_UNIVERSE = [
+    # KOSPI 대형주
+    ("005930", "KRX", "삼성전자"),
+    ("000660", "KRX", "SK하이닉스"),
+    ("373220", "KRX", "LG에너지솔루션"),
+    ("207940", "KRX", "삼성바이오로직스"),
+    ("005935", "KRX", "삼성전자우"),
+    ("006400", "KRX", "삼성SDI"),
+    ("051910", "KRX", "LG화학"),
+    ("005380", "KRX", "현대차"),
+    ("000270", "KRX", "기아"),
+    ("035420", "KRX", "NAVER"),
+    ("035720", "KRX", "카카오"),
+    ("068270", "KRX", "셀트리온"),
+    ("105560", "KRX", "KB금융"),
+    ("055550", "KRX", "신한지주"),
+    ("012330", "KRX", "현대모비스"),
+    ("066570", "KRX", "LG전자"),
+    ("003550", "KRX", "LG"),
+    ("034730", "KRX", "SK"),
+    ("032830", "KRX", "삼성생명"),
+    ("015760", "KRX", "한국전력"),
+    ("003670", "KRX", "포스코퓨처엠"),
+    ("009150", "KRX", "삼성전기"),
+    ("028260", "KRX", "삼성물산"),
+    ("086790", "KRX", "하나금융지주"),
+    ("017670", "KRX", "SK텔레콤"),
+    ("010130", "KRX", "고려아연"),
+    ("018260", "KRX", "삼성에스디에스"),
+    ("011200", "KRX", "HMM"),
+    ("033780", "KRX", "KT&G"),
+    ("034020", "KRX", "두산에너빌리티"),
+    # KOSDAQ 대형주
+    ("247540", "KOSDAQ", "에코프로비엠"),
+    ("086520", "KOSDAQ", "에코프로"),
+    ("377300", "KOSDAQ", "카카오페이"),
+    ("263750", "KOSDAQ", "펄어비스"),
+    ("196170", "KOSDAQ", "알테오젠"),
+    ("328130", "KOSDAQ", "루닛"),
+    ("041510", "KOSDAQ", "에스엠"),
+    ("293490", "KOSDAQ", "카카오게임즈"),
+    ("112040", "KOSDAQ", "위메이드"),
+    ("403870", "KOSDAQ", "HPSP"),
+]
 
 
 @dataclass
@@ -24,121 +75,73 @@ class KRScreenResult:
     total_discovered: int = 0
 
 
-def _get_latest_trading_date() -> str:
-    """Get the most recent trading date (skip weekends)."""
-    dt = datetime.now()
-    # If before market close, use previous day
-    if dt.hour < 16:
-        dt -= timedelta(days=1)
-    # Skip weekends
-    while dt.weekday() >= 5:
-        dt -= timedelta(days=1)
-    return dt.strftime("%Y%m%d")
-
-
 class KRScreener:
-    """Korean stock screener using pykrx data."""
+    """Korean stock screener using yfinance + curated universe."""
 
     def __init__(
         self,
         max_per_source: int = 20,
         max_total: int = 60,
         min_market_cap: int = 500_000_000_000,  # 5000억원
-        min_trading_value: int = 10_000_000_000,  # 100억원
+        min_avg_volume: int = 100_000,
     ):
         self._max_per_source = max_per_source
         self._max_total = max_total
         self._min_market_cap = min_market_cap
-        self._min_trading_value = min_trading_value
+        self._min_avg_volume = min_avg_volume
 
-    def screen(
-        self,
-        date: str | None = None,
-        markets: list[str] | None = None,
-    ) -> KRScreenResult:
-        """Run all screening criteria and return combined results.
+    def screen(self, **kwargs) -> KRScreenResult:
+        """Screen Korean stocks from curated universe using yfinance data.
 
-        Args:
-            date: Target date (YYYYMMDD). Defaults to latest trading day.
-            markets: List of markets to screen ('KOSPI', 'KOSDAQ'). Default both.
+        Accepts **kwargs for backward compatibility (date, markets are ignored).
         """
-        if date is None:
-            date = _get_latest_trading_date()
-        if markets is None:
-            markets = ["KOSPI", "KOSDAQ"]
-
         result = KRScreenResult()
 
-        for market in markets:
-            # Source 1: Market cap leaders
-            try:
-                mcap_syms = self._screen_by_market_cap(date, market)
-                result.sources[f"market_cap_{market.lower()}"] = mcap_syms
-                result.symbols.extend(mcap_syms)
-            except Exception as e:
-                logger.warning("KR market cap screening failed (%s): %s", market, e)
+        # Source 1: Curated large-caps (always included)
+        curated = [s[0] for s in _KR_UNIVERSE]
+        result.sources["curated"] = curated
 
-            # Source 2: Trading value leaders
-            try:
-                tv_syms = self._screen_by_trading_value(date, market)
-                result.sources[f"trading_value_{market.lower()}"] = tv_syms
-                result.symbols.extend(tv_syms)
-            except Exception as e:
-                logger.warning("KR trading value screening failed (%s): %s", market, e)
+        # Source 2: yfinance screening (filter by market cap + volume)
+        screened = self._screen_by_yfinance(curated)
+        result.sources["yfinance_filtered"] = screened
 
-            # Source 3: Value stocks (low PER + decent dividend)
-            try:
-                val_syms = self._screen_value_stocks(date, market)
-                result.sources[f"value_{market.lower()}"] = val_syms
-                result.symbols.extend(val_syms)
-            except Exception as e:
-                logger.warning("KR value screening failed (%s): %s", market, e)
-
-        # Deduplicate
+        # Combine: screened first (quality-filtered), then remaining curated
         seen = set()
-        unique = []
-        for s in result.symbols:
+        combined = []
+        for s in screened:
             if s not in seen:
                 seen.add(s)
-                unique.append(s)
-        result.symbols = unique[:self._max_total]
-        result.total_discovered = len(unique)
+                combined.append(s)
+        for s in curated:
+            if s not in seen:
+                seen.add(s)
+                combined.append(s)
+
+        result.symbols = combined[:self._max_total]
+        result.total_discovered = len(combined)
         return result
 
-    def _screen_by_market_cap(self, date: str, market: str) -> list[str]:
-        """Top stocks by market cap (시가총액)."""
-        df = pykrx_stock.get_market_cap(date, market=market)
-        if df.empty:
-            return []
-        # Filter by minimum market cap and sort
-        df = df[df["시가총액"] >= self._min_market_cap]
-        df = df.sort_values("시가총액", ascending=False)
-        return df.index.tolist()[:self._max_per_source]
+    def _screen_by_yfinance(self, symbols: list[str]) -> list[str]:
+        """Filter symbols using yfinance market data."""
+        qualified = []
+        for symbol in symbols:
+            try:
+                yf_sym = to_yfinance(symbol, self._get_exchange(symbol))
+                ticker = yf.Ticker(yf_sym)
+                info = ticker.fast_info
+                market_cap = getattr(info, "market_cap", 0) or 0
+                avg_vol = getattr(info, "three_month_average_volume", 0) or 0
 
-    def _screen_by_trading_value(self, date: str, market: str) -> list[str]:
-        """Top stocks by trading value (거래대금)."""
-        df = pykrx_stock.get_market_cap(date, market=market)
-        if df.empty:
-            return []
-        df = df[df["거래대금"] >= self._min_trading_value]
-        df = df.sort_values("거래대금", ascending=False)
-        return df.index.tolist()[:self._max_per_source]
+                if market_cap >= self._min_market_cap and avg_vol >= self._min_avg_volume:
+                    qualified.append(symbol)
+            except Exception as e:
+                logger.debug("yfinance screening failed for %s: %s", symbol, e)
 
-    def _screen_value_stocks(self, date: str, market: str) -> list[str]:
-        """Value stocks: positive PER < 15, PBR < 2, DIV > 1%."""
-        df = pykrx_stock.get_market_fundamental(date, market=market)
-        if df.empty:
-            return []
-        # Filter: positive PER, reasonable valuation, dividend yield
-        mask = (
-            (df["PER"] > 0) & (df["PER"] < 15)
-            & (df["PBR"] > 0) & (df["PBR"] < 2)
-            & (df["DIV"] > 1.0)
-        )
-        filtered = df[mask].copy()
-        if filtered.empty:
-            return []
-        # Score by combined value (lower PER + higher DIV = better)
-        filtered["value_score"] = (1 / filtered["PER"]) + filtered["DIV"]
-        filtered = filtered.sort_values("value_score", ascending=False)
-        return filtered.index.tolist()[:self._max_per_source]
+        return qualified[:self._max_per_source]
+
+    def _get_exchange(self, symbol: str) -> str:
+        """Look up exchange from curated universe."""
+        for s, ex, _ in _KR_UNIVERSE:
+            if s == symbol:
+                return ex
+        return "KRX"
