@@ -10,6 +10,7 @@ import type {
   WatchlistResponse,
   Trade,
   TradeSummary,
+  ETFStatus,
 } from '../types'
 
 const apiToken = import.meta.env.VITE_API_TOKEN ?? ''
@@ -132,3 +133,7 @@ export const fetchMarketState = () =>
 
 export const runEvaluation = () =>
   api.post('/engine/evaluate', {}, { timeout: 120_000 }).then(r => r.data)
+
+// ETF Engine
+export const fetchETFStatus = () =>
+  api.get<ETFStatus>('/engine/etf').then(r => r.data)

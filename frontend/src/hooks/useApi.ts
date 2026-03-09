@@ -113,3 +113,11 @@ export function useBacktestStrategies() {
     queryFn: api.fetchBacktestStrategies,
   })
 }
+
+export function useETFStatus() {
+  return useQuery({
+    queryKey: ['engine', 'etf'],
+    queryFn: api.fetchETFStatus,
+    refetchInterval: 30_000,
+  })
+}
