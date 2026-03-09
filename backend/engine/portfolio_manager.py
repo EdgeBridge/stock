@@ -37,7 +37,7 @@ class PortfolioManager:
 
         invested = sum(p.quantity * p.avg_price for p in positions)
         unrealized_pnl = sum(p.unrealized_pnl for p in positions)
-        total_equity = balance.total + unrealized_pnl
+        total_equity = balance.total  # already includes position market value
 
         return {
             "cash": balance.available,
@@ -65,7 +65,7 @@ class PortfolioManager:
 
         invested = sum(p.quantity * p.avg_price for p in positions)
         unrealized_pnl = sum(p.unrealized_pnl for p in positions)
-        total_equity = balance.total + unrealized_pnl
+        total_equity = balance.total  # already includes position market value
 
         daily_pnl = await self._calculate_daily_pnl(total_equity)
 

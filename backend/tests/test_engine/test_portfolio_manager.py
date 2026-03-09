@@ -70,8 +70,8 @@ class TestGetSummary:
         assert summary["invested"] == 3500.0
         # unrealized_pnl = 100 + 50 = 150
         assert summary["unrealized_pnl"] == 150.0
-        # total_equity = 100_000 + 150 = 100_150
-        assert summary["total_equity"] == 100_150.0
+        # total_equity = balance.total (already includes position market value)
+        assert summary["total_equity"] == 100_000
         assert summary["position_count"] == 2
         assert len(summary["positions"]) == 2
 
@@ -98,7 +98,7 @@ class TestSaveSnapshot:
 
         assert len(snapshots) == 1
         s = snapshots[0]
-        assert s.total_value_usd == 100_150.0
+        assert s.total_value_usd == 100_000  # balance.total already includes positions
         assert s.cash_usd == 80_000
         assert s.invested_usd == 3500.0
         assert s.unrealized_pnl == 150.0
