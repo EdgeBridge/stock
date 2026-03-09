@@ -218,10 +218,14 @@ class KISAdapter(ExchangeAdapter):
             self._tr["BALANCE"],
             bal_params,
         )
-        output2 = data.get("output2", {})
-        if isinstance(output2, list) and output2:
-            output2 = output2[0]
-        position_value = float(output2.get("frcr_buy_amt_smtl1", 0))
+        # Calculate position value from output1 (all exchanges) instead of
+        # output2 summary which may only cover the queried exchange code.
+        position_value = 0.0
+        for item in data.get("output1", []):
+            qty = float(item.get("ovrs_cblc_qty", 0))
+            cur_price = float(item.get("now_pric2", 0))
+            if qty > 0 and cur_price > 0:
+                position_value += qty * cur_price
 
         # 2. Buying power (available cash for orders)
         bp_params = {
