@@ -24,9 +24,10 @@ logger = logging.getLogger(__name__)
 class PaperAdapter(ExchangeAdapter):
     """In-memory paper trading adapter."""
 
-    def __init__(self, initial_balance_usd: float = 10_000):
+    def __init__(self, initial_balance_usd: float = 10_000, currency: str = "USD"):
         self._cash = initial_balance_usd
         self._initial_cash = initial_balance_usd
+        self._currency = currency
         self._positions: dict[str, Position] = {}
         self._orders: dict[str, OrderResult] = {}
         self._prices: dict[str, float] = {}  # symbol -> last known price
@@ -76,7 +77,7 @@ class PaperAdapter(ExchangeAdapter):
         total = self._cash + sum(
             p.current_price * p.quantity for p in self._positions.values()
         )
-        return Balance(currency="USD", total=total, available=self._cash)
+        return Balance(currency=self._currency, total=total, available=self._cash)
 
     async def fetch_positions(self) -> list[Position]:
         return [p for p in self._positions.values() if p.quantity > 0]

@@ -83,16 +83,14 @@ async def lifespan(app: FastAPI):
     app.state.adapter = adapter
     logger.info("Exchange adapter initialized (mode=%s)", config.trading.mode)
 
-    # KR adapter (shares same auth for live, separate paper instance)
-    if config.is_paper:
-        kr_adapter = PaperAdapter(config.trading.initial_balance_usd * 1_300)  # ~KRW
-        await kr_adapter.initialize()
-    else:
-        from exchange.kis_kr_adapter import KISKRAdapter
-        kr_adapter = KISKRAdapter(config.kis, auth)
-        await kr_adapter.initialize()
+    # KR adapter — KIS paper server doesn't support domestic orders (40910000),
+    # so KR always uses PaperAdapter for now.  Switch to KISKRAdapter once a
+    # domestic-enabled paper account is registered.
+    kr_initial_krw = config.trading.initial_balance_usd * 50_000  # ~500M KRW
+    kr_adapter = PaperAdapter(kr_initial_krw, currency="KRW")
+    await kr_adapter.initialize()
     app.state.kr_adapter = kr_adapter
-    logger.info("KR adapter initialized (mode=%s)", config.trading.mode)
+    logger.info("KR adapter initialized (PaperAdapter, balance=%.0f KRW)", kr_initial_krw)
 
     # KIS WebSocket (live mode only)
     kis_ws = None
