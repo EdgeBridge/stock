@@ -204,6 +204,10 @@ async def lifespan(app: FastAPI):
     app.state.risk_agent = risk_agent
     app.state.trade_review_agent = trade_review_agent
 
+    # Resolve services from app.state
+    indicator_svc = app.state.indicator_svc
+    combiner = app.state.combiner
+
     # Scanner pipeline (with AI agent if LLM enabled)
     enricher = FundamentalEnricher()
     scanner_pipeline = ScannerPipeline(
@@ -215,8 +219,6 @@ async def lifespan(app: FastAPI):
     app.state.scanner_pipeline = scanner_pipeline
 
     # Evaluation loop (after agents — risk_agent used for pre-trade check)
-    indicator_svc = app.state.indicator_svc
-    combiner = app.state.combiner
     evaluation_loop = EvaluationLoop(
         adapter=adapter,
         market_data=market_data,
