@@ -52,6 +52,44 @@ _KR_NAMES: dict[str, str] = {
     "086790": "하나금융지주",
 }
 
+# Static US ETF names (avoid yfinance lookups)
+_US_ETF_NAMES: dict[str, str] = {
+    "SPY": "SPDR S&P 500",
+    "QQQ": "Invesco QQQ Trust",
+    "SOXX": "iShares Semiconductor",
+    "ARKK": "ARK Innovation",
+    "TQQQ": "ProShares UltraPro QQQ",
+    "SQQQ": "ProShares UltraPro Short QQQ",
+    "UPRO": "ProShares UltraPro S&P 500",
+    "SPXU": "ProShares UltraPro Short S&P",
+    "SOXL": "Direxion Semiconductor Bull 3X",
+    "SOXS": "Direxion Semiconductor Bear 3X",
+    "TECL": "Direxion Technology Bull 3X",
+    "TECS": "Direxion Technology Bear 3X",
+    "SARK": "Tuttle Capital Short ARKK",
+    "FAS": "Direxion Financial Bull 3X",
+    "ERX": "Direxion Energy Bull 2X",
+    "LABU": "Direxion Biotech Bull 3X",
+    "XLK": "Technology Select Sector SPDR",
+    "XLF": "Financial Select Sector SPDR",
+    "XLE": "Energy Select Sector SPDR",
+    "XLV": "Health Care Select Sector SPDR",
+    "XLY": "Consumer Discretionary SPDR",
+    "XLP": "Consumer Staples SPDR",
+    "XLI": "Industrial Select Sector SPDR",
+    "XLB": "Materials Select Sector SPDR",
+    "XLU": "Utilities Select Sector SPDR",
+    "XLRE": "Real Estate Select Sector SPDR",
+    "XLC": "Communication Services SPDR",
+    "SHY": "iShares 1-3 Year Treasury",
+    "TLT": "iShares 20+ Year Treasury",
+    "GLD": "SPDR Gold Shares",
+    "UUP": "Invesco DB US Dollar Index",
+    "VXX": "Barclays iPath VIX Short-Term",
+    "UVXY": "ProShares Ultra VIX Short-Term",
+    "SVXY": "ProShares Short VIX Short-Term",
+}
+
 # In-memory cache for dynamically resolved names
 _cache: dict[str, str] = {}
 
@@ -60,6 +98,8 @@ def get_name(symbol: str, market: str = "US") -> Optional[str]:
     """Get stock name from cache or static mapping."""
     if market == "KR" and symbol in _KR_NAMES:
         return _KR_NAMES[symbol]
+    if symbol in _US_ETF_NAMES:
+        return _US_ETF_NAMES[symbol]
     return _cache.get(symbol)
 
 

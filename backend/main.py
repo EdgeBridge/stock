@@ -379,6 +379,37 @@ async def lifespan(app: FastAPI):
         interval_sec=86400, phases=[MarketPhase.PRE_MARKET],
     )
 
+    async def task_update_watchlist_names():
+        """Batch update stock names in watchlist DB (daily)."""
+        from db.trade_repository import TradeRepository
+        from data.stock_name_service import resolve_names, get_name
+        try:
+            for mkt in ("US", "KR"):
+                async with session_factory() as session:
+                    repo = TradeRepository(session)
+                    items = await repo.get_watchlist(active_only=True, market=mkt)
+                    nameless = [w.symbol for w in items if not w.name]
+
+                if not nameless:
+                    continue
+
+                names = await resolve_names(nameless, mkt)
+
+                async with session_factory() as session:
+                    repo = TradeRepository(session)
+                    updated = 0
+                    for sym, name in names.items():
+                        if name and await repo.update_watchlist_name(sym, name, mkt):
+                            updated += 1
+                    logger.info("Watchlist names updated: %s %d/%d", mkt, updated, len(nameless))
+        except Exception as e:
+            logger.error("Watchlist name update failed: %s", e)
+
+    scheduler.add_task(
+        "update_watchlist_names", task_update_watchlist_names,
+        interval_sec=86400, phases=[MarketPhase.PRE_MARKET],
+    )
+
     async def task_portfolio_snapshot():
         await portfolio_manager.save_snapshot()
         logger.debug("Portfolio snapshot saved")

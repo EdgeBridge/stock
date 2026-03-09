@@ -150,6 +150,21 @@ class TradeRepository:
         await self._session.refresh(item)
         return item
 
+    async def update_watchlist_name(
+        self, symbol: str, name: str, market: str = "US",
+    ) -> bool:
+        """Update the cached name for a watchlist symbol."""
+        stmt = select(Watchlist).where(
+            Watchlist.symbol == symbol, Watchlist.market == market,
+        )
+        result = await self._session.execute(stmt)
+        item = result.scalar_one_or_none()
+        if item and name:
+            item.name = name
+            await self._session.commit()
+            return True
+        return False
+
     async def remove_from_watchlist(self, symbol: str, market: str = "US") -> bool:
         stmt = select(Watchlist).where(
             Watchlist.symbol == symbol, Watchlist.market == market,
