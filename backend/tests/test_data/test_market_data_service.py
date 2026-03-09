@@ -229,3 +229,31 @@ class TestYfSymbolMapper:
         })) as mock_yf:
             await service.get_ohlcv("AAPL")
             mock_yf.assert_called_once_with("AAPL", "1D", 200)
+
+
+class TestCacheEviction:
+    """Test cache size limits and eviction."""
+
+    def test_evict_oldest_removes_stale_entries(self):
+        """Oldest 20% of entries are evicted."""
+        cache = {f"key{i}": (f"val{i}", float(i)) for i in range(10)}
+        MarketDataService._evict_oldest(cache)
+        assert len(cache) == 8
+        # Oldest entries (key0, key1) should be gone
+        assert "key0" not in cache
+        assert "key1" not in cache
+        assert "key9" in cache
+
+    async def test_ticker_cache_bounded(self, mock_adapter, rate_limiter):
+        """Ticker cache doesn't grow beyond MAX_CACHE_ENTRIES."""
+        from data.market_data_service import MAX_CACHE_ENTRIES
+        svc = MarketDataService(adapter=mock_adapter, rate_limiter=rate_limiter)
+
+        # Fill cache to limit
+        for i in range(MAX_CACHE_ENTRIES + 5):
+            mock_adapter.fetch_ticker = AsyncMock(return_value=Ticker(
+                symbol=f"SYM{i}", price=100.0 + i, volume=1000,
+            ))
+            await svc.get_ticker(f"SYM{i}")
+
+        assert len(svc._ticker_cache) <= MAX_CACHE_ENTRIES

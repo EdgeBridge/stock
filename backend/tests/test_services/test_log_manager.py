@@ -22,8 +22,8 @@ class TestLogConfig:
         config = LogConfig()
         assert config.level == "INFO"
         assert config.log_dir == "logs"
-        assert config.max_file_size_mb == 50
-        assert config.backup_count == 5
+        assert config.max_file_size_mb == 30
+        assert config.backup_count == 3
         assert config.enable_file is True
         assert config.enable_json is True
         assert config.enable_console is True

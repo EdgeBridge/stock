@@ -58,6 +58,7 @@ class EvaluationLoop:
         signal_quality: SignalQualityTracker | None = None,
         risk_agent: RiskAssessmentAgent | None = None,
         exchange_resolver: ExchangeResolver | None = None,
+        position_tracker=None,
     ):
         self._adapter = adapter
         self._market_data = market_data
@@ -76,6 +77,7 @@ class EvaluationLoop:
         self._signal_quality = signal_quality or SignalQualityTracker()
         self._risk_agent = risk_agent
         self._exchange_resolver = exchange_resolver or ExchangeResolver()
+        self._position_tracker = position_tracker
         self._factor_scores: dict[str, FactorScores] = {}
         self._last_classify_time: dict[str, float] = {}
         self._reclassify_interval = 86400  # re-classify every 24h
@@ -280,7 +282,7 @@ class EvaluationLoop:
                     logger.debug("Risk agent pre-trade check error: %s", e)
 
             exchange = self._exchange_resolver.resolve(symbol)
-            await self._order_manager.place_buy(
+            order = await self._order_manager.place_buy(
                 symbol=symbol,
                 price=price,
                 portfolio_value=balance.total,
@@ -291,18 +293,29 @@ class EvaluationLoop:
                 exchange=exchange,
             )
 
+            # Register position for SL/TP/trailing stop monitoring
+            if order and self._position_tracker:
+                self._position_tracker.track(
+                    symbol=symbol,
+                    entry_price=price,
+                    quantity=order.quantity,
+                    strategy=strategy_name,
+                )
+
         elif signal.signal_type == SignalType.SELL:
             positions = await self._market_data.get_positions()
             pos = next((p for p in positions if p.symbol == symbol), None)
             if pos and pos.quantity > 0:
                 exchange = self._exchange_resolver.resolve(symbol)
-                await self._order_manager.place_sell(
+                sell_order = await self._order_manager.place_sell(
                     symbol=symbol,
                     quantity=int(pos.quantity),
                     price=price,
                     strategy_name=signal.strategy_name,
                     exchange=exchange,
                 )
+                if sell_order and self._position_tracker:
+                    self._position_tracker.untrack(symbol)
 
     def record_trade_result(
         self, strategy: str, symbol: str, return_pct: float,

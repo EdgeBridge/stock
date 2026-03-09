@@ -208,3 +208,80 @@ async def test_fetch_error_graceful(adapter, risk, order_mgr):
     result = await tracker.check_all()
     assert result == []
     assert "AAPL" in tracker.tracked_symbols  # still tracked
+
+
+# ── Startup Restoration Tests ────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_restore_from_exchange_no_positions(adapter, risk, order_mgr):
+    """Empty exchange -> nothing restored."""
+    adapter.fetch_positions = AsyncMock(return_value=[])
+    tracker = PositionTracker(adapter, risk, order_mgr)
+
+    restored = await tracker.restore_from_exchange()
+    assert restored == []
+    assert len(tracker.tracked_symbols) == 0
+
+
+@pytest.mark.asyncio
+async def test_restore_from_exchange_with_positions(adapter, risk, order_mgr):
+    """Exchange positions are restored into tracker."""
+    adapter.fetch_positions = AsyncMock(return_value=[
+        Position(symbol="AAPL", exchange="NASD", quantity=10,
+                 avg_price=150.0, current_price=155.0),
+        Position(symbol="MSFT", exchange="NASD", quantity=5,
+                 avg_price=300.0, current_price=310.0),
+    ])
+    tracker = PositionTracker(adapter, risk, order_mgr)
+
+    restored = await tracker.restore_from_exchange()
+    assert len(restored) == 2
+    assert set(tracker.tracked_symbols) == {"AAPL", "MSFT"}
+
+    # Check correct entry prices from exchange avg_price
+    assert tracker._tracked["AAPL"].entry_price == 150.0
+    assert tracker._tracked["MSFT"].entry_price == 300.0
+
+    # Check PnL calculation
+    aapl = next(r for r in restored if r["symbol"] == "AAPL")
+    assert aapl["pnl_pct"] == pytest.approx(3.33, abs=0.1)
+
+
+@pytest.mark.asyncio
+async def test_restore_skips_zero_quantity(adapter, risk, order_mgr):
+    """Positions with 0 quantity are not restored."""
+    adapter.fetch_positions = AsyncMock(return_value=[
+        Position(symbol="AAPL", exchange="NASD", quantity=0,
+                 avg_price=150.0, current_price=155.0),
+    ])
+    tracker = PositionTracker(adapter, risk, order_mgr)
+
+    restored = await tracker.restore_from_exchange()
+    assert restored == []
+    assert len(tracker.tracked_symbols) == 0
+
+
+@pytest.mark.asyncio
+async def test_restore_uses_default_risk_params(adapter, risk, order_mgr):
+    """Restored positions get default SL/TP from RiskManager."""
+    adapter.fetch_positions = AsyncMock(return_value=[
+        Position(symbol="AAPL", exchange="NASD", quantity=10,
+                 avg_price=150.0, current_price=155.0),
+    ])
+    tracker = PositionTracker(adapter, risk, order_mgr)
+
+    await tracker.restore_from_exchange()
+    tracked = tracker._tracked["AAPL"]
+    assert tracked.stop_loss_pct == 0.08
+    assert tracked.take_profit_pct == 0.20
+
+
+@pytest.mark.asyncio
+async def test_restore_fetch_error_graceful(adapter, risk, order_mgr):
+    """Adapter error during restore returns empty list."""
+    adapter.fetch_positions = AsyncMock(side_effect=Exception("timeout"))
+    tracker = PositionTracker(adapter, risk, order_mgr)
+
+    restored = await tracker.restore_from_exchange()
+    assert restored == []

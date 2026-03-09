@@ -27,6 +27,7 @@ OHLCV_CACHE_TTL = 300       # 5 min (daily data doesn't change fast)
 BALANCE_CACHE_TTL = 30      # seconds
 POSITIONS_CACHE_TTL = 30    # seconds
 API_CALL_TIMEOUT = 30       # seconds — max wait for a single adapter call
+MAX_CACHE_ENTRIES = 150     # max entries per cache dict (prevent unbounded growth)
 
 
 class MarketDataService:
@@ -60,6 +61,8 @@ class MarketDataService:
             self._adapter.fetch_ticker(symbol, exchange),
             timeout=API_CALL_TIMEOUT,
         )
+        if len(self._ticker_cache) >= MAX_CACHE_ENTRIES:
+            self._evict_oldest(self._ticker_cache)
         self._ticker_cache[cache_key] = (ticker, now)
         return ticker
 
@@ -82,6 +85,8 @@ class MarketDataService:
         yf_sym = self._yf_symbol_mapper(symbol) if self._yf_symbol_mapper else symbol
         df = self._fetch_yfinance(yf_sym, timeframe, limit)
         if not df.empty:
+            if len(self._ohlcv_cache) >= MAX_CACHE_ENTRIES:
+                self._evict_oldest(self._ohlcv_cache)
             self._ohlcv_cache[cache_key] = (df, now)
             return df
 
@@ -107,6 +112,8 @@ class MarketDataService:
                 for c in candles
             ])
 
+        if len(self._ohlcv_cache) >= MAX_CACHE_ENTRIES:
+            self._evict_oldest(self._ohlcv_cache)
         self._ohlcv_cache[cache_key] = (df, now)
         return df
 
@@ -195,6 +202,16 @@ class MarketDataService:
             except Exception as e:
                 logger.warning("Failed to fetch ticker for %s: %s", symbol, e)
         return result
+
+    @staticmethod
+    def _evict_oldest(cache: dict) -> None:
+        """Remove the oldest 20% of cache entries by timestamp."""
+        if not cache:
+            return
+        n_remove = max(1, len(cache) // 5)
+        oldest = sorted(cache, key=lambda k: cache[k][1])[:n_remove]
+        for k in oldest:
+            del cache[k]
 
     def invalidate_cache(self, symbol: str | None = None) -> None:
         """Clear cache for a symbol or all."""

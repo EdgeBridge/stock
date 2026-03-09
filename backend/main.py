@@ -264,6 +264,7 @@ async def lifespan(app: FastAPI):
         adaptive_weights=adaptive_weights,
         risk_agent=risk_agent,
         exchange_resolver=exchange_resolver,
+        position_tracker=position_tracker,
     )
     app.state.evaluation_loop = evaluation_loop
 
@@ -978,6 +979,7 @@ async def lifespan(app: FastAPI):
             ema_decay=adaptive_cfg.get("ema_decay", 0.1),
             min_signals_for_adaptation=adaptive_cfg.get("min_signals", 5),
         ),
+        position_tracker=kr_position_tracker,
     )
     app.state.kr_evaluation_loop = kr_evaluation_loop
 
@@ -1115,8 +1117,44 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("Failed to load watchlist: %s", e)
 
-    # Auto-start scheduler (store task ref to detect crashes)
+    # Startup position reconciliation — restore tracking from exchange
     import asyncio
+    try:
+        us_restored = await position_tracker.restore_from_exchange(session_factory)
+        kr_restored = await kr_position_tracker.restore_from_exchange(session_factory)
+
+        # Notify via Discord on startup
+        startup_lines = ["System restarted — position reconciliation complete."]
+        if us_restored:
+            startup_lines.append(f"\n**US Positions ({len(us_restored)}):**")
+            for p in us_restored:
+                sign = "+" if p["pnl_pct"] >= 0 else ""
+                startup_lines.append(
+                    f"  • {p['symbol']}: {p['quantity']}주 @ ${p['entry_price']:.2f} "
+                    f"→ ${p['current_price']:.2f} ({sign}{p['pnl_pct']:.1f}%)"
+                )
+        if kr_restored:
+            startup_lines.append(f"\n**KR Positions ({len(kr_restored)}):**")
+            for p in kr_restored:
+                sign = "+" if p["pnl_pct"] >= 0 else ""
+                startup_lines.append(
+                    f"  • {p['symbol']}: {p['quantity']}주 @ ₩{p['entry_price']:,.0f} "
+                    f"→ ₩{p['current_price']:,.0f} ({sign}{p['pnl_pct']:.1f}%)"
+                )
+        if not us_restored and not kr_restored:
+            startup_lines.append("No open positions found.")
+
+        await notification.notify_system_event(
+            "startup_reconciliation", "\n".join(startup_lines),
+        )
+        logger.info(
+            "Startup reconciliation: US=%d, KR=%d positions restored",
+            len(us_restored), len(kr_restored),
+        )
+    except Exception as e:
+        logger.error("Startup position reconciliation failed: %s", e)
+
+    # Auto-start scheduler (store task ref to detect crashes)
     _scheduler_task = asyncio.create_task(scheduler.start(), name="scheduler")
 
     def _on_scheduler_done(task: asyncio.Task):

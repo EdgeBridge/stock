@@ -15,8 +15,8 @@ class LogConfig:
 
     level: str = "INFO"
     log_dir: str = "logs"
-    max_file_size_mb: int = 50
-    backup_count: int = 5
+    max_file_size_mb: int = 30
+    backup_count: int = 3
     enable_file: bool = True
     enable_json: bool = True
     enable_console: bool = True

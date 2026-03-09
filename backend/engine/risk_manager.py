@@ -260,5 +260,9 @@ class RiskManager:
         self._daily_pnl = 0.0
 
     @property
+    def params(self) -> RiskParams:
+        return self._params
+
+    @property
     def daily_pnl(self) -> float:
         return self._daily_pnl

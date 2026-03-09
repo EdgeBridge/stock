@@ -2,6 +2,10 @@
 
 Periodically checks all positions against risk rules and triggers
 sell orders when stop-loss, take-profit, or trailing stop conditions are met.
+
+On startup, `restore_from_exchange()` fetches current exchange positions
+and re-populates the in-memory tracker so SL/TP/trailing stop monitoring
+resumes immediately after a restart.
 """
 
 import logging
@@ -201,6 +205,99 @@ class PositionTracker:
                         tracked.entry_price, price,
                         tracked.highest_price, pnl,
                     )
+
+    async def restore_from_exchange(self, session_factory=None) -> list[dict]:
+        """Restore position tracking from exchange state after restart.
+
+        Fetches current positions from the exchange adapter and looks up
+        entry info (price, strategy) from the orders DB table.
+        Returns a list of restored position summaries.
+        """
+        try:
+            if self._market_data:
+                positions = await self._market_data.get_positions()
+            else:
+                positions = await self._adapter.fetch_positions()
+        except Exception as e:
+            logger.error("Startup position restore failed (fetch): %s", e)
+            return []
+
+        if not positions:
+            logger.info("No open positions to restore")
+            return []
+
+        # Look up latest BUY order per symbol from DB to get entry info
+        entry_info: dict[str, dict] = {}
+        if session_factory:
+            try:
+                from db.trade_repository import TradeRepository
+                from sqlalchemy import select, desc
+                from core.models import Order
+
+                async with session_factory() as session:
+                    for pos in positions:
+                        stmt = (
+                            select(Order)
+                            .where(
+                                Order.symbol == pos.symbol,
+                                Order.side == "BUY",
+                                Order.status.in_(["filled", "submitted"]),
+                            )
+                            .order_by(desc(Order.created_at))
+                            .limit(1)
+                        )
+                        result = await session.execute(stmt)
+                        order = result.scalar_one_or_none()
+                        if order:
+                            entry_info[pos.symbol] = {
+                                "strategy": order.strategy_name or "",
+                            }
+            except Exception as e:
+                logger.warning("Failed to look up entry info from DB: %s", e)
+
+        restored = []
+        for pos in positions:
+            if pos.quantity <= 0:
+                continue
+
+            # Skip if already tracked (shouldn't happen on fresh start)
+            if pos.symbol in self._tracked:
+                continue
+
+            info = entry_info.get(pos.symbol, {})
+            strategy = info.get("strategy", "unknown")
+
+            # Use avg_price from exchange as entry price
+            entry_price = pos.avg_price
+            stop_loss_pct = self._risk.params.default_stop_loss_pct
+            take_profit_pct = self._risk.params.default_take_profit_pct
+
+            self.track(
+                symbol=pos.symbol,
+                entry_price=entry_price,
+                quantity=int(pos.quantity),
+                strategy=strategy,
+                stop_loss_pct=stop_loss_pct,
+                take_profit_pct=take_profit_pct,
+            )
+
+            pnl_pct = ((pos.current_price / entry_price) - 1) * 100 if entry_price else 0
+            restored.append({
+                "symbol": pos.symbol,
+                "quantity": int(pos.quantity),
+                "entry_price": entry_price,
+                "current_price": pos.current_price,
+                "pnl_pct": round(pnl_pct, 2),
+                "strategy": strategy,
+            })
+
+        if restored:
+            logger.info(
+                "Restored %d positions from exchange: %s",
+                len(restored),
+                ", ".join(r["symbol"] for r in restored),
+            )
+        return restored
 
     @property
     def tracked_symbols(self) -> list[str]:
