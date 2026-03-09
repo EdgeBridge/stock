@@ -150,6 +150,7 @@ async def lifespan(app: FastAPI):
         return {"mode": config.trading.mode}
 
     health.register_check("adapter", check_adapter)
+    health.set_notification(notification)
     app.state.health = health
 
     # Position tracker
@@ -359,6 +360,41 @@ async def lifespan(app: FastAPI):
     async def task_health_check():
         await health.check_all()
 
+    async def task_system_status_report():
+        """Send periodic system status to Discord (every 30 min)."""
+        try:
+            report = await health.get_status_report()
+            sys = report["system"]
+            uptime_h = sys["uptime_seconds"] / 3600
+
+            # Check statuses
+            checks = report.get("checks", {})
+            check_lines = []
+            for name, info in checks.items():
+                icon = "OK" if info["status"] == "ok" else "FAIL"
+                check_lines.append(f"{icon} {name}")
+
+            # Scheduler stats
+            sched_info = scheduler.get_status() if hasattr(scheduler, "get_status") else {}
+            tasks = sched_info.get("tasks", [])
+            active_tasks = sum(1 for t in tasks if t.get("active"))
+            total_tasks = len(tasks)
+            phase = sched_info.get("market_phase", "-")
+            kr_phase = sched_info.get("kr_market_phase", "-")
+
+            msg = (
+                f"**System Status Report**\n"
+                f"Status: **{report['status'].upper()}** | Uptime: {uptime_h:.1f}h\n"
+                f"CPU: {sys['cpu_percent']}% | "
+                f"RAM: {sys['memory_used_gb']}/{sys['memory_total_gb']}GB ({sys['memory_percent']}%) | "
+                f"Disk: {sys['disk_percent']}%\n"
+                f"US: {phase} | KR: {kr_phase} | Tasks: {active_tasks}/{total_tasks} active\n"
+                f"Checks: {' | '.join(check_lines)}"
+            )
+            await notification.notify_system_event("status_report", msg)
+        except Exception as e:
+            logger.error("System status report failed: %s", e)
+
     async def task_position_check():
         await position_tracker.check_all()
 
@@ -385,6 +421,10 @@ async def lifespan(app: FastAPI):
     scheduler.add_task(
         "health_check", task_health_check,
         interval_sec=120, phases=None,  # always
+    )
+    scheduler.add_task(
+        "system_status_report", task_system_status_report,
+        interval_sec=1800, phases=None,  # always, every 30 min
     )
     scheduler.add_task(
         "position_check", task_position_check,
