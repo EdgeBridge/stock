@@ -109,6 +109,28 @@ adaptive:
   min_signals: 5           # Min signals before adaptive weights activate
   reclassify_interval: 86400  # Re-classify stocks every 24h
 
+# Group consensus mechanism for SignalCombiner
+# Adjusts effective weights based on intra-group agreement/disagreement
+consensus:
+  enabled: true
+  min_group_signals: 2        # Min active (non-HOLD) signals in group to apply
+  consensus_boost: 0.30       # Weight boost for majority-aligned signals
+  discord_penalty: 0.40       # Weight penalty for minority/tied signals
+  groups:
+    trend:
+      - trend_following
+      - dual_momentum
+      - donchian_breakout
+      - supertrend
+      - cis_momentum
+      - larry_williams
+    mean_reversion:
+      - rsi_divergence
+      - bollinger_squeeze
+      - bnf_deviation
+      - macd_histogram
+      - volume_profile
+
 # Individual strategy parameters
 strategies:
   trend_following:

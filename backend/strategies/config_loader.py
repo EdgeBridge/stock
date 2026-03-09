@@ -65,5 +65,9 @@ class StrategyConfigLoader:
         """Get adaptive weight blending configuration."""
         return self._config.get("adaptive", {})
 
+    def get_consensus_config(self) -> dict:
+        """Get group consensus configuration for SignalCombiner."""
+        return self._config.get("consensus", {})
+
     def get_screening_config(self) -> dict:
         return self._config.get("screening", {})

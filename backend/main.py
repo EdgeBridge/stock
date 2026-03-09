@@ -131,7 +131,8 @@ async def lifespan(app: FastAPI):
     order_manager = OrderManager(adapter=adapter, risk_manager=risk_manager, notification=notification)
     app.state.risk_manager = risk_manager
     app.state.order_manager = order_manager
-    app.state.combiner = SignalCombiner()
+    consensus_cfg = registry._config_loader.get_consensus_config()
+    app.state.combiner = SignalCombiner(consensus_config=consensus_cfg)
 
     # Wire trade recording
     from api.trades import record_trade
@@ -786,7 +787,7 @@ async def lifespan(app: FastAPI):
         market_data=kr_market_data,
         indicator_svc=indicator_svc,
         registry=registry,
-        combiner=SignalCombiner(),
+        combiner=SignalCombiner(consensus_config=consensus_cfg),
         order_manager=kr_order_manager,
         risk_manager=risk_manager,
         adaptive_weights=AdaptiveWeightManager(

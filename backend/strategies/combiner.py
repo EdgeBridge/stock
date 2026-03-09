@@ -2,6 +2,9 @@
 
 Combines signals from multiple strategies using market-state-adaptive
 weight profiles defined in config/strategies.yaml.
+
+Includes group consensus mechanism: strategies are grouped (trend, mean_reversion)
+and intra-group agreement/disagreement adjusts effective weights to break deadlocks.
 """
 
 import logging
@@ -14,6 +17,63 @@ logger = logging.getLogger(__name__)
 
 class SignalCombiner:
     """Combine multiple strategy signals using weighted voting."""
+
+    def __init__(self, consensus_config: dict | None = None):
+        cfg = consensus_config or {}
+        self._consensus_enabled = cfg.get("enabled", False)
+        self._min_group_signals = cfg.get("min_group_signals", 2)
+        self._consensus_boost = cfg.get("consensus_boost", 0.30)
+        self._discord_penalty = cfg.get("discord_penalty", 0.40)
+        self._groups: dict[str, list[str]] = cfg.get("groups", {})
+
+    def _apply_consensus(
+        self, signals: list[Signal], weights: dict[str, float],
+    ) -> tuple[dict[str, float], dict[str, float]]:
+        """Adjust weights based on intra-group agreement.
+
+        Returns:
+            (modified_weights, group_agreement_scores)
+        """
+        if not self._consensus_enabled or not self._groups:
+            return weights, {}
+
+        modified = dict(weights)
+        agreement_scores: dict[str, float] = {}
+
+        for group_name, members in self._groups.items():
+            # Collect active (non-HOLD, weighted) signals in this group
+            active = [
+                s for s in signals
+                if s.strategy_name in members
+                and s.signal_type != SignalType.HOLD
+                and weights.get(s.strategy_name, 0) > 0
+            ]
+
+            if len(active) < self._min_group_signals:
+                continue
+
+            n_buy = sum(1 for s in active if s.signal_type == SignalType.BUY)
+            n_sell = sum(1 for s in active if s.signal_type == SignalType.SELL)
+            n_total = len(active)
+            agreement = max(n_buy, n_sell) / n_total  # 0.5 to 1.0
+            agreement_scores[group_name] = agreement
+
+            if n_buy == n_sell:
+                # Perfect tie — reduce group influence
+                factor = 1.0 - self._discord_penalty * 0.5
+                for s in active:
+                    modified[s.strategy_name] = weights[s.strategy_name] * factor
+            else:
+                majority = SignalType.BUY if n_buy > n_sell else SignalType.SELL
+                for s in active:
+                    if s.signal_type == majority:
+                        boost = 1.0 + self._consensus_boost * agreement
+                        modified[s.strategy_name] = weights[s.strategy_name] * boost
+                    else:
+                        penalty = 1.0 - self._discord_penalty * (1.0 - agreement)
+                        modified[s.strategy_name] = weights[s.strategy_name] * penalty
+
+        return modified, agreement_scores
 
     def combine(
         self,
@@ -39,6 +99,9 @@ class SignalCombiner:
                 reason="No signals",
             )
 
+        # Apply group consensus weight adjustment
+        effective_weights, agreement_scores = self._apply_consensus(signals, weights)
+
         buy_score = 0.0
         sell_score = 0.0
         total_weight = 0.0
@@ -46,7 +109,7 @@ class SignalCombiner:
         all_indicators = {}
 
         for signal in signals:
-            w = weights.get(signal.strategy_name, 0.0)
+            w = effective_weights.get(signal.strategy_name, 0.0)
             if w <= 0:
                 continue
 
@@ -63,6 +126,10 @@ class SignalCombiner:
             # Collect indicators
             for k, v in signal.indicators.items():
                 all_indicators[f"{signal.strategy_name}.{k}"] = v
+
+        # Add consensus metadata
+        for group_name, score in agreement_scores.items():
+            all_indicators[f"combiner.{group_name}_agreement"] = score
 
         if total_weight == 0:
             return Signal(
