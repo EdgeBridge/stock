@@ -67,9 +67,12 @@ async def list_positions(request: Request, market: str = "US"):
 
 
 @router.get("/equity-history")
-async def equity_history(request: Request, days: int = 30):
+async def equity_history(request: Request, days: int = 30, market: str = "US"):
     """Get portfolio equity history for charting."""
-    pm = getattr(request.app.state, "portfolio_manager", None)
+    if market == "KR":
+        pm = getattr(request.app.state, "kr_portfolio_manager", None)
+    else:
+        pm = getattr(request.app.state, "portfolio_manager", None)
     if not pm:
         return []
     return await pm.get_equity_history(days=days)

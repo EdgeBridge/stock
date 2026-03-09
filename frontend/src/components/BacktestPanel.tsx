@@ -12,6 +12,8 @@ import {
 import clsx from 'clsx'
 import * as api from '../api/client'
 import { useBacktestStrategies } from '../hooks/useApi'
+import { useMarket } from '../contexts/MarketContext'
+import { formatCurrency } from '../utils/format'
 
 interface BacktestMetrics {
   total_return_pct: number
@@ -43,19 +45,13 @@ interface BacktestResult {
 
 const PERIODS = ['1y', '2y', '3y', '5y'] as const
 
-function formatUSD(n: number) {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(n)
-}
-
 function formatPct(n: number, decimals = 2) {
   const sign = n >= 0 ? '+' : ''
   return `${sign}${n.toFixed(decimals)}%`
 }
 
 export default function BacktestPanel() {
+  const { market, currency } = useMarket()
   const { data: strategies, isLoading: loadingStrategies } = useBacktestStrategies()
   const [strategyName, setStrategyName] = useState('')
   const [symbol, setSymbol] = useState('')
@@ -109,7 +105,7 @@ export default function BacktestPanel() {
               type="text"
               value={symbol}
               onChange={e => setSymbol(e.target.value)}
-              placeholder="e.g. AAPL"
+              placeholder={market === 'KR' ? 'e.g. 005930' : 'e.g. AAPL'}
               className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
             />
           </div>
@@ -223,7 +219,9 @@ export default function BacktestPanel() {
                   <YAxis
                     tick={{ fill: '#9CA3AF', fontSize: 11 }}
                     tickLine={{ stroke: '#4B5563' }}
-                    tickFormatter={v => `$${(v / 1000).toFixed(0)}k`}
+                    tickFormatter={currency === 'KRW'
+                      ? (v: number) => `${(v / 10000).toFixed(0)}만`
+                      : (v: number) => `$${(v / 1000).toFixed(0)}k`}
                   />
                   <Tooltip
                     contentStyle={{
@@ -232,7 +230,7 @@ export default function BacktestPanel() {
                       borderRadius: '0.5rem',
                       color: '#F9FAFB',
                     }}
-                    formatter={(value: number) => [formatUSD(value), 'Equity']}
+                    formatter={(value: number) => [formatCurrency(value, currency), 'Equity']}
                   />
                   <Line
                     type="monotone"
@@ -284,7 +282,7 @@ export default function BacktestPanel() {
                           </span>
                         </td>
                         <td className={clsx('text-right py-2', t.pnl >= 0 ? 'text-green-400' : 'text-red-400')}>
-                          {t.pnl >= 0 ? '+' : ''}{formatUSD(t.pnl)}
+                          {t.pnl >= 0 ? '+' : ''}{formatCurrency(t.pnl, currency)}
                         </td>
                         <td className={clsx('text-right py-2', t.pnl_pct >= 0 ? 'text-green-400' : 'text-red-400')}>
                           {formatPct(t.pnl_pct)}

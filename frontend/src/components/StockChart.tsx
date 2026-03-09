@@ -1,15 +1,25 @@
 import { useEffect, useRef, useState } from 'react'
 import { createChart, IChartApi, ISeriesApi, CandlestickData, HistogramData, Time } from 'lightweight-charts'
 import { useChart } from '../hooks/useApi'
+import { useMarket } from '../contexts/MarketContext'
 
 const TIMEFRAMES = ['1D', '1W', '1M'] as const
 
 export default function StockChart() {
-  const [symbol, setSymbol] = useState('AAPL')
-  const [input, setInput] = useState('AAPL')
+  const { market } = useMarket()
+  const defaultSymbol = market === 'KR' ? '005930' : 'AAPL'
+  const [symbol, setSymbol] = useState(defaultSymbol)
+  const [input, setInput] = useState(defaultSymbol)
   const [timeframe, setTimeframe] = useState<string>('1D')
 
-  const { data, isLoading, isError } = useChart(symbol, timeframe)
+  // Reset symbol when market changes
+  useEffect(() => {
+    const s = market === 'KR' ? '005930' : 'AAPL'
+    setSymbol(s)
+    setInput(s)
+  }, [market])
+
+  const { data, isLoading, isError } = useChart(symbol, timeframe, market)
 
   const chartRef = useRef<HTMLDivElement>(null)
   const chartApi = useRef<IChartApi | null>(null)
@@ -116,7 +126,7 @@ export default function StockChart() {
           <input
             value={input}
             onChange={e => setInput(e.target.value)}
-            placeholder="Symbol"
+            placeholder={market === 'KR' ? '종목코드' : 'Symbol'}
             className="bg-gray-800 text-white px-3 py-1.5 rounded text-sm w-28 border border-gray-700 focus:border-blue-500 focus:outline-none"
           />
           <button

@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import clsx from 'clsx'
 import * as api from '../api/client'
+import { useMarket } from '../contexts/MarketContext'
 
 interface SectorData {
   sector: string
@@ -36,11 +37,21 @@ function formatPct(n: number) {
 }
 
 export default function SectorHeatmap() {
+  const { market } = useMarket()
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['scanner', 'sectors'],
+    queryKey: ['scanner', 'sectors', market],
     queryFn: api.fetchSectorPerformance,
     refetchInterval: 300_000,
+    enabled: market === 'US',
   })
+
+  if (market === 'KR') {
+    return (
+      <div className="bg-gray-900 rounded-lg p-8 text-center">
+        <p className="text-gray-500">Sector heatmap is available for US market only.</p>
+      </div>
+    )
+  }
 
   if (isLoading) {
     return <div className="text-gray-500">Loading sector data...</div>

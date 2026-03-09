@@ -1,21 +1,29 @@
 """Market data API endpoints."""
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
-from api.dependencies import get_market_data
 from data.market_data_service import MarketDataService
 
 router = APIRouter(prefix="/market", tags=["market"])
 
 
+def _get_market_data(request, market: str = "US") -> MarketDataService:
+    """Select market data service based on market parameter."""
+    if market == "KR":
+        return getattr(request.app.state, "kr_market_data", None) or request.app.state.market_data
+    return request.app.state.market_data
+
+
 @router.get("/price/{symbol}")
 async def get_price(
+    request: Request,
     symbol: str,
     exchange: str = Query("NASD"),
-    market_data: MarketDataService = Depends(get_market_data),
+    market: str = Query("US"),
 ):
     """Get current price for a symbol."""
-    ticker = await market_data.get_ticker(symbol, exchange)
+    md = _get_market_data(request, market)
+    ticker = await md.get_ticker(symbol, exchange)
     return {
         "symbol": ticker.symbol,
         "price": ticker.price,
@@ -26,14 +34,16 @@ async def get_price(
 
 @router.get("/chart/{symbol}")
 async def get_chart(
+    request: Request,
     symbol: str,
     timeframe: str = Query("1D"),
     limit: int = Query(200, ge=10, le=500),
     exchange: str = Query("NASD"),
-    market_data: MarketDataService = Depends(get_market_data),
+    market: str = Query("US"),
 ):
     """Get OHLCV chart data."""
-    df = await market_data.get_ohlcv(symbol, timeframe, limit, exchange)
+    md = _get_market_data(request, market)
+    df = await md.get_ohlcv(symbol, timeframe, limit, exchange)
     if df.empty:
         return {"symbol": symbol, "data": []}
 

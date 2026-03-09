@@ -298,6 +298,13 @@ async def lifespan(app: FastAPI):
     app.state.kr_order_manager = kr_order_manager
     app.state.kr_position_tracker = kr_position_tracker
 
+    # KR portfolio manager (for equity history)
+    kr_portfolio_manager = PortfolioManager(
+        market_data=kr_market_data, session_factory=session_factory,
+        market="KR",
+    )
+    app.state.kr_portfolio_manager = kr_portfolio_manager
+
     # KR ETF Engine
     from pathlib import Path
     kr_etf_config_path = Path(__file__).resolve().parent.parent / "config" / "kr_etf_universe.yaml"
@@ -822,19 +829,7 @@ async def lifespan(app: FastAPI):
             logger.info("KR order reconciliation: %d status changes", len(changes))
 
     async def task_kr_portfolio_snapshot():
-        kr_balance = await kr_market_data.get_balance()
-        kr_positions = await kr_market_data.get_positions()
-        invested = sum(p.current_price * p.quantity for p in kr_positions)
-        from core.models import PortfolioSnapshot
-        async with session_factory() as session:
-            snap = PortfolioSnapshot(
-                market="KR",
-                total_value_usd=kr_balance.total,  # KRW value in USD-named column
-                cash_usd=kr_balance.available,
-                invested_usd=invested,
-            )
-            session.add(snap)
-            await session.commit()
+        await kr_portfolio_manager.save_snapshot()
         logger.debug("KR portfolio snapshot saved")
 
     async def task_kr_evaluation_loop():

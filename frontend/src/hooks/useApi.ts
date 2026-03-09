@@ -23,10 +23,10 @@ export function usePrice(symbol: string) {
   })
 }
 
-export function useChart(symbol: string, timeframe = '1D') {
+export function useChart(symbol: string, timeframe = '1D', market = 'US') {
   return useQuery({
-    queryKey: ['market', 'chart', symbol, timeframe],
-    queryFn: () => api.fetchChart(symbol, timeframe),
+    queryKey: ['market', 'chart', symbol, timeframe, market],
+    queryFn: () => api.fetchChart(symbol, timeframe, 200, market),
     enabled: !!symbol,
     refetchInterval: 60_000,
   })
@@ -114,10 +114,10 @@ export function useBacktestStrategies() {
   })
 }
 
-export function useETFStatus() {
+export function useETFStatus(market = 'US') {
   return useQuery({
-    queryKey: ['engine', 'etf'],
-    queryFn: api.fetchETFStatus,
+    queryKey: ['engine', 'etf', market],
+    queryFn: () => api.fetchETFStatus(market),
     refetchInterval: 30_000,
   })
 }

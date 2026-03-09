@@ -24,9 +24,11 @@ class PortfolioManager:
         self,
         market_data: MarketDataService,
         session_factory: async_sessionmaker[AsyncSession],
+        market: str = "US",
     ):
         self._market_data = market_data
         self._session_factory = session_factory
+        self._market = market
 
     async def get_summary(self) -> dict:
         """Get current portfolio state: balance, positions, total equity, unrealized PnL."""
@@ -68,6 +70,7 @@ class PortfolioManager:
         daily_pnl = await self._calculate_daily_pnl(total_equity)
 
         snapshot = PortfolioSnapshot(
+            market=self._market,
             total_value_usd=total_equity,
             cash_usd=balance.available,
             invested_usd=invested,
@@ -93,6 +96,7 @@ class PortfolioManager:
             stmt = (
                 select(PortfolioSnapshot)
                 .where(PortfolioSnapshot.recorded_at >= today_start)
+                .where(PortfolioSnapshot.market == self._market)
                 .order_by(PortfolioSnapshot.recorded_at.asc())
                 .limit(1)
             )
@@ -122,6 +126,7 @@ class PortfolioManager:
             stmt = (
                 select(PortfolioSnapshot)
                 .where(PortfolioSnapshot.recorded_at >= since)
+                .where(PortfolioSnapshot.market == self._market)
                 .order_by(PortfolioSnapshot.recorded_at.asc())
             )
             result = await session.execute(stmt)

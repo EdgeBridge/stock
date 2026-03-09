@@ -3,6 +3,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import clsx from 'clsx'
 import * as api from '../api/client'
 import { useBacktestStrategies } from '../hooks/useApi'
+import { useMarket } from '../contexts/MarketContext'
 
 interface PerSymbolResult {
   symbol: string
@@ -22,6 +23,7 @@ interface OptimizeResult {
 }
 
 export default function OptimizePanel() {
+  const { market } = useMarket()
   const { data: strategies, isLoading: loadingStrategies } = useBacktestStrategies()
   const [strategyName, setStrategyName] = useState('')
 
@@ -42,7 +44,7 @@ export default function OptimizePanel() {
     <div className="space-y-6">
       {/* Run Optimization */}
       <div className="bg-gray-900 rounded-lg p-4">
-        <h2 className="text-lg font-semibold mb-4">Run Optimization</h2>
+        <h2 className="text-lg font-semibold mb-4">Run Optimization ({market})</h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {/* Strategy Selector */}
           <div>

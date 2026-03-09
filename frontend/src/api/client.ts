@@ -34,9 +34,9 @@ export const fetchPositions = (market = 'US') =>
 export const fetchPrice = (symbol: string) =>
   api.get<TickerData>(`/market/price/${symbol}`).then(r => r.data)
 
-export const fetchChart = (symbol: string, timeframe = '1D', limit = 200) =>
+export const fetchChart = (symbol: string, timeframe = '1D', limit = 200, market = 'US') =>
   api.get<ChartData>(`/market/chart/${symbol}`, {
-    params: { timeframe, limit },
+    params: { timeframe, limit, market },
   }).then(r => r.data)
 
 // Strategies
@@ -135,5 +135,5 @@ export const runEvaluation = () =>
   api.post('/engine/evaluate', {}, { timeout: 120_000 }).then(r => r.data)
 
 // ETF Engine
-export const fetchETFStatus = () =>
-  api.get<ETFStatus>('/engine/etf').then(r => r.data)
+export const fetchETFStatus = (market = 'US') =>
+  api.get<ETFStatus>(market === 'KR' ? '/engine/etf/kr' : '/engine/etf').then(r => r.data)
