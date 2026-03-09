@@ -1,14 +1,10 @@
 import { usePositions } from '../hooks/useApi'
-
-function formatUSD(n: number) {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(n)
-}
+import { useMarket } from '../contexts/MarketContext'
+import { formatCurrency } from '../utils/format'
 
 export default function PositionList() {
-  const { data: positions, isLoading } = usePositions()
+  const { market, currency } = useMarket()
+  const { data: positions, isLoading } = usePositions(market)
 
   if (isLoading) return <div className="text-gray-500">Loading positions...</div>
   if (!positions || positions.length === 0) {
@@ -40,11 +36,11 @@ export default function PositionList() {
                 <td className="py-2 px-3 font-medium">{p.symbol}</td>
                 <td className="py-2 px-3 text-gray-400">{p.exchange}</td>
                 <td className="py-2 px-3 text-right">{p.quantity}</td>
-                <td className="py-2 px-3 text-right">{formatUSD(p.avg_price)}</td>
-                <td className="py-2 px-3 text-right">{formatUSD(p.current_price)}</td>
-                <td className="py-2 px-3 text-right">{formatUSD(value)}</td>
+                <td className="py-2 px-3 text-right">{formatCurrency(p.avg_price, currency)}</td>
+                <td className="py-2 px-3 text-right">{formatCurrency(p.current_price, currency)}</td>
+                <td className="py-2 px-3 text-right">{formatCurrency(value, currency)}</td>
                 <td className={`py-2 px-3 text-right ${pnlColor}`}>
-                  {p.unrealized_pnl >= 0 ? '+' : ''}{formatUSD(p.unrealized_pnl)}
+                  {p.unrealized_pnl >= 0 ? '+' : ''}{formatCurrency(p.unrealized_pnl, currency)}
                 </td>
                 <td className={`py-2 px-3 text-right ${pnlColor}`}>
                   {p.unrealized_pnl_pct >= 0 ? '+' : ''}{p.unrealized_pnl_pct.toFixed(2)}%

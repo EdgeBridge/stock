@@ -64,8 +64,21 @@ export default function EngineControl() {
             'px-2 py-0.5 text-xs font-medium rounded-full uppercase',
             phaseBadge[phase] ?? 'bg-gray-600 text-gray-300'
           )}
+          title="US Market"
         >
-          {phase.replace('_', ' ')}
+          US {phase.replace('_', ' ')}
+        </span>
+      )}
+
+      {status?.kr_market_phase && (
+        <span
+          className={clsx(
+            'px-2 py-0.5 text-xs font-medium rounded-full uppercase',
+            phaseBadge[status.kr_market_phase] ?? 'bg-gray-600 text-gray-300'
+          )}
+          title="KR Market"
+        >
+          KR {status.kr_market_phase.replace('_', ' ')}
         </span>
       )}
     </div>

@@ -66,6 +66,8 @@ export interface EngineStatus {
   running: boolean
   market_phase: string
   market_time_et?: string
+  kr_market_phase?: string
+  kr_market_time_kst?: string
   tasks?: {
     name: string
     interval_sec: number

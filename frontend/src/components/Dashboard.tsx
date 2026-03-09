@@ -3,23 +3,19 @@ import { useQuery } from '@tanstack/react-query'
 import { usePortfolioSummary, usePositions } from '../hooks/useApi'
 import { usePriceStream } from '../hooks/usePriceStream'
 import { fetchMacroIndicators, fetchMarketState } from '../api/client'
+import { useMarket } from '../contexts/MarketContext'
+import { formatCurrency } from '../utils/format'
 
-function formatUSD(n: number) {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(n)
-}
-
-function PnLText({ value }: { value: number }) {
+function PnLText({ value, currency }: { value: number; currency: string }) {
   const color = value >= 0 ? 'text-green-400' : 'text-red-400'
   const sign = value >= 0 ? '+' : ''
-  return <span className={color}>{sign}{formatUSD(value)}</span>
+  return <span className={color}>{sign}{formatCurrency(value, currency)}</span>
 }
 
 export default function Dashboard() {
-  const { data: summary, isLoading } = usePortfolioSummary()
-  const { data: positions } = usePositions()
+  const { market, currency } = useMarket()
+  const { data: summary, isLoading } = usePortfolioSummary(market)
+  const { data: positions } = usePositions(market)
   const symbols = useMemo(
     () => (positions ?? []).map(p => p.symbol),
     [positions],
@@ -34,12 +30,12 @@ export default function Dashboard() {
     <div className="space-y-6">
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card title="Total Equity" value={formatUSD(summary.total_equity)} />
-        <Card title="Available Cash" value={formatUSD(summary.balance.available)} />
+        <Card title="Total Equity" value={formatCurrency(summary.total_equity, currency)} />
+        <Card title="Available Cash" value={formatCurrency(summary.balance.available, currency)} />
         <Card title="Positions" value={String(summary.positions_count)} />
         <Card
           title="Unrealized P&L"
-          value={<PnLText value={summary.total_unrealized_pnl} />}
+          value={<PnLText value={summary.total_unrealized_pnl} currency={currency} />}
         />
       </div>
 
@@ -78,13 +74,13 @@ export default function Dashboard() {
                   <tr key={p.symbol} className="border-b border-gray-800/50">
                     <td className="py-2 font-medium">{p.symbol}</td>
                     <td className="text-right">{p.quantity}</td>
-                    <td className="text-right">{formatUSD(p.avg_price)}</td>
-                    <td className="text-right">{formatUSD(currentPrice)}</td>
+                    <td className="text-right">{formatCurrency(p.avg_price, currency)}</td>
+                    <td className="text-right">{formatCurrency(currentPrice, currency)}</td>
                     <td className="text-right">
-                      <PnLText value={pnl} />
+                      <PnLText value={pnl} currency={currency} />
                     </td>
                     <td className="text-right">
-                      <PnLText value={pnlPct} />
+                      <PnLText value={pnlPct} currency={currency} />
                     </td>
                   </tr>
                 )
