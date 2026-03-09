@@ -70,11 +70,11 @@ class RiskManager:
         regime = self._market_regimes.get(market, "sideways")
         boost = 0.0
         if regime == "bull":
-            boost = 0.10  # Bull gets extra 10%
+            boost = 0.20  # Bull gets extra 20%
         elif regime == "bear":
-            boost = -0.10  # Bear gives up 10%
+            boost = -0.20  # Bear gives up 20%
 
-        effective = max(0.20, min(0.80, base + boost))  # Clamp 20%-80%
+        effective = max(0.20, min(0.70, base + boost))  # Clamp 20%-70%
         return effective
 
     def _apply_market_cap(

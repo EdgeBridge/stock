@@ -182,21 +182,21 @@ class TestMarketAllocation:
         rm = self._make_rm(us=0.5, kr=0.5)
         rm.set_market_regime("US", "bull")
         eff = rm.get_effective_allocation("US")
-        assert eff == 0.60  # 50% + 10% boost
+        assert eff == 0.70  # 50% + 20% boost, clamped to 70%
 
     def test_regime_penalty_bear(self):
         rm = self._make_rm(us=0.5, kr=0.5)
         rm.set_market_regime("KR", "bear")
         eff = rm.get_effective_allocation("KR")
-        assert eff == 0.40  # 50% - 10% penalty
+        assert eff == 0.30  # 50% - 20% penalty
 
     def test_regime_clamp_limits(self):
         rm = self._make_rm(us=0.8, kr=0.2)
         rm.set_market_regime("US", "bull")
-        # 80% + 10% = 90% → clamped to 80%
-        assert rm.get_effective_allocation("US") == 0.80
+        # 80% + 20% = 100% → clamped to 70%
+        assert rm.get_effective_allocation("US") == 0.70
         rm.set_market_regime("KR", "bear")
-        # 20% - 10% = 10% → clamped to 20%
+        # 20% - 20% = 0% → clamped to 20%
         assert rm.get_effective_allocation("KR") == 0.20
 
     def test_kelly_sizing_with_market(self):
