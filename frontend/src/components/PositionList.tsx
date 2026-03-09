@@ -12,7 +12,8 @@ export default function PositionList() {
   return (
     <div className="bg-gray-900 rounded-lg p-4">
       <h2 className="text-lg font-semibold mb-4">All Positions</h2>
-      <table className="w-full text-sm">
+      <div className="overflow-x-auto">
+      <table className="w-full text-sm min-w-[700px]">
         <thead className="text-gray-400 border-b border-gray-700">
           <tr>
             <th className="text-left py-2 px-3">Symbol</th>
@@ -34,7 +35,10 @@ export default function PositionList() {
             const pnlColor = p.unrealized_pnl >= 0 ? 'text-green-400' : 'text-red-400'
             return (
               <tr key={p.symbol} className="border-b border-gray-800/50 hover:bg-gray-800/30">
-                <td className="py-2 px-3 font-medium">{p.symbol}</td>
+                <td className="py-2 px-3 font-medium">
+                  {p.symbol}
+                  {p.name && <span className="text-gray-500 text-xs ml-1">{p.name}</span>}
+                </td>
                 <td className="py-2 px-3 text-center">
                   <span className={`text-xs px-1.5 py-0.5 rounded ${mkt === 'KR' ? 'bg-purple-900/40 text-purple-300' : 'bg-blue-900/40 text-blue-300'}`}>
                     {mkt}
@@ -56,6 +60,7 @@ export default function PositionList() {
           })}
         </tbody>
       </table>
+      </div>
     </div>
   )
 }

@@ -29,8 +29,8 @@ export default function TradeHistory() {
       ) : !trades || trades.length === 0 ? (
         <div className="text-gray-500 text-sm">No trades recorded yet.</div>
       ) : (
-        <div className="bg-gray-900 rounded-lg p-4">
-          <table className="w-full text-sm">
+        <div className="bg-gray-900 rounded-lg p-4 overflow-x-auto">
+          <table className="w-full text-sm min-w-[650px]">
             <thead className="text-gray-400 border-b border-gray-700">
               <tr>
                 <th className="text-left py-2 px-3">Time</th>

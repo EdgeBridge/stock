@@ -48,20 +48,25 @@ export default function WatchlistPanel() {
 
       {watchlist?.symbols && watchlist.symbols.length > 0 ? (
         <div className="flex flex-wrap gap-2">
-          {watchlist.symbols.map(symbol => (
-            <div
-              key={symbol}
-              className="flex items-center gap-2 bg-gray-900 rounded-lg px-3 py-2"
-            >
-              <span className="font-medium text-sm">{symbol}</span>
-              <button
-                onClick={() => removeMutation.mutate(symbol)}
-                className="text-gray-500 hover:text-red-400 text-xs"
+          {(watchlist.items ?? watchlist.symbols.map(s => ({ symbol: s }))).map(item => {
+            const sym = typeof item === 'string' ? item : item.symbol
+            const name = typeof item === 'string' ? '' : (item as { name?: string }).name
+            return (
+              <div
+                key={sym}
+                className="flex items-center gap-2 bg-gray-900 rounded-lg px-3 py-2"
               >
-                x
-              </button>
-            </div>
-          ))}
+                <span className="font-medium text-sm">{sym}</span>
+                {name && <span className="text-gray-500 text-xs">{name}</span>}
+                <button
+                  onClick={() => removeMutation.mutate(sym)}
+                  className="text-gray-500 hover:text-red-400 text-xs"
+                >
+                  x
+                </button>
+              </div>
+            )
+          })}
         </div>
       ) : (
         <p className="text-gray-500 text-sm">No symbols in watchlist.</p>

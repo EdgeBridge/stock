@@ -68,7 +68,8 @@ export default function Dashboard() {
               </span>
             )}
           </div>
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto -mx-4 px-4">
+          <table className="w-full text-sm min-w-[600px]">
             <thead className="text-gray-400 border-b border-gray-800">
               <tr>
                 <th className="text-left py-2">Symbol</th>
@@ -92,7 +93,10 @@ export default function Dashboard() {
                   : 0
                 return (
                   <tr key={p.symbol} className="border-b border-gray-800/50">
-                    <td className="py-2 font-medium">{p.symbol}</td>
+                    <td className="py-2 font-medium">
+                      {p.symbol}
+                      {p.name && <span className="text-gray-500 text-xs ml-1">{p.name}</span>}
+                    </td>
                     <td className="py-2 text-center">
                       <span className={`text-xs px-1.5 py-0.5 rounded ${mkt === 'KR' ? 'bg-purple-900/40 text-purple-300' : 'bg-blue-900/40 text-blue-300'}`}>
                         {mkt}
@@ -112,6 +116,7 @@ export default function Dashboard() {
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 

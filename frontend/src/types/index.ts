@@ -23,12 +23,14 @@ export interface PositionWithMarket extends Position {
 
 export interface Position {
   symbol: string
+  name?: string
   exchange: string
   quantity: number
   avg_price: number
   current_price: number
   unrealized_pnl: number
   unrealized_pnl_pct: number
+  market?: string
 }
 
 export interface TickerData {
@@ -87,8 +89,15 @@ export interface EngineStatus {
   }[]
 }
 
+export interface WatchlistItem {
+  symbol: string
+  name?: string
+  market?: string
+}
+
 export interface WatchlistResponse {
   symbols: string[]
+  items?: WatchlistItem[]
 }
 
 export interface Trade {

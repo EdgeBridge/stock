@@ -120,7 +120,7 @@ export default function StrategyPerformance() {
       <div className="bg-gray-900 rounded-lg p-4">
         <h2 className="text-lg font-semibold mb-3">Strategy Metrics</h2>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm min-w-[550px]">
             <thead className="text-gray-400 border-b border-gray-800">
               <tr>
                 <th className="text-left py-2">Strategy</th>

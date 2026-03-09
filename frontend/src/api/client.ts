@@ -39,6 +39,12 @@ export const fetchChart = (symbol: string, timeframe = '1D', limit = 200, market
     params: { timeframe, limit, market },
   }).then(r => r.data)
 
+// Stock names
+export const fetchStockNames = (symbols: string[], market = 'US') =>
+  api.get<Record<string, string>>('/market/names', {
+    params: { symbols: symbols.join(','), market },
+  }).then(r => r.data)
+
 // Strategies
 export const fetchStrategies = () =>
   api.get<Strategy[]>('/strategies/').then(r => r.data)

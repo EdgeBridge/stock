@@ -1,0 +1,122 @@
+"""Lightweight stock name resolution with caching."""
+
+import logging
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+# Static KR stock names (most commonly traded)
+_KR_NAMES: dict[str, str] = {
+    # ETFs
+    "069500": "KODEX 200",
+    "122630": "KODEX 레버리지",
+    "114800": "KODEX 인버스",
+    "229200": "KODEX 코스닥150",
+    "233740": "KODEX 코스닥150레버리지",
+    "251340": "KODEX 코스닥150선물인버스",
+    "091160": "KODEX 반도체",
+    "305720": "KODEX 2차전지산업",
+    "091180": "KODEX 자동차",
+    "244580": "KODEX 바이오",
+    "091170": "KODEX 은행",
+    "315930": "KODEX 한국대만IT프리미어",
+    "117680": "KODEX 철강",
+    "148070": "KOSEF 국고채10년",
+    "132030": "KODEX 골드선물(H)",
+    "261240": "KODEX 미국달러선물",
+    # Large caps
+    "005930": "삼성전자",
+    "000660": "SK하이닉스",
+    "373220": "LG에너지솔루션",
+    "207940": "삼성바이오로직스",
+    "005380": "현대차",
+    "000270": "기아",
+    "035420": "NAVER",
+    "035720": "카카오",
+    "068270": "셀트리온",
+    "105560": "KB금융",
+    "055550": "신한지주",
+    "066570": "LG전자",
+    "006400": "삼성SDI",
+    "051910": "LG화학",
+    "012330": "현대모비스",
+    "003550": "LG",
+    "247540": "에코프로비엠",
+    "086520": "에코프로",
+    "377300": "카카오페이",
+    "196170": "알테오젠",
+    "042700": "한미반도체",
+    "005490": "POSCO홀딩스",
+    "004020": "현대제철",
+    "010130": "고려아연",
+    "086790": "하나금융지주",
+}
+
+# In-memory cache for dynamically resolved names
+_cache: dict[str, str] = {}
+
+
+def get_name(symbol: str, market: str = "US") -> Optional[str]:
+    """Get stock name from cache or static mapping."""
+    if market == "KR" and symbol in _KR_NAMES:
+        return _KR_NAMES[symbol]
+    return _cache.get(symbol)
+
+
+def set_name(symbol: str, name: str) -> None:
+    """Cache a stock name."""
+    if name:
+        _cache[symbol] = name
+
+
+async def resolve_names(symbols: list[str], market: str = "US") -> dict[str, str]:
+    """Resolve stock names for a list of symbols.
+
+    Uses static mapping for KR, yfinance for unknown symbols.
+    """
+    result: dict[str, str] = {}
+    unknown: list[str] = []
+
+    for sym in symbols:
+        name = get_name(sym, market)
+        if name:
+            result[sym] = name
+        else:
+            unknown.append(sym)
+
+    if unknown:
+        await _resolve_via_yfinance(unknown, market, result)
+
+    return result
+
+
+async def _resolve_via_yfinance(
+    symbols: list[str], market: str, result: dict[str, str],
+) -> None:
+    """Resolve names using yfinance (run in thread to avoid blocking)."""
+    import asyncio
+
+    def _fetch():
+        try:
+            import yfinance as yf
+            for sym in symbols[:20]:  # limit batch size
+                try:
+                    yf_sym = f"{sym}.KS" if market == "KR" else sym
+                    ticker = yf.Ticker(yf_sym)
+                    info = ticker.info or {}
+                    name = info.get("shortName") or info.get("longName", "")
+                    if name:
+                        result[sym] = name
+                        set_name(sym, name)
+                except Exception:
+                    continue
+        except ImportError:
+            pass
+
+    try:
+        await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(None, _fetch),
+            timeout=10.0,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("yfinance name resolution timed out")

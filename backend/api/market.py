@@ -1,8 +1,9 @@
 """Market data API endpoints."""
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Query, Request
 
 from data.market_data_service import MarketDataService
+from data.stock_name_service import resolve_names
 
 router = APIRouter(prefix="/market", tags=["market"])
 
@@ -57,3 +58,14 @@ async def get_chart(
 
     records = df[["timestamp", "open", "high", "low", "close", "volume"]].to_dict(orient="records")
     return {"symbol": symbol, "timeframe": timeframe, "data": records}
+
+
+@router.get("/names")
+async def get_stock_names(
+    symbols: str = Query(..., description="Comma-separated symbols"),
+    market: str = Query("US"),
+):
+    """Resolve stock names for given symbols."""
+    symbol_list = [s.strip() for s in symbols.split(",") if s.strip()]
+    names = await resolve_names(symbol_list, market)
+    return names

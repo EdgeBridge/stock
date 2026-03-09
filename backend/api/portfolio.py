@@ -2,6 +2,8 @@
 
 from fastapi import APIRouter, Request
 
+from data.stock_name_service import get_name
+
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 
 
@@ -105,6 +107,7 @@ async def list_positions(request: Request, market: str = "ALL"):
                 for p in positions:
                     results.append({
                         "symbol": p.symbol,
+                        "name": get_name(p.symbol, m) or "",
                         "exchange": p.exchange,
                         "quantity": p.quantity,
                         "avg_price": p.avg_price,
@@ -125,6 +128,7 @@ async def list_positions(request: Request, market: str = "ALL"):
     return [
         {
             "symbol": p.symbol,
+            "name": get_name(p.symbol, market) or "",
             "exchange": p.exchange,
             "quantity": p.quantity,
             "avg_price": p.avg_price,

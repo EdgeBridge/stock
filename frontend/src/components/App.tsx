@@ -64,7 +64,7 @@ export default function App() {
         </div>
       </nav>
 
-      <main className="p-6">
+      <main className="p-3 sm:p-6">
         {tab === 'dashboard' && <Dashboard />}
         {tab === 'positions' && <PositionList />}
         {tab === 'trades' && <TradeHistory />}

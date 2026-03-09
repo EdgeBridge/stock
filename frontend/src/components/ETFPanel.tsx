@@ -54,7 +54,10 @@ export default function ETFPanel() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-lg font-semibold">ETF Engine ({market})</h2>
+      <div className="flex items-center gap-3">
+        <h2 className="text-lg font-semibold">ETF Engine</h2>
+        <MarketToggle />
+      </div>
 
       {/* Regime & Top Sectors */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
