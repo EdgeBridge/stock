@@ -558,3 +558,241 @@ class TestKRMarketExchange:
         resolver.resolve = MagicMock(return_value="NASD")
         await eval_loop.evaluate_symbol("AAPL")
         resolver.resolve.assert_called_with("AAPL")
+
+
+class TestProtectiveSells:
+    """Test regime-change and news-sentiment protective sell mechanisms."""
+
+    @pytest.fixture
+    def loop_with_tracker(self, mock_adapter, mock_market_data, mock_registry):
+        from data.indicator_service import IndicatorService
+        from strategies.combiner import SignalCombiner
+        from engine.position_tracker import PositionTracker
+
+        risk = RiskManager()
+        order_mgr = OrderManager(adapter=mock_adapter, risk_manager=risk)
+        position_tracker = MagicMock(spec=PositionTracker)
+        position_tracker.tracked_symbols = ["AAPL", "TSLA"]
+
+        loop = EvaluationLoop(
+            adapter=mock_adapter,
+            market_data=mock_market_data,
+            indicator_svc=IndicatorService(),
+            registry=mock_registry,
+            combiner=SignalCombiner(),
+            order_manager=order_mgr,
+            risk_manager=risk,
+            watchlist=["AAPL", "TSLA"],
+            market_state="uptrend",
+            position_tracker=position_tracker,
+        )
+        return loop
+
+    async def test_set_market_state_tracks_previous(self, loop_with_tracker):
+        """set_market_state should save previous state."""
+        assert loop_with_tracker._market_state == "uptrend"
+        assert loop_with_tracker._prev_market_state == "uptrend"
+        loop_with_tracker.set_market_state("downtrend")
+        assert loop_with_tracker._market_state == "downtrend"
+        assert loop_with_tracker._prev_market_state == "uptrend"
+
+    async def test_update_news_sentiment(self, loop_with_tracker):
+        """update_news_sentiment should merge sentiment data."""
+        loop_with_tracker.update_news_sentiment({"AAPL": -0.8, "TSLA": 0.5})
+        assert loop_with_tracker._news_sentiment["AAPL"] == -0.8
+        assert loop_with_tracker._news_sentiment["TSLA"] == 0.5
+        # Update should merge, not replace
+        loop_with_tracker.update_news_sentiment({"AAPL": -0.3})
+        assert loop_with_tracker._news_sentiment["AAPL"] == -0.3
+        assert loop_with_tracker._news_sentiment["TSLA"] == 0.5
+
+    async def test_regime_sell_losing_positions(
+        self, loop_with_tracker, mock_market_data, mock_adapter,
+    ):
+        """Regime downtrend should sell losing positions."""
+        # AAPL is losing, TSLA is winning
+        mock_market_data.get_positions.return_value = [
+            Position(symbol="AAPL", exchange="NASD", quantity=10,
+                     avg_price=150.0, current_price=140.0),
+            Position(symbol="TSLA", exchange="NASD", quantity=5,
+                     avg_price=200.0, current_price=220.0),
+        ]
+        mock_adapter.create_sell_order = AsyncMock(return_value=OrderResult(
+            order_id="O1", symbol="AAPL", side="SELL",
+            order_type="limit", quantity=10, price=140.0,
+            status="filled", filled_price=140.0,
+        ))
+
+        # Transition uptrend -> downtrend
+        loop_with_tracker.set_market_state("downtrend")
+        await loop_with_tracker._check_protective_sells({"AAPL", "TSLA"})
+
+        # Only AAPL (losing) should be sold
+        mock_adapter.create_sell_order.assert_called_once()
+        call_kwargs = mock_adapter.create_sell_order.call_args.kwargs
+        assert call_kwargs["symbol"] == "AAPL"
+        assert call_kwargs["quantity"] == 10
+
+    async def test_regime_sell_skips_winning_positions(
+        self, loop_with_tracker, mock_market_data, mock_adapter,
+    ):
+        """Regime sell should keep winning positions."""
+        mock_market_data.get_positions.return_value = [
+            Position(symbol="AAPL", exchange="NASD", quantity=10,
+                     avg_price=150.0, current_price=170.0),
+        ]
+
+        loop_with_tracker.set_market_state("downtrend")
+        await loop_with_tracker._check_protective_sells({"AAPL"})
+
+        # No sell — position is winning
+        mock_adapter.create_sell_order.assert_not_called()
+
+    async def test_no_regime_sell_in_same_state(
+        self, loop_with_tracker, mock_market_data, mock_adapter,
+    ):
+        """No regime sell when market hasn't worsened."""
+        mock_market_data.get_positions.return_value = [
+            Position(symbol="AAPL", exchange="NASD", quantity=10,
+                     avg_price=150.0, current_price=140.0),
+        ]
+
+        # Already in downtrend, no transition
+        loop_with_tracker._market_state = "downtrend"
+        loop_with_tracker._prev_market_state = "downtrend"
+        await loop_with_tracker._check_protective_sells({"AAPL"})
+
+        mock_adapter.create_sell_order.assert_not_called()
+
+    async def test_sentiment_sell_on_negative(
+        self, loop_with_tracker, mock_market_data, mock_adapter,
+    ):
+        """Strongly negative sentiment should trigger sell."""
+        mock_market_data.get_positions.return_value = [
+            Position(symbol="AAPL", exchange="NASD", quantity=10,
+                     avg_price=150.0, current_price=160.0),
+        ]
+        mock_adapter.create_sell_order = AsyncMock(return_value=OrderResult(
+            order_id="O1", symbol="AAPL", side="SELL",
+            order_type="limit", quantity=10, price=160.0,
+            status="filled", filled_price=160.0,
+        ))
+
+        loop_with_tracker.update_news_sentiment({"AAPL": -0.7})
+        await loop_with_tracker._check_protective_sells({"AAPL"})
+
+        mock_adapter.create_sell_order.assert_called_once()
+        call_kwargs = mock_adapter.create_sell_order.call_args.kwargs
+        assert call_kwargs["symbol"] == "AAPL"
+
+    async def test_sentiment_no_sell_on_mild_negative(
+        self, loop_with_tracker, mock_market_data, mock_adapter,
+    ):
+        """Mildly negative sentiment (-0.3) should NOT trigger sell."""
+        mock_market_data.get_positions.return_value = [
+            Position(symbol="AAPL", exchange="NASD", quantity=10,
+                     avg_price=150.0, current_price=160.0),
+        ]
+
+        loop_with_tracker.update_news_sentiment({"AAPL": -0.3})
+        await loop_with_tracker._check_protective_sells({"AAPL"})
+
+        mock_adapter.create_sell_order.assert_not_called()
+
+    async def test_sentiment_cleared_after_check(
+        self, loop_with_tracker, mock_market_data, mock_adapter,
+    ):
+        """Processed sentiments should be cleared to avoid re-selling."""
+        mock_market_data.get_positions.return_value = [
+            Position(symbol="AAPL", exchange="NASD", quantity=10,
+                     avg_price=150.0, current_price=160.0),
+        ]
+        mock_adapter.create_sell_order = AsyncMock(return_value=OrderResult(
+            order_id="O1", symbol="AAPL", side="SELL",
+            order_type="limit", quantity=10, price=160.0,
+            status="filled", filled_price=160.0,
+        ))
+
+        loop_with_tracker.update_news_sentiment({"AAPL": -0.8})
+        await loop_with_tracker._check_protective_sells({"AAPL"})
+
+        # Sentiment for AAPL should be cleared
+        assert "AAPL" not in loop_with_tracker._news_sentiment
+
+    async def test_kr_market_uses_krx_for_protective_sell(
+        self, mock_adapter, mock_market_data, mock_registry,
+    ):
+        """KR market protective sell should use KRX exchange."""
+        from data.indicator_service import IndicatorService
+        from strategies.combiner import SignalCombiner
+        from engine.position_tracker import PositionTracker
+
+        risk = RiskManager()
+        order_mgr = OrderManager(adapter=mock_adapter, risk_manager=risk, market="KR")
+        position_tracker = MagicMock(spec=PositionTracker)
+        position_tracker.tracked_symbols = ["005930"]
+
+        loop = EvaluationLoop(
+            adapter=mock_adapter,
+            market_data=mock_market_data,
+            indicator_svc=IndicatorService(),
+            registry=mock_registry,
+            combiner=SignalCombiner(),
+            order_manager=order_mgr,
+            risk_manager=risk,
+            watchlist=["005930"],
+            market_state="uptrend",
+            position_tracker=position_tracker,
+            market="KR",
+        )
+
+        mock_market_data.get_positions.return_value = [
+            Position(symbol="005930", exchange="KRX", quantity=10,
+                     avg_price=70000.0, current_price=65000.0),
+        ]
+        mock_adapter.create_sell_order = AsyncMock(return_value=OrderResult(
+            order_id="O1", symbol="005930", side="SELL",
+            order_type="limit", quantity=10, price=65000.0,
+            status="filled", filled_price=65000.0,
+        ))
+
+        loop.set_market_state("downtrend")
+        await loop._check_protective_sells({"005930"})
+
+        mock_adapter.create_sell_order.assert_called_once()
+        call_kwargs = mock_adapter.create_sell_order.call_args.kwargs
+        assert call_kwargs["exchange"] == "KRX"
+
+    async def test_position_untracked_after_protective_sell(
+        self, loop_with_tracker, mock_market_data, mock_adapter,
+    ):
+        """Position should be untracked after successful protective sell."""
+        mock_market_data.get_positions.return_value = [
+            Position(symbol="AAPL", exchange="NASD", quantity=10,
+                     avg_price=150.0, current_price=160.0),
+        ]
+        mock_adapter.create_sell_order = AsyncMock(return_value=OrderResult(
+            order_id="O1", symbol="AAPL", side="SELL",
+            order_type="limit", quantity=10, price=160.0,
+            status="filled", filled_price=160.0,
+        ))
+
+        loop_with_tracker.update_news_sentiment({"AAPL": -0.6})
+        await loop_with_tracker._check_protective_sells({"AAPL"})
+
+        loop_with_tracker._position_tracker.untrack.assert_called_with("AAPL")
+
+    async def test_no_protective_sell_when_no_triggers(
+        self, loop_with_tracker, mock_market_data, mock_adapter,
+    ):
+        """No sell when regime is stable and no negative sentiment."""
+        mock_market_data.get_positions.return_value = [
+            Position(symbol="AAPL", exchange="NASD", quantity=10,
+                     avg_price=150.0, current_price=140.0),
+        ]
+
+        # No regime change, no sentiment
+        await loop_with_tracker._check_protective_sells({"AAPL"})
+
+        # get_positions should not even be called (early return)
+        mock_market_data.get_positions.assert_not_called()

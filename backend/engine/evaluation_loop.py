@@ -85,6 +85,8 @@ class EvaluationLoop:
         self._reclassify_interval = 86400  # re-classify every 24h
         self._last_factor_update: float = 0.0
         self._factor_update_interval = 3600  # update factor scores hourly
+        self._prev_market_state: str = market_state
+        self._news_sentiment: dict[str, float] = {}  # symbol -> sentiment (-1 to +1)
 
     @property
     def running(self) -> bool:
@@ -94,7 +96,16 @@ class EvaluationLoop:
         self._watchlist = symbols
 
     def set_market_state(self, state: str) -> None:
+        self._prev_market_state = self._market_state
         self._market_state = state
+
+    def update_news_sentiment(self, sentiments: dict[str, float]) -> None:
+        """Update per-symbol news sentiment scores.
+
+        Args:
+            sentiments: {symbol: sentiment_score} where score is -1.0 to +1.0
+        """
+        self._news_sentiment.update(sentiments)
 
     async def start(self) -> None:
         """Start the evaluation loop."""
@@ -194,6 +205,10 @@ class EvaluationLoop:
         )
         eval_symbols = list(dict.fromkeys(self._watchlist + sorted(held)))
 
+        # Phase 0: Regime-change and sentiment-based protective sells
+        if held and self._position_tracker:
+            await self._check_protective_sells(held)
+
         # Phase 1: Collect all signals (no execution yet)
         buy_candidates: list[tuple[float, str, object, pd.DataFrame]] = []
 
@@ -249,6 +264,74 @@ class EvaluationLoop:
             )
             for _conf, symbol, combined, df in buy_candidates:
                 await self._execute_signal(combined, symbol, df)
+
+    async def _check_protective_sells(self, held: set[str]) -> None:
+        """Sell positions on regime deterioration or negative news sentiment.
+
+        Regime sell: when market transitions to downtrend, sell losing positions
+        to protect capital. Winning positions are kept (trailing stop will handle).
+
+        Sentiment sell: when a held stock has strongly negative news sentiment
+        (score <= -0.5), sell regardless of technical signals.
+        """
+        _BEARISH_REGIMES = {"downtrend"}
+        _SAFE_REGIMES = {"uptrend", "strong_uptrend"}
+        regime_worsened = (
+            self._market_state in _BEARISH_REGIMES
+            and self._prev_market_state in _SAFE_REGIMES
+        )
+
+        if not regime_worsened and not self._news_sentiment:
+            return
+
+        positions = await self._market_data.get_positions()
+        position_map = {p.symbol: p for p in positions}
+
+        for symbol in list(held):
+            pos = position_map.get(symbol)
+            if not pos or pos.quantity <= 0:
+                continue
+
+            sell_reason = None
+
+            # 1. Regime deterioration: sell losing positions
+            if regime_worsened and pos.avg_price > 0:
+                pnl_pct = (pos.current_price - pos.avg_price) / pos.avg_price
+                if pnl_pct < 0:
+                    sell_reason = f"regime_protect(pnl={pnl_pct:.1%})"
+                    logger.warning(
+                        "Regime sell %s: %s→%s, PnL=%.1f%%",
+                        symbol, self._prev_market_state,
+                        self._market_state, pnl_pct * 100,
+                    )
+
+            # 2. Strongly negative news sentiment
+            sentiment = self._news_sentiment.get(symbol, 0.0)
+            if sentiment <= -0.5:
+                sell_reason = f"negative_sentiment({sentiment:.2f})"
+                logger.warning(
+                    "Sentiment sell %s: score=%.2f",
+                    symbol, sentiment,
+                )
+
+            if sell_reason:
+                exchange = (
+                    "KRX" if self._market == "KR"
+                    else self._exchange_resolver.resolve(symbol)
+                )
+                sell_order = await self._order_manager.place_sell(
+                    symbol=symbol,
+                    quantity=int(pos.quantity),
+                    price=pos.current_price,
+                    strategy_name=sell_reason,
+                    exchange=exchange,
+                )
+                if sell_order and self._position_tracker:
+                    self._position_tracker.untrack(symbol)
+
+        # Clear processed sentiments to avoid re-selling
+        for symbol in held:
+            self._news_sentiment.pop(symbol, None)
 
     async def _update_factor_scores(self) -> None:
         """Compute cross-sectional factor scores for the watchlist."""

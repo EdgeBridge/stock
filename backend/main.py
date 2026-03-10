@@ -1001,6 +1001,10 @@ async def lifespan(app: FastAPI):
                     summary.market_sentiment, actionable,
                 )
 
+                # Feed sentiment to evaluation loop for protective sells
+                if summary.symbol_sentiments:
+                    evaluation_loop.update_news_sentiment(summary.symbol_sentiments)
+
                 # Discord alert for high-impact news
                 if actionable > 0:
                     msg = "News Sentiment Alert\n"
@@ -1156,10 +1160,13 @@ async def lifespan(app: FastAPI):
             state = kr_market_state_detector.detect(kospi_df)
             kr_risk_manager.set_market_regime("KR", state.regime.value)
 
+            # Get KR sector data for sector rotation
+            kr_sector_data = await external_data.get_kr_sector_performance()
+
             # Run KR ETF engine evaluation
             actions = await kr_etf_engine.evaluate(
                 market_state=state,
-                sector_data=None,  # KR sector data from ETF universe config
+                sector_data=kr_sector_data,
             )
 
             total = sum(len(v) for v in actions.values())
