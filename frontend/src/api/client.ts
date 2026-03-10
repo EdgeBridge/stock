@@ -139,6 +139,25 @@ export const runEvaluation = () =>
 export const fetchETFStatus = (market = 'US') =>
   api.get<ETFStatus>(market === 'KR' ? '/engine/etf/kr' : '/engine/etf').then(r => r.data)
 
+// Trade Summary (daily/weekly/monthly)
+export interface PeriodSummary {
+  trades: number
+  wins: number
+  losses: number
+  pnl: number
+  win_rate: number
+}
+export interface TradeSummaryPeriods {
+  today: PeriodSummary
+  week: PeriodSummary
+  month: PeriodSummary
+  all_time: PeriodSummary
+  total_buys: number
+  total_sells: number
+}
+export const fetchTradeSummaryPeriods = (market?: string) =>
+  api.get<TradeSummaryPeriods>('/portfolio/trade-summary', { params: { ...(market && { market }) } }).then(r => r.data)
+
 // Signals
 export interface SignalEntry {
   timestamp: string

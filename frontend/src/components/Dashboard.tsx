@@ -52,6 +52,8 @@ export default function Dashboard() {
   }
 
   const hasUsd = summary.usd_balance && summary.usd_balance.total > 0
+  const rate = summary.exchange_rate ?? 1450
+  const totalEquity = summary.total_equity ?? (summary.balance.total + (summary.usd_balance?.total ?? 0) * rate)
 
   return (
     <div className="space-y-6">
@@ -59,8 +61,11 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card
           title="Total Equity"
-          value={formatCurrency(summary.balance.total, 'KRW')}
-          sub={hasUsd ? `(${formatCurrency(summary.usd_balance!.total, 'USD')})` : undefined}
+          value={formatCurrency(totalEquity, 'KRW')}
+          sub={hasUsd
+            ? `KRW ${formatCurrency(summary.balance.total, 'KRW')} + USD ${formatCurrency(summary.usd_balance!.total, 'USD')} (₩${rate.toFixed(0)})`
+            : undefined
+          }
         />
         <Card
           title="Available Cash"

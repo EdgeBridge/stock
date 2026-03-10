@@ -370,6 +370,7 @@ class EvaluationLoop:
                     price=pos.current_price,
                     strategy_name=sell_reason,
                     exchange=exchange,
+                    entry_price=pos.avg_price,
                 )
                 if sell_order and self._position_tracker:
                     self._position_tracker.untrack(symbol)
@@ -526,6 +527,7 @@ class EvaluationLoop:
                     price=price,
                     strategy_name=signal.strategy_name,
                     exchange=exchange,
+                    entry_price=pos.avg_price,
                 )
                 if sell_order and self._position_tracker:
                     self._position_tracker.untrack(symbol)

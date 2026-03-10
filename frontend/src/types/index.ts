@@ -10,6 +10,7 @@ export interface PortfolioSummary {
     total: number
     available: number
   }
+  exchange_rate?: number
   positions_count: number
   total_position_value?: number
   total_unrealized_pnl: number

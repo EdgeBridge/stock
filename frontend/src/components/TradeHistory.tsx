@@ -1,27 +1,37 @@
-import { useTrades, useTradeSummary } from '../hooks/useApi'
+import { useQuery } from '@tanstack/react-query'
+import { useTrades } from '../hooks/useApi'
+import { fetchTradeSummaryPeriods, type PeriodSummary } from '../api/client'
 import { formatCurrency } from '../utils/format'
 import clsx from 'clsx'
 
 export default function TradeHistory() {
   const { data: rawTrades, isLoading } = useTrades(100)
-  const { data: summary } = useTradeSummary()
+  const { data: periodSummary } = useQuery({
+    queryKey: ['trade-summary-periods'],
+    queryFn: () => fetchTradeSummaryPeriods(),
+    refetchInterval: 60_000,
+  })
   const trades = rawTrades?.filter(t => t.status !== 'pending')
 
   return (
     <div className="space-y-4">
       <h2 className="text-lg font-semibold">Trade History</h2>
 
-      {summary && (
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-          <StatCard label="Total Trades" value={String(summary.total_trades)} />
-          <StatCard label="Wins" value={String(summary.wins)} color="text-green-400" />
-          <StatCard label="Losses" value={String(summary.losses)} color="text-red-400" />
-          <StatCard
-            label="Total P&L"
-            value={formatCurrency(summary.total_pnl, summary.currency === 'KRW' ? 'KRW' : 'USD')}
-            color={summary.total_pnl >= 0 ? 'text-green-400' : 'text-red-400'}
-          />
-          <StatCard label="Win Rate" value={`${summary.win_rate.toFixed(1)}%`} />
+      {/* Period Summary Cards */}
+      {periodSummary && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <PeriodCard label="Today" data={periodSummary.today} />
+          <PeriodCard label="This Week" data={periodSummary.week} />
+          <PeriodCard label="This Month" data={periodSummary.month} />
+          <PeriodCard label="All Time" data={periodSummary.all_time} />
+        </div>
+      )}
+
+      {/* Overall Stats */}
+      {periodSummary && (
+        <div className="flex gap-4 text-sm text-gray-400">
+          <span>Total BUYs: <b className="text-white">{periodSummary.total_buys}</b></span>
+          <span>Total SELLs: <b className="text-white">{periodSummary.total_sells}</b></span>
         </div>
       )}
 
@@ -94,11 +104,20 @@ export default function TradeHistory() {
   )
 }
 
-function StatCard({ label, value, color }: { label: string; value: string; color?: string }) {
+function PeriodCard({ label, data }: { label: string; data: PeriodSummary }) {
+  const pnlColor = data.pnl >= 0 ? 'text-green-400' : 'text-red-400'
+  const pnlSign = data.pnl >= 0 ? '+' : ''
   return (
     <div className="bg-gray-900 rounded-lg p-3">
-      <div className="text-xs text-gray-400 uppercase">{label}</div>
-      <div className={clsx('text-xl font-bold mt-1', color || 'text-white')}>{value}</div>
+      <div className="text-xs text-gray-400 uppercase tracking-wide">{label}</div>
+      <div className={clsx('text-lg font-bold mt-1', data.trades === 0 ? 'text-gray-600' : pnlColor)}>
+        {data.trades === 0 ? '-' : `${pnlSign}${formatCurrency(data.pnl, 'KRW')}`}
+      </div>
+      {data.trades > 0 && (
+        <div className="text-xs text-gray-500 mt-0.5">
+          {data.wins}W {data.losses}L ({data.win_rate.toFixed(0)}%) / {data.trades} trades
+        </div>
+      )}
     </div>
   )
 }

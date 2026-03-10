@@ -1,18 +1,24 @@
 """Portfolio API endpoints."""
 
+import logging
+from datetime import datetime, timedelta
+
 from fastapi import APIRouter, Request
 
 from data.stock_name_service import get_name, resolve_names
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
+logger = logging.getLogger(__name__)
+
+# Cached exchange rate (refreshed via summary calls)
+_cached_usd_krw: float = 1450.0  # sensible default
 
 
 @router.get("/summary")
 async def portfolio_summary(request: Request, market: str = "ALL"):
     """Get portfolio summary: balance + positions + PnL.
 
-    market=ALL returns unified view (KRW primary + USD positions).
-    market=US or market=KR returns single-market view.
+    market=ALL returns unified view with total_equity in KRW (USD converted).
     """
     if market == "ALL":
         return await _combined_summary(request)
@@ -24,7 +30,6 @@ async def portfolio_summary(request: Request, market: str = "ALL"):
     balance = await md.get_balance()
     positions = await md.get_positions()
 
-    total_position_value = sum(p.current_price * p.quantity for p in positions)
     total_unrealized_pnl = sum(p.unrealized_pnl for p in positions)
 
     return {
@@ -36,7 +41,6 @@ async def portfolio_summary(request: Request, market: str = "ALL"):
             "locked": balance.locked,
         },
         "positions_count": len(positions),
-        "total_position_value": total_position_value,
         "total_unrealized_pnl": total_unrealized_pnl,
         "total_equity": balance.total,
     }
@@ -44,6 +48,8 @@ async def portfolio_summary(request: Request, market: str = "ALL"):
 
 async def _combined_summary(request: Request) -> dict:
     """Build unified summary from both US and KR adapters."""
+    global _cached_usd_krw
+
     us_md = getattr(request.app.state, "market_data", None)
     kr_md = getattr(request.app.state, "kr_market_data", None)
 
@@ -65,11 +71,24 @@ async def _combined_summary(request: Request) -> dict:
         except Exception:
             pass
 
-    # KRW is the base currency (single account)
     krw_total = kr_balance.total if kr_balance else 0
     krw_available = kr_balance.available if kr_balance else 0
     usd_total = us_balance.total if us_balance else 0
     usd_available = us_balance.available if us_balance else 0
+
+    # Fetch exchange rate from KIS adapter
+    adapter = getattr(request.app.state, "adapter", None)
+    if adapter and hasattr(adapter, "_fetch_exchange_rate"):
+        try:
+            rate = await adapter._fetch_exchange_rate()
+            if rate > 0:
+                _cached_usd_krw = rate
+        except Exception:
+            pass
+
+    # Total equity = KRW + USD×환율
+    usd_in_krw = usd_total * _cached_usd_krw
+    total_equity = krw_total + usd_in_krw
 
     all_positions = kr_positions + us_positions
     total_unrealized_pnl_krw = sum(p.unrealized_pnl for p in kr_positions)
@@ -86,10 +105,11 @@ async def _combined_summary(request: Request) -> dict:
             "total": usd_total,
             "available": usd_available,
         },
+        "exchange_rate": _cached_usd_krw,
         "positions_count": len(all_positions),
         "total_unrealized_pnl": total_unrealized_pnl_krw,
         "total_unrealized_pnl_usd": total_unrealized_pnl_usd,
-        "total_equity": krw_total,
+        "total_equity": total_equity,
     }
 
 
@@ -168,6 +188,74 @@ async def equity_history(request: Request, days: int = 30, market: str = "US"):
     if not pm:
         return []
     return await pm.get_equity_history(days=days)
+
+
+@router.get("/trade-summary")
+async def trade_summary_periods(request: Request, market: str | None = None):
+    """Get trade P&L summary by period: today, this week, this month, all-time."""
+    from api.trades import _session_factory
+    if not _session_factory:
+        return _empty_summary()
+
+    try:
+        from db.trade_repository import TradeRepository
+        async with _session_factory() as session:
+            repo = TradeRepository(session)
+            all_orders = await repo.get_trade_history(limit=500)
+
+            # Filter by market if specified
+            if market:
+                all_orders = [o for o in all_orders if getattr(o, "market", "US") == market]
+
+            sells = [
+                o for o in all_orders
+                if o.side == "SELL" and o.status == "filled" and o.pnl is not None
+            ]
+
+            now = datetime.utcnow()
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            week_start = today_start - timedelta(days=now.weekday())
+            month_start = today_start.replace(day=1)
+
+            def _calc(trades):
+                wins = [t for t in trades if t.pnl > 0]
+                losses = [t for t in trades if t.pnl <= 0]
+                total_pnl = sum(t.pnl for t in trades)
+                return {
+                    "trades": len(trades),
+                    "wins": len(wins),
+                    "losses": len(losses),
+                    "pnl": round(total_pnl, 2),
+                    "win_rate": round(len(wins) / len(trades) * 100, 1) if trades else 0,
+                }
+
+            today_sells = [s for s in sells if s.filled_at and s.filled_at >= today_start]
+            week_sells = [s for s in sells if s.filled_at and s.filled_at >= week_start]
+            month_sells = [s for s in sells if s.filled_at and s.filled_at >= month_start]
+
+            return {
+                "today": _calc(today_sells),
+                "week": _calc(week_sells),
+                "month": _calc(month_sells),
+                "all_time": _calc(sells),
+                "total_buys": sum(1 for o in all_orders if o.side == "BUY" and o.status == "filled"),
+                "total_sells": len(sells),
+            }
+    except Exception as e:
+        logger.warning("Trade summary failed: %s", e)
+        return _empty_summary()
+
+
+def _empty_summary():
+    empty = {"trades": 0, "wins": 0, "losses": 0, "pnl": 0, "win_rate": 0}
+    return {
+        "today": empty,
+        "week": empty,
+        "month": empty,
+        "all_time": empty,
+        "total_buys": 0,
+        "total_sells": 0,
+    }
 
 
 def _get_market_data(request: Request, market: str = "US"):

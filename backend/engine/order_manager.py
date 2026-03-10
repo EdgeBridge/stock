@@ -202,8 +202,9 @@ class OrderManager:
         strategy_name: str = "",
         order_type: str = "limit",
         exchange: str = "NASD",
+        entry_price: float | None = None,
     ) -> ManagedOrder | None:
-        """Place a sell order."""
+        """Place a sell order. Pass entry_price to calculate PnL."""
         try:
             result = await self._adapter.create_sell_order(
                 symbol=symbol,
@@ -260,6 +261,13 @@ class OrderManager:
                     filled_qty=filled_qty,
                     filled_price=result.filled_price or 0.0,
                 )
+            # Calculate PnL if entry_price is known
+            pnl = None
+            if entry_price:
+                sell_price = result.filled_price or price or 0
+                sell_qty = filled_qty or quantity
+                pnl = round((sell_price - entry_price) * sell_qty, 2)
+
             if _trade_recorder:
                 _trade_recorder({
                     "order_id": result.order_id,
@@ -268,7 +276,7 @@ class OrderManager:
                     "filled_quantity": filled_qty,
                     "slippage": slippage,
                     "strategy": strategy_name, "status": result.status,
-                    "pnl": None,  # caller can update
+                    "pnl": pnl,
                     "created_at": order.created_at,
                     "market": self._market,
                 })

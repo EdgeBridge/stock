@@ -178,6 +178,7 @@ class PositionTracker:
             price=price,
             strategy_name=f"{tracked.strategy}:{reason}",
             order_type="market",
+            entry_price=tracked.entry_price,
         )
 
         if order:
