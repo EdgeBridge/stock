@@ -111,6 +111,7 @@ export interface Trade {
   status: string
   pnl: number | null
   created_at: string
+  market?: string
 }
 
 export interface TradeSummary {
@@ -119,6 +120,7 @@ export interface TradeSummary {
   losses: number
   total_pnl: number
   win_rate: number
+  currency?: string
 }
 
 export interface ETFManagedPosition {
@@ -132,12 +134,12 @@ export interface ETFStatus {
   last_regime: string | null
   top_sectors: string[]
   managed_positions: Record<string, ETFManagedPosition>
-  risk_params: {
+  risk_params?: {
     max_hold_days: number
     max_portfolio_pct: number
     max_single_etf_pct: number
   }
-  bear_config: {
+  bear_config?: {
     min_distance_pct: number
     min_confidence: number
     size_ratio: number
