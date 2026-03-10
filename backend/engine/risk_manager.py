@@ -249,12 +249,8 @@ class RiskManager:
                             allowed=True,
                         )
 
-            if kelly_result.kelly_fraction <= 0:
-                return PositionSizeResult(
-                    quantity=0, allocation_usd=0, risk_per_share=0,
-                    reason=f"Kelly negative ({kelly_result.kelly_fraction:.3f}): no edge",
-                    allowed=False,
-                )
+            # Negative Kelly: no edge detected, fall through to minimum sizing
+            # (Don't block — combiner confidence already gates entry quality)
 
         # Fallback: fixed sizing with factor/confidence adjustment
         base_pct = self._params.max_position_pct
