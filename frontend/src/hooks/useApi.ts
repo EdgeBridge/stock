@@ -5,6 +5,7 @@ export function usePortfolioSummary(market = 'ALL') {
   return useQuery({
     queryKey: ['portfolio', 'summary', market],
     queryFn: () => api.fetchPortfolioSummary(market),
+    refetchInterval: 30_000,
   })
 }
 
@@ -12,6 +13,7 @@ export function usePositions(market = 'ALL') {
   return useQuery({
     queryKey: ['portfolio', 'positions', market],
     queryFn: () => api.fetchPositions(market),
+    refetchInterval: 30_000,
   })
 }
 
@@ -44,6 +46,7 @@ export function useEngineStatus() {
   return useQuery({
     queryKey: ['engine', 'status'],
     queryFn: api.fetchEngineStatus,
+    refetchInterval: 30_000,
   })
 }
 

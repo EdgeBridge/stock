@@ -46,13 +46,13 @@ profiles:
     volume_surge: 0.10
 
   downtrend:
-    trend_following: 0.05
-    rsi_divergence: 0.15
-    bollinger_squeeze: 0.10
-    bnf_deviation: 0.20
-    volume_surge: 0.05
     # Individual stock buys suppressed in downtrend; ETF engine takes over
     # bnf_deviation catches oversold mean reversion opportunities
+    trend_following: 0.09
+    rsi_divergence: 0.27
+    bollinger_squeeze: 0.18
+    bnf_deviation: 0.37
+    volume_surge: 0.09
 
   etf_engine:
     regime_switch: 0.55

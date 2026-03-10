@@ -210,8 +210,12 @@ class EvaluationLoop:
                 signals = []
                 for strategy in strategies:
                     try:
-                        signal = await strategy.analyze(df, symbol)
+                        signal = await asyncio.wait_for(
+                            strategy.analyze(df, symbol), timeout=10.0,
+                        )
                         signals.append(signal)
+                    except asyncio.TimeoutError:
+                        logger.warning("Strategy %s timed out on %s", strategy.name, symbol)
                     except Exception as e:
                         logger.debug("Strategy %s failed on %s: %s", strategy.name, symbol, e)
 

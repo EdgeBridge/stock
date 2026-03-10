@@ -14,6 +14,8 @@ Restart=always
 RestartSec=10
 Environment=HOME=/home/chans
 EnvironmentFile=/home/chans/us-stock/.env
+MemoryMax=512M
+CPUQuota=80%
 
 [Install]
 WantedBy=multi-user.target

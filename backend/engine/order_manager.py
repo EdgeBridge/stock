@@ -174,6 +174,8 @@ class OrderManager:
                     market=self._market,
                     stop_loss_pct=self._risk.params.default_stop_loss_pct,
                     take_profit_pct=self._risk.params.default_take_profit_pct,
+                    filled_qty=filled_qty,
+                    filled_price=result.filled_price or 0.0,
                 )
             if _trade_recorder:
                 _trade_recorder({
@@ -254,6 +256,8 @@ class OrderManager:
                 await self._notification.notify_trade_executed(
                     symbol, "SELL", quantity, price or 0, strategy_name,
                     market=self._market,
+                    filled_qty=filled_qty,
+                    filled_price=result.filled_price or 0.0,
                 )
             if _trade_recorder:
                 _trade_recorder({

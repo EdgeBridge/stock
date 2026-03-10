@@ -125,41 +125,45 @@ export default function ETFPanel() {
 
       {/* Risk Parameters & Bear Config */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="bg-gray-900 rounded-lg p-4">
-          <h3 className="text-sm font-medium text-gray-400 mb-3">Risk Parameters</h3>
-          <dl className="space-y-2 text-sm">
-            <div className="flex justify-between">
-              <dt className="text-gray-500">Max Hold Days</dt>
-              <dd>{data.risk_params.max_hold_days}d</dd>
-            </div>
-            <div className="flex justify-between">
-              <dt className="text-gray-500">Max Portfolio %</dt>
-              <dd>{(data.risk_params.max_portfolio_pct * 100).toFixed(0)}%</dd>
-            </div>
-            <div className="flex justify-between">
-              <dt className="text-gray-500">Max Single ETF %</dt>
-              <dd>{(data.risk_params.max_single_etf_pct * 100).toFixed(0)}%</dd>
-            </div>
-          </dl>
-        </div>
+        {data.risk_params && (
+          <div className="bg-gray-900 rounded-lg p-4">
+            <h3 className="text-sm font-medium text-gray-400 mb-3">Risk Parameters</h3>
+            <dl className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <dt className="text-gray-500">Max Hold Days</dt>
+                <dd>{data.risk_params.max_hold_days}d</dd>
+              </div>
+              <div className="flex justify-between">
+                <dt className="text-gray-500">Max Portfolio %</dt>
+                <dd>{(data.risk_params.max_portfolio_pct * 100).toFixed(0)}%</dd>
+              </div>
+              <div className="flex justify-between">
+                <dt className="text-gray-500">Max Single ETF %</dt>
+                <dd>{(data.risk_params.max_single_etf_pct * 100).toFixed(0)}%</dd>
+              </div>
+            </dl>
+          </div>
+        )}
 
-        <div className="bg-gray-900 rounded-lg p-4">
-          <h3 className="text-sm font-medium text-gray-400 mb-3">Bear Entry Config</h3>
-          <dl className="space-y-2 text-sm">
-            <div className="flex justify-between">
-              <dt className="text-gray-500">Min Distance</dt>
-              <dd>{data.bear_config.min_distance_pct}%</dd>
-            </div>
-            <div className="flex justify-between">
-              <dt className="text-gray-500">Min Confidence</dt>
-              <dd>{(data.bear_config.min_confidence * 100).toFixed(0)}%</dd>
-            </div>
-            <div className="flex justify-between">
-              <dt className="text-gray-500">Size Ratio</dt>
-              <dd>{(data.bear_config.size_ratio * 100).toFixed(0)}%</dd>
-            </div>
-          </dl>
-        </div>
+        {data.bear_config && (
+          <div className="bg-gray-900 rounded-lg p-4">
+            <h3 className="text-sm font-medium text-gray-400 mb-3">Bear Entry Config</h3>
+            <dl className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <dt className="text-gray-500">Min Distance</dt>
+                <dd>{data.bear_config.min_distance_pct}%</dd>
+              </div>
+              <div className="flex justify-between">
+                <dt className="text-gray-500">Min Confidence</dt>
+                <dd>{(data.bear_config.min_confidence * 100).toFixed(0)}%</dd>
+              </div>
+              <div className="flex justify-between">
+                <dt className="text-gray-500">Size Ratio</dt>
+                <dd>{(data.bear_config.size_ratio * 100).toFixed(0)}%</dd>
+              </div>
+            </dl>
+          </div>
+        )}
       </div>
     </div>
   )

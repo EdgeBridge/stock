@@ -163,6 +163,16 @@ class ETFEngine:
         if regime == self._last_regime:
             return actions
 
+        # First eval after restart: record current regime without trading.
+        # Prevents spurious buy attempts every time the server restarts.
+        if self._last_regime is None:
+            logger.info(
+                "ETF Engine: initial regime detected as %s (confidence=%.2f) — no action on first eval",
+                regime.value, state.confidence,
+            )
+            self._last_regime = regime
+            return actions
+
         logger.info(
             "Regime change: %s -> %s (confidence=%.2f, SPY dist=%.1f%%)",
             self._last_regime, regime.value, state.confidence,

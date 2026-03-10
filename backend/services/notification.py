@@ -428,6 +428,12 @@ class NotificationService:
             except Exception as e:
                 logger.error("Adapter %s failed: %s", adapter.name, e)
 
+        if not success and configured:
+            logger.critical(
+                "ALL notification adapters failed for: %s — %s",
+                title, plain_text[:100],
+            )
+
         return success
 
     # ── Backward-compatible send ───────────────────────────────────────
@@ -486,13 +492,20 @@ class NotificationService:
     async def notify_trade_executed(
         self, symbol: str, side: str, qty: int, price: float, strategy: str,
         market: str = "", stop_loss_pct: float = 0.0, take_profit_pct: float = 0.0,
+        filled_qty: int = 0, filled_price: float = 0.0,
     ) -> bool:
         mkt = market or self._detect_market(symbol)
         label = self._symbol_label(symbol)
         p = self._fmt_price(price, mkt)
         sl_tp = ""
+        partial = ""
         fields: dict = {"Symbol": label, "Side": side.upper(), "Qty": qty,
              "Price": p, "Strategy": strategy}
+        if filled_qty and 0 < filled_qty < qty:
+            partial = f" | PARTIAL FILL {filled_qty}/{qty}"
+            fields["Fill"] = f"{filled_qty}/{qty}"
+        if filled_price and filled_price != price:
+            fields["Filled Price"] = self._fmt_price(filled_price, mkt)
         if side.upper() == "BUY" and stop_loss_pct > 0:
             sl_price = price * (1 - stop_loss_pct)
             tp_price = price * (1 + take_profit_pct) if take_profit_pct > 0 else 0
@@ -505,7 +518,7 @@ class NotificationService:
         return await self._dispatch(
             AlertCategory.TRADE, AlertLevel.INFO, symbol,
             "Trade Executed",
-            f"{side.upper()} {label} x{qty} @ {p} | Strategy: {strategy}{sl_tp}",
+            f"{side.upper()} {label} x{qty} @ {p} | Strategy: {strategy}{sl_tp}{partial}",
             {"side": side.upper(), "qty": qty, "price": price, "strategy": strategy},
             fields,
         )

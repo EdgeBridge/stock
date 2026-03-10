@@ -54,6 +54,7 @@ class MarketDataService:
 
         cached = self._ticker_cache.get(cache_key)
         if cached and (now - cached[1]) < TICKER_CACHE_TTL:
+            self._ticker_cache[cache_key] = (cached[0], now)  # LRU: update access time
             return cached[0]
 
         await self._rate_limiter.acquire()
@@ -79,6 +80,7 @@ class MarketDataService:
 
         cached = self._ohlcv_cache.get(cache_key)
         if cached and (now - cached[1]) < OHLCV_CACHE_TTL:
+            self._ohlcv_cache[cache_key] = (cached[0], now)  # LRU: update access time
             return cached[0]
 
         # Try yfinance first (no rate limit)
@@ -136,6 +138,13 @@ class MarketDataService:
                     return pd.DataFrame()
 
             df = df[["open", "high", "low", "close", "volume"]]
+
+            # Validate data quality: drop rows with zero/NaN prices
+            for col in ["open", "high", "low", "close"]:
+                df = df[df[col] > 0]
+            df = df.dropna(subset=["open", "high", "low", "close"])
+            if df.empty:
+                return pd.DataFrame()
 
             # Resample to weekly or monthly if requested
             if timeframe == "1W":

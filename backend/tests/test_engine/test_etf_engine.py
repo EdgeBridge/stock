@@ -79,6 +79,7 @@ class TestRegimeSwitch:
     @pytest.mark.asyncio
     async def test_bull_regime_buys_bull_etfs(self, engine, mock_order_manager, mock_market_data):
         mock_market_data.get_ohlcv.return_value = _make_ohlcv_mock(50.0)
+        engine._last_regime = MarketRegime.SIDEWAYS  # simulate prior regime
 
         state = MarketState(regime=MarketRegime.UPTREND, spy_price=500, spy_sma200=480, confidence=0.8)
         actions = await engine._manage_regime_etfs(state)
@@ -91,6 +92,7 @@ class TestRegimeSwitch:
     async def test_bear_regime_exits_to_cash_when_not_qualified(self, engine, mock_order_manager, mock_market_data):
         # First set bull regime
         mock_market_data.get_ohlcv.return_value = _make_ohlcv_mock(50.0)
+        engine._last_regime = MarketRegime.SIDEWAYS  # simulate prior regime
         bull_state = MarketState(regime=MarketRegime.UPTREND)
         await engine._manage_regime_etfs(bull_state)
 
@@ -111,6 +113,7 @@ class TestRegimeSwitch:
     @pytest.mark.asyncio
     async def test_bear_regime_buys_bear_when_qualified(self, engine, mock_order_manager, mock_market_data):
         mock_market_data.get_ohlcv.return_value = _make_ohlcv_mock(50.0)
+        engine._last_regime = MarketRegime.SIDEWAYS  # simulate prior regime
 
         # Set bull then switch to qualified bear
         await engine._manage_regime_etfs(MarketState(regime=MarketRegime.UPTREND))
@@ -129,6 +132,7 @@ class TestRegimeSwitch:
     async def test_sideways_exits_all_leveraged(self, engine, mock_order_manager, mock_market_data):
         # First enter bull regime
         mock_market_data.get_ohlcv.return_value = _make_ohlcv_mock(50.0)
+        engine._last_regime = MarketRegime.SIDEWAYS  # simulate prior regime
         await engine._manage_regime_etfs(MarketState(regime=MarketRegime.UPTREND))
 
         # Simulate holding TQQQ
@@ -142,6 +146,7 @@ class TestRegimeSwitch:
     @pytest.mark.asyncio
     async def test_no_action_on_same_regime(self, engine, mock_market_data):
         mock_market_data.get_ohlcv.return_value = _make_ohlcv_mock(50.0)
+        engine._last_regime = MarketRegime.SIDEWAYS  # simulate prior regime
         state = MarketState(regime=MarketRegime.UPTREND)
 
         await engine._manage_regime_etfs(state)
@@ -151,6 +156,7 @@ class TestRegimeSwitch:
     @pytest.mark.asyncio
     async def test_regime_switch_sends_notification(self, engine, mock_market_data, mock_notification):
         mock_market_data.get_ohlcv.return_value = _make_ohlcv_mock(50.0)
+        engine._last_regime = MarketRegime.SIDEWAYS  # simulate prior regime
         state = MarketState(regime=MarketRegime.UPTREND)
         await engine._manage_regime_etfs(state)
 
@@ -168,6 +174,7 @@ class TestMutualExclusivity:
     ):
         """When buying TQQQ (bull), sell QQQ (base) if held."""
         mock_market_data.get_ohlcv.return_value = _make_ohlcv_mock(50.0)
+        engine._last_regime = MarketRegime.SIDEWAYS  # simulate prior regime
 
         # Simulate holding QQQ (base ETF)
         pos_qqq = MagicMock(symbol="QQQ", quantity=50, current_price=400.0)
@@ -200,6 +207,7 @@ class TestMutualExclusivity:
     ):
         """If sibling is already in exit_etfs, don't sell twice."""
         mock_market_data.get_ohlcv.return_value = _make_ohlcv_mock(50.0)
+        engine._last_regime = MarketRegime.SIDEWAYS  # simulate prior regime
 
         # First set bull regime
         mock_etf_universe.get_pair_siblings.return_value = []

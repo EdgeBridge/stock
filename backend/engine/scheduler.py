@@ -207,22 +207,33 @@ class TradingScheduler:
         us_phase = get_market_phase(now)
         kr_phase = get_kr_market_phase(now)
         kr_now = now.astimezone(KST)
+
+        tasks = []
+        for t in self._tasks:
+            # Check if task is eligible: respect market-specific time context
+            is_active = t.should_run(now)
+            # For display: also show whether the task is in the right phase
+            # (even if interval hasn't elapsed yet)
+            if t.phases is not None:
+                current_phase = kr_phase if t.market == "KR" else us_phase
+                in_phase = current_phase in t.phases
+            else:
+                in_phase = True
+            tasks.append({
+                "name": t.name,
+                "interval_sec": t.interval_sec,
+                "phases": [p.value for p in t.phases] if t.phases else None,
+                "last_run": t.last_run.isoformat() if t.last_run else None,
+                "active": in_phase,
+                "market": t.market,
+                "circuit": t.recovery.circuit.get_status() if t.recovery else None,
+            })
+
         return {
             "running": self._running,
             "market_phase": us_phase.value,
             "market_time_et": now.strftime("%Y-%m-%d %H:%M:%S ET"),
             "kr_market_phase": kr_phase.value,
             "kr_market_time_kst": kr_now.strftime("%Y-%m-%d %H:%M:%S KST"),
-            "tasks": [
-                {
-                    "name": t.name,
-                    "interval_sec": t.interval_sec,
-                    "phases": [p.value for p in t.phases] if t.phases else None,
-                    "last_run": t.last_run.isoformat() if t.last_run else None,
-                    "active": t.should_run(now),
-                    "market": t.market,
-                    "circuit": t.recovery.circuit.get_status() if t.recovery else None,
-                }
-                for t in self._tasks
-            ],
+            "tasks": tasks,
         }

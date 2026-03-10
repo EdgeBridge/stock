@@ -22,29 +22,49 @@ export default function LogPanel() {
   const wsRef = useRef<WebSocket | null>(null)
 
   useEffect(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${protocol}//${window.location.host}/api/v1/ws/logs`)
-    wsRef.current = ws
+    let retryDelay = 2000
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let stopped = false
 
-    ws.onopen = () => setConnected(true)
-    ws.onclose = () => setConnected(false)
-    ws.onerror = () => setConnected(false)
+    function connect() {
+      if (stopped) return
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const ws = new WebSocket(`${protocol}//${window.location.host}/api/v1/ws/logs`)
+      wsRef.current = ws
 
-    ws.onmessage = (event) => {
-      try {
-        const entry: LogEntry = JSON.parse(event.data)
-        setLogs(prev => [...prev.slice(-499), entry])
-      } catch {
-        // non-JSON messages — wrap as INFO
-        setLogs(prev => [...prev.slice(-499), {
-          timestamp: new Date().toISOString(),
-          level: 'INFO',
-          message: event.data,
-        }])
+      ws.onopen = () => {
+        setConnected(true)
+        retryDelay = 2000 // reset on success
+      }
+      ws.onclose = () => {
+        setConnected(false)
+        if (!stopped) {
+          timer = setTimeout(connect, retryDelay)
+          retryDelay = Math.min(retryDelay * 1.5, 30000) // exponential backoff, max 30s
+        }
+      }
+      ws.onerror = () => ws.close()
+
+      ws.onmessage = (event) => {
+        try {
+          const entry: LogEntry = JSON.parse(event.data)
+          setLogs(prev => [...prev.slice(-499), entry])
+        } catch {
+          setLogs(prev => [...prev.slice(-499), {
+            timestamp: new Date().toISOString(),
+            level: 'INFO',
+            message: event.data,
+          }])
+        }
       }
     }
 
-    return () => { ws.close() }
+    connect()
+    return () => {
+      stopped = true
+      if (timer) clearTimeout(timer)
+      wsRef.current?.close()
+    }
   }, [])
 
   useEffect(() => {

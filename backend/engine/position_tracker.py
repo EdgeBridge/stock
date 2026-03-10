@@ -189,22 +189,25 @@ class PositionTracker:
             self.untrack(tracked.symbol)
 
             if self._notification:
-                if reason == "stop_loss":
-                    await self._notification.notify_stop_loss(
-                        tracked.symbol, tracked.quantity,
-                        tracked.entry_price, price, pnl,
-                    )
-                elif reason == "take_profit":
-                    await self._notification.notify_take_profit(
-                        tracked.symbol, tracked.quantity,
-                        tracked.entry_price, price, pnl,
-                    )
-                elif reason == "trailing_stop":
-                    await self._notification.notify_trailing_stop(
-                        tracked.symbol, tracked.quantity,
-                        tracked.entry_price, price,
-                        tracked.highest_price, pnl,
-                    )
+                try:
+                    if reason == "stop_loss":
+                        await self._notification.notify_stop_loss(
+                            tracked.symbol, tracked.quantity,
+                            tracked.entry_price, price, pnl,
+                        )
+                    elif reason == "take_profit":
+                        await self._notification.notify_take_profit(
+                            tracked.symbol, tracked.quantity,
+                            tracked.entry_price, price, pnl,
+                        )
+                    elif reason == "trailing_stop":
+                        await self._notification.notify_trailing_stop(
+                            tracked.symbol, tracked.quantity,
+                            tracked.entry_price, price,
+                            tracked.highest_price, pnl,
+                        )
+                except Exception as e:
+                    logger.error("Failed to send %s notification for %s: %s", reason, tracked.symbol, e)
 
     async def restore_from_exchange(self, session_factory=None) -> list[dict]:
         """Restore position tracking from exchange state after restart.

@@ -11,6 +11,8 @@ ExecStart=/usr/bin/npx serve -s dist -l 3001
 Restart=always
 RestartSec=10
 Environment=HOME=/home/chans
+MemoryMax=384M
+CPUQuota=50%
 
 [Install]
 WantedBy=multi-user.target

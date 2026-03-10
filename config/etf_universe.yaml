@@ -90,6 +90,10 @@ exchanges:
   ARKK: NASD
   SARK: NASD
   SOXX: NASD
+  SOXL: NASD
+  SOXS: NASD
+  TECL: NASD
+  TECS: NASD
   SHY: NASD
   TLT: NASD
 

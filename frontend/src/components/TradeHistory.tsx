@@ -17,7 +17,7 @@ export default function TradeHistory() {
           <StatCard label="Losses" value={String(summary.losses)} color="text-red-400" />
           <StatCard
             label="Total P&L"
-            value={formatCurrency(summary.total_pnl, 'USD')}
+            value={formatCurrency(summary.total_pnl, summary.currency === 'KRW' ? 'KRW' : 'USD')}
             color={summary.total_pnl >= 0 ? 'text-green-400' : 'text-red-400'}
           />
           <StatCard label="Win Rate" value={`${summary.win_rate.toFixed(1)}%`} />
@@ -63,7 +63,7 @@ export default function TradeHistory() {
                   </td>
                   <td className="py-2 px-3 text-right">{t.quantity}</td>
                   <td className="py-2 px-3 text-right">
-                    {t.filled_price ? formatCurrency(t.filled_price, 'USD') : t.price ? formatCurrency(t.price, 'USD') : '-'}
+                    {t.filled_price ? formatCurrency(t.filled_price, t.market === 'KR' ? 'KRW' : 'USD') : t.price ? formatCurrency(t.price, t.market === 'KR' ? 'KRW' : 'USD') : '-'}
                   </td>
                   <td className="py-2 px-3 text-gray-400 text-xs">{t.strategy}</td>
                   <td className="py-2 px-3 text-center">
@@ -81,7 +81,7 @@ export default function TradeHistory() {
                     'text-red-400': t.pnl != null && t.pnl < 0,
                     'text-gray-500': t.pnl == null,
                   })}>
-                    {t.pnl != null ? formatCurrency(t.pnl, 'USD') : '-'}
+                    {t.pnl != null ? formatCurrency(t.pnl, t.market === 'KR' ? 'KRW' : 'USD') : '-'}
                   </td>
                 </tr>
               ))}

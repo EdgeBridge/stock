@@ -12,6 +12,7 @@ export function usePriceStream(symbols: string[]) {
   const [connected, setConnected] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const symbolsRef = useRef(symbols)
+  const retryDelayRef = useRef(2000)
   symbolsRef.current = symbols
 
   const connect = useCallback(() => {
@@ -20,6 +21,7 @@ export function usePriceStream(symbols: string[]) {
 
     ws.onopen = () => {
       setConnected(true)
+      retryDelayRef.current = 2000 // reset on success
       if (symbolsRef.current.length > 0) {
         ws.send(JSON.stringify({ subscribe: symbolsRef.current }))
       }
@@ -34,7 +36,9 @@ export function usePriceStream(symbols: string[]) {
 
     ws.onclose = () => {
       setConnected(false)
-      setTimeout(connect, 3000)
+      const delay = retryDelayRef.current
+      retryDelayRef.current = Math.min(delay * 1.5, 30000)
+      setTimeout(connect, delay)
     }
 
     ws.onerror = () => ws.close()
