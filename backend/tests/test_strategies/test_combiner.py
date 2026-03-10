@@ -152,9 +152,9 @@ class TestConsensusSignalCombiner:
     """Tests for group consensus mechanism."""
 
     def test_consensus_disabled_by_default(self):
-        """Without consensus config, behavior is identical to legacy."""
+        """Without consensus config, BUY side with higher weight wins."""
         combiner = SignalCombiner()
-        # Mean-reversion deadlock scenario
+        # BUY weight=0.35 vs SELL weight=0.25 → BUY wins (min_confidence=0.35)
         signals = [
             _signal("rsi_divergence", SignalType.BUY, 0.7),
             _signal("bnf_deviation", SignalType.SELL, 0.7),
@@ -168,7 +168,21 @@ class TestConsensusSignalCombiner:
             "macd_histogram": 0.10,
         }
         result = combiner.combine(signals, weights)
-        assert result.signal_type == SignalType.HOLD  # deadlock
+        assert result.signal_type == SignalType.BUY
+
+    def test_true_deadlock_returns_hold(self):
+        """Equal buy/sell weight with low confidence → HOLD."""
+        combiner = SignalCombiner()
+        signals = [
+            _signal("rsi_divergence", SignalType.BUY, 0.4),
+            _signal("bnf_deviation", SignalType.SELL, 0.4),
+        ]
+        weights = {
+            "rsi_divergence": 0.15,
+            "bnf_deviation": 0.15,
+        }
+        result = combiner.combine(signals, weights)
+        assert result.signal_type == SignalType.HOLD
 
     def test_consensus_mr_3v1_buy_wins(self):
         """3 BUY vs 1 SELL in mean_reversion → BUY wins."""

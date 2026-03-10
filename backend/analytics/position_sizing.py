@@ -42,10 +42,10 @@ class KellyPositionSizer:
 
     def __init__(
         self,
-        kelly_fraction: float = 0.25,    # Use 25% Kelly (conservative)
+        kelly_fraction: float = 0.35,    # Use 35% Kelly (moderate)
         max_position_pct: float = 0.15,  # Hard cap per position
-        min_position_pct: float = 0.02,  # Minimum position to bother
-        confidence_exponent: float = 2.0, # Confidence scaling power
+        min_position_pct: float = 0.03,  # Minimum position to bother
+        confidence_exponent: float = 1.5, # Confidence scaling power
         factor_weight: float = 0.3,       # How much factor score affects sizing
     ):
         self._kelly_frac = kelly_fraction

@@ -21,7 +21,7 @@ class SignalCombiner:
     def __init__(
         self,
         consensus_config: dict | None = None,
-        min_active_ratio: float = 0.15,
+        min_active_ratio: float = 0.05,
     ):
         cfg = consensus_config or {}
         self._consensus_enabled = cfg.get("enabled", False)
@@ -84,7 +84,7 @@ class SignalCombiner:
         self,
         signals: list[Signal],
         weights: dict[str, float],
-        min_confidence: float = 0.50,
+        min_confidence: float = 0.35,
     ) -> Signal:
         """Combine signals using weighted voting.
 

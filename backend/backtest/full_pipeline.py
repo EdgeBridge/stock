@@ -98,6 +98,15 @@ class PipelineConfig:
     # Protective sells
     enable_regime_sells: bool = True  # Sell losing positions on regime deterioration
 
+    # Signal combiner
+    min_active_ratio: float = 0.15  # Min fraction of strategies that must be active
+    min_confidence: float = 0.50  # Min combined confidence to generate BUY/SELL
+
+    # Kelly sizing
+    kelly_fraction: float = 0.25  # Fractional Kelly (0.25 = quarter Kelly)
+    confidence_exponent: float = 2.0  # Confidence scaling power (lower = bigger positions)
+    min_position_pct: float = 0.02  # Minimum position size
+
     # Strategy config path
     strategy_config_path: str | None = None
 
@@ -187,6 +196,13 @@ class FullPipelineBacktest:
             default_stop_loss_pct=self._config.default_stop_loss_pct,
             default_take_profit_pct=self._config.default_take_profit_pct,
         ))
+        # Override Kelly sizer params for backtest tuning
+        self._risk_manager._kelly = KellyPositionSizer(
+            kelly_fraction=self._config.kelly_fraction,
+            max_position_pct=self._config.max_position_pct,
+            min_position_pct=self._config.min_position_pct,
+            confidence_exponent=self._config.confidence_exponent,
+        )
 
         # Initialize strategy registry and combiner
         config_loader = StrategyConfigLoader(self._config.strategy_config_path)
@@ -194,7 +210,7 @@ class FullPipelineBacktest:
         consensus_cfg = config_loader.get_consensus_config()
         self._combiner = SignalCombiner(
             consensus_config=consensus_cfg,
-            min_active_ratio=0.15,
+            min_active_ratio=self._config.min_active_ratio,
         )
 
         # Portfolio state
@@ -352,7 +368,9 @@ class FullPipelineBacktest:
                 weights = self._adaptive.get_weights(symbol, market_weights)
 
                 # Combine signals
-                combined = self._combiner.combine(signals, weights)
+                combined = self._combiner.combine(
+                    signals, weights, min_confidence=cfg.min_confidence,
+                )
 
                 # Execute SELLs immediately
                 if combined.signal_type == SignalType.SELL:
