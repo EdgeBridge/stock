@@ -362,11 +362,28 @@ class EvaluationLoop:
 
             # Register position for SL/TP/trailing stop monitoring
             if order and self._position_tracker:
+                # Dynamic ATR-based SL/TP per stock volatility
+                atr_val = None
+                if "atr" in df.columns:
+                    atr_val = float(df["atr"].iloc[-1])
+                elif "ATRr_14" in df.columns:
+                    atr_val = float(df["ATRr_14"].iloc[-1])
+
+                if atr_val and atr_val > 0:
+                    sl_pct, tp_pct = self._risk_manager.calculate_dynamic_sl_tp(
+                        price, atr_val, market=self._market,
+                    )
+                else:
+                    sl_pct = self._risk_manager.params.default_stop_loss_pct
+                    tp_pct = self._risk_manager.params.default_take_profit_pct
+
                 self._position_tracker.track(
                     symbol=symbol,
                     entry_price=price,
                     quantity=order.quantity,
                     strategy=strategy_name,
+                    stop_loss_pct=sl_pct,
+                    take_profit_pct=tp_pct,
                 )
 
         elif signal.signal_type == SignalType.SELL:

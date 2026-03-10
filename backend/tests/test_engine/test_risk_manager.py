@@ -144,6 +144,41 @@ class TestTrailingStop:
         ) is True
 
 
+class TestDynamicSlTp:
+    def test_low_volatility_stock(self):
+        rm = RiskManager()
+        # ATR=1.5 on $100 stock = 1.5% daily volatility → tighter SL/TP
+        sl, tp = rm.calculate_dynamic_sl_tp(100.0, 1.5)
+        assert 0.03 <= sl <= 0.05  # ~3%
+        assert 0.06 <= tp <= 0.10  # ~6%
+
+    def test_high_volatility_stock(self):
+        rm = RiskManager()
+        # ATR=8.0 on $100 stock = 8% daily volatility → wider SL/TP
+        sl, tp = rm.calculate_dynamic_sl_tp(100.0, 8.0)
+        assert sl >= 0.10
+        assert tp >= 0.20
+
+    def test_kr_market_wider_bounds(self):
+        rm = RiskManager()
+        # KR market should have wider minimum bounds (±30% daily limit)
+        sl, tp = rm.calculate_dynamic_sl_tp(50000.0, 500.0, market="KR")
+        assert sl >= 0.05  # KR min SL is 5%
+
+    def test_zero_atr_uses_defaults(self):
+        rm = RiskManager()
+        sl, tp = rm.calculate_dynamic_sl_tp(100.0, 0.0)
+        assert sl == rm.params.default_stop_loss_pct
+        assert tp == rm.params.default_take_profit_pct
+
+    def test_returns_different_values_per_volatility(self):
+        rm = RiskManager()
+        sl_low, tp_low = rm.calculate_dynamic_sl_tp(100.0, 1.0)
+        sl_high, tp_high = rm.calculate_dynamic_sl_tp(100.0, 5.0)
+        assert sl_high > sl_low
+        assert tp_high > tp_low
+
+
 class TestDailyPnL:
     def test_update_and_reset(self):
         rm = RiskManager()

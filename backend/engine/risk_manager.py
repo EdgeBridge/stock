@@ -319,6 +319,35 @@ class RiskManager:
         current_invested = portfolio_value - cash_available
         return max(0.0, max_invested - current_invested)
 
+    def calculate_dynamic_sl_tp(
+        self,
+        price: float,
+        atr: float,
+        market: str = "US",
+    ) -> tuple[float, float]:
+        """Calculate ATR-based stop-loss and take-profit percentages.
+
+        Uses ATR relative to price to adapt SL/TP to each stock's volatility.
+        Higher volatility → wider SL/TP, lower volatility → tighter SL/TP.
+
+        Returns:
+            (stop_loss_pct, take_profit_pct)
+        """
+        if price <= 0 or atr <= 0:
+            return self._params.default_stop_loss_pct, self._params.default_take_profit_pct
+
+        atr_pct = atr / price  # e.g. 0.02 = 2% daily ATR
+
+        # SL = 2x ATR, clamped to [3%, 15%] for US, [5%, 20%] for KR
+        if market == "KR":
+            sl = max(0.05, min(0.20, atr_pct * 2.5))
+            tp = max(0.08, min(0.30, atr_pct * 5.0))
+        else:
+            sl = max(0.03, min(0.15, atr_pct * 2.0))
+            tp = max(0.06, min(0.30, atr_pct * 4.0))
+
+        return round(sl, 4), round(tp, 4)
+
     def check_stop_loss(
         self, entry_price: float, current_price: float, stop_loss_pct: float | None = None
     ) -> bool:

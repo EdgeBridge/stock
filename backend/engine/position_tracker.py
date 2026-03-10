@@ -272,8 +272,25 @@ class PositionTracker:
 
             # Use avg_price from exchange as entry price
             entry_price = pos.avg_price
+
+            # Dynamic ATR-based SL/TP per stock volatility
             stop_loss_pct = self._risk.params.default_stop_loss_pct
             take_profit_pct = self._risk.params.default_take_profit_pct
+            if self._market_data:
+                try:
+                    ohlcv = await self._market_data.get_ohlcv(pos.symbol, limit=30)
+                    if not ohlcv.empty and len(ohlcv) >= 14:
+                        import pandas_ta as ta
+                        atr_series = ta.atr(ohlcv["high"], ohlcv["low"], ohlcv["close"], length=14)
+                        if atr_series is not None and not atr_series.empty:
+                            atr_val = float(atr_series.iloc[-1])
+                            if atr_val > 0:
+                                market = "KR" if pos.symbol.isdigit() else "US"
+                                stop_loss_pct, take_profit_pct = self._risk.calculate_dynamic_sl_tp(
+                                    entry_price, atr_val, market=market,
+                                )
+                except Exception as e:
+                    logger.debug("ATR fetch failed for %s, using defaults: %s", pos.symbol, e)
 
             self.track(
                 symbol=pos.symbol,
