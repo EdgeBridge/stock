@@ -422,6 +422,31 @@ async def get_backtest_results(
     return json.dumps(data, indent=2, ensure_ascii=False)
 
 
+@mcp.tool()
+async def run_pipeline_backtest(
+    period: str = "3y",
+    max_positions: int = 20,
+    initial_equity: float = 100_000,
+) -> str:
+    """Run full pipeline backtest simulating the complete live trading system.
+
+    Tests the entire pipeline: screener → 14 strategies → combiner →
+    Kelly sizing → dynamic SL/TP on a 55-stock universe.
+    WARNING: Takes 5-15 minutes to complete.
+
+    Args:
+        period: Backtest period ("2y", "3y", "5y").
+        max_positions: Maximum concurrent positions (default 20).
+        initial_equity: Starting capital (default $100,000).
+    """
+    data = await _api("POST", "/api/v1/backtest/pipeline", body={
+        "period": period,
+        "max_positions": max_positions,
+        "initial_equity": initial_equity,
+    })
+    return json.dumps(data, indent=2, ensure_ascii=False)
+
+
 # ===========================================================================
 # Entry point
 # ===========================================================================

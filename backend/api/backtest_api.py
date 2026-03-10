@@ -10,6 +10,7 @@ from backtest.engine import BacktestEngine
 from backtest.simulator import SimConfig
 from backtest.result_store import BacktestResultStore
 from backtest.adaptive_backtest import AdaptiveBacktestEngine
+from backtest.full_pipeline import FullPipelineBacktest, PipelineConfig, DEFAULT_UNIVERSE
 from backtest.optimize_all import (
     optimize_strategy, optimize_all, PARAM_GRIDS, SL_TP_GRIDS,
     optimize_sl_tp, run_walk_forward,
@@ -417,3 +418,67 @@ async def run_walk_forward_validation(req: WalkForwardRequest):
     except Exception as e:
         logger.error("Walk-forward failed: %s", e)
         return {"error": str(e)}
+
+
+# --- Full Pipeline Backtest ---
+
+
+class PipelineBacktestRequest(BaseModel):
+    universe: list[str] | None = None  # None = default 55-stock universe
+    period: str = "3y"
+    initial_equity: float = 100_000
+    max_positions: int = 20
+    max_watchlist: int = 30
+    screen_interval: int = 20
+    dynamic_sl_tp: bool = True
+
+
+@router.post("/pipeline")
+async def run_pipeline_backtest(req: PipelineBacktestRequest):
+    """Run full pipeline backtest (scanner → combiner → Kelly → SL/TP).
+
+    Simulates the complete live trading system on historical data.
+    WARNING: This is computationally intensive (5-15 min for 3y × 55 stocks).
+    """
+    config = PipelineConfig(
+        universe=req.universe or list(DEFAULT_UNIVERSE),
+        initial_equity=req.initial_equity,
+        max_positions=req.max_positions,
+        max_watchlist=req.max_watchlist,
+        screen_interval=req.screen_interval,
+        dynamic_sl_tp=req.dynamic_sl_tp,
+    )
+
+    engine = FullPipelineBacktest(config)
+
+    try:
+        result = await engine.run(period=req.period)
+    except Exception as e:
+        logger.error("Pipeline backtest failed: %s", e)
+        return {"error": str(e)}
+
+    m = result.metrics
+    return {
+        "passed": bool(m.passes_minimum()),
+        "metrics": {
+            **_format_metrics(m),
+            "benchmark_return_pct": round(safe(m.benchmark_return_pct), 2),
+            "alpha": round(safe(m.alpha), 2),
+            "avg_holding_days": round(safe(m.avg_holding_days), 1),
+            "avg_win_pct": round(safe(m.avg_win_pct), 2),
+            "avg_loss_pct": round(safe(m.avg_loss_pct), 2),
+        },
+        "strategy_breakdown": result.strategy_stats,
+        "equity_curve": [
+            {"date": str(date), "equity": round(safe(float(val)), 2)}
+            for date, val in result.equity_curve.items()
+        ][-500:],
+        "trades_count": len(result.trades),
+        "trades": _format_trades(result.trades),
+        "config": {
+            "universe_size": len(config.universe),
+            "max_positions": config.max_positions,
+            "dynamic_sl_tp": config.dynamic_sl_tp,
+            "screen_interval": config.screen_interval,
+        },
+    }

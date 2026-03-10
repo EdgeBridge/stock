@@ -13,7 +13,7 @@ class TestToolRegistration:
 
     def test_total_tool_count(self):
         tools = mcp_server.mcp._tool_manager.list_tools()
-        assert len(tools) == 27
+        assert len(tools) == 28
 
     def test_portfolio_tools(self):
         names = {t.name for t in mcp_server.mcp._tool_manager.list_tools()}
