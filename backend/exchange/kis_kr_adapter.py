@@ -236,30 +236,43 @@ class KISKRAdapter(ExchangeAdapter):
         )
 
     async def _fetch_orderable_amount(self) -> float | None:
-        """Query actual orderable cash via 주문가능조회 API."""
+        """Query actual orderable cash via 주문가능조회 API.
+
+        Tests multiple parameter combinations to find the correct
+        domestic buying power. OVRS_ICLD_YN=Y can over-deduct due to
+        overseas settlement obligations.
+        """
         try:
-            params = {
-                "CANO": self._config.account_no,
-                "ACNT_PRDT_CD": self._config.account_product,
-                "PDNO": "005930",       # Reference stock (삼성전자)
-                "ORD_UNPR": "0",        # 0 = market order context
-                "ORD_DVSN": "01",       # 01 = 시장가
-                "CMA_EVLU_AMT_ICLD_YN": "Y",
-                "OVRS_ICLD_YN": "Y",    # Include overseas positions
-            }
-            data = await self._get(
-                "/uapi/domestic-stock/v1/trading/inquire-psbl-order",
-                self._tr["BUYING_POWER"],
-                params,
-            )
-            if data.get("rt_cd") != "0":
-                logger.warning("주문가능조회 API failed: %s", data.get("msg1", ""))
-                return None
-            output = data.get("output", {})
-            # ord_psbl_cash = 주문가능현금 (actual orderable cash)
-            orderable = float(output.get("ord_psbl_cash", 0))
-            logger.info("KR orderable cash (주문가능현금): %.0f KRW", orderable)
-            return orderable
+            # Try OVRS_ICLD_YN=N first (domestic-only buying power)
+            for ovrs in ("N", "Y"):
+                params = {
+                    "CANO": self._config.account_no,
+                    "ACNT_PRDT_CD": self._config.account_product,
+                    "PDNO": "005930",       # Reference stock (삼성전자)
+                    "ORD_UNPR": "0",        # 0 = market order context
+                    "ORD_DVSN": "01",       # 01 = 시장가
+                    "CMA_EVLU_AMT_ICLD_YN": "Y",
+                    "OVRS_ICLD_YN": ovrs,
+                }
+                data = await self._get(
+                    "/uapi/domestic-stock/v1/trading/inquire-psbl-order",
+                    self._tr["BUYING_POWER"],
+                    params,
+                )
+                if data.get("rt_cd") != "0":
+                    continue
+                output = data.get("output", {})
+                cash = float(output.get("ord_psbl_cash", 0))
+                logger.info(
+                    "KR 주문가능 (OVRS=%s): cash=%.0f, max_buy=%.0f",
+                    ovrs, cash, float(output.get("max_buy_amt", 0)),
+                )
+                if cash > 0:
+                    return cash
+
+            # Both returned non-positive — use the OVRS=N result as best guess
+            logger.warning("KR orderable cash is non-positive, using OVRS=N result: %.0f", cash)
+            return cash
         except Exception as e:
             logger.warning("Failed to fetch KR orderable amount: %s", e)
             return None
