@@ -187,10 +187,17 @@ class EvaluationLoop:
             await self._update_factor_scores()
             self._last_factor_update = now
 
+        # Merge watchlist + held positions so positions always get strategy evaluation
+        held = (
+            set(self._position_tracker.tracked_symbols)
+            if self._position_tracker else set()
+        )
+        eval_symbols = list(dict.fromkeys(self._watchlist + sorted(held)))
+
         # Phase 1: Collect all signals (no execution yet)
         buy_candidates: list[tuple[float, str, object, pd.DataFrame]] = []
 
-        for symbol in self._watchlist:
+        for symbol in eval_symbols:
             try:
                 df = await self._market_data.get_ohlcv(symbol, limit=250)
                 if df.empty:

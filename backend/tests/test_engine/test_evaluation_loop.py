@@ -264,6 +264,98 @@ class TestRiskAgentIntegration:
         mock_adapter.create_buy_order.assert_called_once()
 
 
+class TestHeldPositionEvaluation:
+    """Test that held positions are always evaluated even if not in watchlist."""
+
+    async def test_held_position_evaluated_when_not_in_watchlist(
+        self, mock_adapter, mock_market_data, mock_registry,
+    ):
+        """A held position not in watchlist should still get strategy SELL signals."""
+        from data.indicator_service import IndicatorService
+        from strategies.combiner import SignalCombiner
+        from engine.position_tracker import PositionTracker
+
+        risk = RiskManager()
+        order_mgr = OrderManager(adapter=mock_adapter, risk_manager=risk)
+        position_tracker = MagicMock(spec=PositionTracker)
+        # HELD_STOCK is tracked but NOT in watchlist
+        position_tracker.tracked_symbols = ["HELD_STOCK"]
+
+        loop = EvaluationLoop(
+            adapter=mock_adapter,
+            market_data=mock_market_data,
+            indicator_svc=IndicatorService(),
+            registry=mock_registry,
+            combiner=SignalCombiner(),
+            order_manager=order_mgr,
+            risk_manager=risk,
+            watchlist=["AAPL"],  # HELD_STOCK not here
+            position_tracker=position_tracker,
+        )
+
+        # Strategy returns SELL for HELD_STOCK
+        strategy = mock_registry.get_enabled.return_value[0]
+        signal_map = {
+            "AAPL": Signal(signal_type=SignalType.HOLD, confidence=0.3,
+                           strategy_name="trend_following", reason="hold"),
+            "HELD_STOCK": Signal(signal_type=SignalType.SELL, confidence=0.8,
+                                 strategy_name="trend_following", reason="sell"),
+        }
+
+        async def dynamic_analyze(df, symbol):
+            return signal_map.get(symbol, signal_map["AAPL"])
+
+        strategy.analyze = AsyncMock(side_effect=dynamic_analyze)
+
+        mock_market_data.get_positions.return_value = [
+            Position(symbol="HELD_STOCK", exchange="NASD", quantity=10, avg_price=100.0),
+        ]
+        mock_adapter.create_sell_order = AsyncMock(return_value=OrderResult(
+            order_id="O2", symbol="HELD_STOCK", side="SELL",
+            order_type="limit", quantity=10, price=105.0,
+            status="filled", filled_price=105.0,
+        ))
+
+        await loop._evaluate_all()
+
+        # HELD_STOCK should get a sell order even though not in watchlist
+        mock_adapter.create_sell_order.assert_called_once()
+        call_kwargs = mock_adapter.create_sell_order.call_args
+        assert call_kwargs.kwargs.get("symbol") == "HELD_STOCK" or call_kwargs.args[0] == "HELD_STOCK"
+
+    async def test_no_duplicate_evaluation_when_in_both(
+        self, mock_adapter, mock_market_data, mock_registry,
+    ):
+        """Symbol in both watchlist and held positions should be evaluated only once."""
+        from data.indicator_service import IndicatorService
+        from strategies.combiner import SignalCombiner
+        from engine.position_tracker import PositionTracker
+
+        risk = RiskManager()
+        order_mgr = OrderManager(adapter=mock_adapter, risk_manager=risk)
+        position_tracker = MagicMock(spec=PositionTracker)
+        position_tracker.tracked_symbols = ["AAPL"]  # Also in watchlist
+
+        loop = EvaluationLoop(
+            adapter=mock_adapter,
+            market_data=mock_market_data,
+            indicator_svc=IndicatorService(),
+            registry=mock_registry,
+            combiner=SignalCombiner(),
+            order_manager=order_mgr,
+            risk_manager=risk,
+            watchlist=["AAPL", "TSLA"],
+            position_tracker=position_tracker,
+        )
+
+        await loop._evaluate_all()
+
+        # AAPL should be evaluated exactly once (not twice)
+        strategy = mock_registry.get_enabled.return_value[0]
+        aapl_calls = [c for c in strategy.analyze.call_args_list if c.args[1] == "AAPL"]
+        assert len(aapl_calls) == 1
+
+
 class TestConfidenceRankedBuy:
     """Test that BUYs are ranked by confidence and SELLs execute immediately."""
 
