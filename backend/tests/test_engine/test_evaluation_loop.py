@@ -262,3 +262,68 @@ class TestRiskAgentIntegration:
         assert eval_loop._risk_agent is None
         await eval_loop.evaluate_symbol("AAPL")
         mock_adapter.create_buy_order.assert_called_once()
+
+
+class TestKRMarketExchange:
+    """Test that KR market skips yfinance exchange resolution."""
+
+    @pytest.fixture
+    def kr_eval_loop(self, mock_adapter, mock_market_data, mock_registry):
+        from data.indicator_service import IndicatorService
+        from strategies.combiner import SignalCombiner
+
+        risk = RiskManager()
+        order_mgr = OrderManager(adapter=mock_adapter, risk_manager=risk, market="KR")
+
+        return EvaluationLoop(
+            adapter=mock_adapter,
+            market_data=mock_market_data,
+            indicator_svc=IndicatorService(),
+            registry=mock_registry,
+            combiner=SignalCombiner(),
+            order_manager=order_mgr,
+            risk_manager=risk,
+            watchlist=["005930", "035720"],
+            market="KR",
+        )
+
+    async def test_kr_buy_uses_krx_exchange(self, kr_eval_loop, mock_adapter):
+        """KR market should pass exchange='KRX', not resolve via yfinance."""
+        await kr_eval_loop.evaluate_symbol("005930")
+        mock_adapter.create_buy_order.assert_called_once()
+        call_kwargs = mock_adapter.create_buy_order.call_args
+        assert call_kwargs.kwargs.get("exchange") == "KRX"
+
+    async def test_kr_sell_uses_krx_exchange(self, kr_eval_loop, mock_adapter, mock_market_data, mock_registry):
+        """KR sell should also use KRX exchange."""
+        strategy = mock_registry.get_enabled.return_value[0]
+        strategy.analyze.return_value = Signal(
+            signal_type=SignalType.SELL, confidence=0.8,
+            strategy_name="trend_following", reason="sell",
+        )
+        mock_market_data.get_positions.return_value = [
+            Position(symbol="005930", exchange="KRX", quantity=10, avg_price=70000.0),
+        ]
+        mock_adapter.create_sell_order = AsyncMock(return_value=OrderResult(
+            order_id="O2", symbol="005930", side="SELL",
+            order_type="limit", quantity=10, price=72000.0,
+            status="filled", filled_price=72000.0,
+        ))
+        await kr_eval_loop.evaluate_symbol("005930")
+        mock_adapter.create_sell_order.assert_called_once()
+        call_kwargs = mock_adapter.create_sell_order.call_args
+        assert call_kwargs.kwargs.get("exchange") == "KRX"
+
+    async def test_kr_does_not_call_exchange_resolver(self, kr_eval_loop, mock_adapter):
+        """KR market should never call ExchangeResolver.resolve()."""
+        resolver = kr_eval_loop._exchange_resolver
+        resolver.resolve = MagicMock(return_value="NASD")
+        await kr_eval_loop.evaluate_symbol("005930")
+        resolver.resolve.assert_not_called()
+
+    async def test_us_still_uses_exchange_resolver(self, eval_loop, mock_adapter):
+        """US market should still use ExchangeResolver."""
+        resolver = eval_loop._exchange_resolver
+        resolver.resolve = MagicMock(return_value="NASD")
+        await eval_loop.evaluate_symbol("AAPL")
+        resolver.resolve.assert_called_with("AAPL")

@@ -284,7 +284,7 @@ class EvaluationLoop:
                 except Exception as e:
                     logger.debug("Risk agent pre-trade check error: %s", e)
 
-            exchange = self._exchange_resolver.resolve(symbol)
+            exchange = "KRX" if self._market == "KR" else self._exchange_resolver.resolve(symbol)
             order = await self._order_manager.place_buy(
                 symbol=symbol,
                 price=price,
@@ -309,7 +309,7 @@ class EvaluationLoop:
             positions = await self._market_data.get_positions()
             pos = next((p for p in positions if p.symbol == symbol), None)
             if pos and pos.quantity > 0:
-                exchange = self._exchange_resolver.resolve(symbol)
+                exchange = "KRX" if self._market == "KR" else self._exchange_resolver.resolve(symbol)
                 sell_order = await self._order_manager.place_sell(
                     symbol=symbol,
                     quantity=int(pos.quantity),
