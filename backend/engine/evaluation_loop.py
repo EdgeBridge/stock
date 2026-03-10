@@ -275,10 +275,9 @@ class EvaluationLoop:
         (score <= -0.5), sell regardless of technical signals.
         """
         _BEARISH_REGIMES = {"downtrend"}
-        _SAFE_REGIMES = {"uptrend", "strong_uptrend"}
         regime_worsened = (
             self._market_state in _BEARISH_REGIMES
-            and self._prev_market_state in _SAFE_REGIMES
+            and self._prev_market_state not in _BEARISH_REGIMES
         )
 
         if not regime_worsened and not self._news_sentiment:

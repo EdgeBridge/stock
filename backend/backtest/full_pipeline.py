@@ -95,6 +95,9 @@ class PipelineConfig:
     trailing_activation_pct: float = 0.05
     trailing_trail_pct: float = 0.03
 
+    # Protective sells
+    enable_regime_sells: bool = True  # Sell losing positions on regime deterioration
+
     # Strategy config path
     strategy_config_path: str | None = None
 
@@ -202,6 +205,7 @@ class FullPipelineBacktest:
         self._equity_dates: list = []
         self._daily_snapshots: list[DailySnapshot] = []
         self._watchlist: list[str] = []
+        self._prev_regime: str = "uptrend"
 
     async def run(
         self,
@@ -309,10 +313,17 @@ class FullPipelineBacktest:
             held = set(self._positions.keys())
             eval_symbols = list(dict.fromkeys(self._watchlist + sorted(held)))
 
-            # 4c. Check SL/TP/trailing stop on existing positions
+            # 4c. Regime-change protective sells
+            if cfg.enable_regime_sells and self._positions:
+                self._check_regime_sells(
+                    stock_data, date_idx, date, regime_str,
+                )
+            self._prev_regime = regime_str
+
+            # 4d. Check SL/TP/trailing stop on existing positions
             self._check_risk_exits(stock_data, date_idx, date)
 
-            # 4d. Evaluate signals and execute
+            # 4e. Evaluate signals and execute
             buy_candidates: list[tuple[float, str, Signal]] = []
 
             for symbol in eval_symbols:
@@ -358,7 +369,7 @@ class FullPipelineBacktest:
                         market_state.regime,
                     )
 
-            # 4e. Update equity and snapshot
+            # 4f. Update equity and snapshot
             equity = self._calculate_equity(stock_data, date_idx)
             self._equity_curve.append(equity)
             self._equity_dates.append(date)
@@ -483,6 +494,48 @@ class FullPipelineBacktest:
                         self._close_position(
                             symbol, trail_price, date, "trailing_stop",
                         )
+
+    # ------------------------------------------------------------------
+    # Regime-change protective sells
+    # ------------------------------------------------------------------
+
+    def _check_regime_sells(
+        self,
+        stock_data: dict,
+        date_idx: int,
+        date,
+        current_regime: str,
+    ) -> None:
+        """Sell losing positions when regime transitions to downtrend.
+
+        Mirrors live evaluation_loop._check_protective_sells():
+        when market moves from uptrend/strong_uptrend to downtrend,
+        positions with negative PnL are closed to protect capital.
+        """
+        _BEARISH = {"downtrend"}
+
+        regime_worsened = (
+            current_regime in _BEARISH
+            and self._prev_regime not in _BEARISH
+        )
+        if not regime_worsened:
+            return
+
+        for symbol in list(self._positions.keys()):
+            pos = self._positions[symbol]
+            data = stock_data.get(symbol)
+            if not data or date_idx >= len(data.df):
+                continue
+
+            price = float(data.df.iloc[date_idx]["close"])
+            pnl_pct = (price - pos.avg_price) / pos.avg_price
+
+            if pnl_pct < 0:
+                logger.debug(
+                    "Regime sell %s: %s→%s, PnL=%.1f%%",
+                    symbol, self._prev_regime, current_regime, pnl_pct * 100,
+                )
+                self._close_position(symbol, price, date, "regime_protect")
 
     # ------------------------------------------------------------------
     # Execution

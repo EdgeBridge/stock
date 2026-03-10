@@ -664,6 +664,27 @@ class TestProtectiveSells:
 
         mock_adapter.create_sell_order.assert_not_called()
 
+    async def test_regime_sell_on_sideways_to_downtrend(
+        self, loop_with_tracker, mock_market_data, mock_adapter,
+    ):
+        """Sideways→downtrend transition should also trigger regime sell."""
+        mock_market_data.get_positions.return_value = [
+            Position(symbol="AAPL", exchange="NASD", quantity=10,
+                     avg_price=150.0, current_price=140.0),
+        ]
+        mock_adapter.create_sell_order = AsyncMock(return_value=OrderResult(
+            order_id="O1", symbol="AAPL", side="SELL",
+            order_type="limit", quantity=10, price=140.0,
+            status="filled", filled_price=140.0,
+        ))
+
+        # Transition sideways -> downtrend
+        loop_with_tracker._prev_market_state = "sideways"
+        loop_with_tracker._market_state = "downtrend"
+        await loop_with_tracker._check_protective_sells({"AAPL"})
+
+        mock_adapter.create_sell_order.assert_called_once()
+
     async def test_sentiment_sell_on_negative(
         self, loop_with_tracker, mock_market_data, mock_adapter,
     ):
