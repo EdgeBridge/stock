@@ -451,7 +451,16 @@ class NotificationService:
     # ── Formatting helpers ─────────────────────────────────────────────
 
     @staticmethod
-    def _pnl_sign(value: float) -> str:
+    def _fmt_price(value: float, market: str = "US") -> str:
+        """Format price with currency symbol based on market."""
+        if market == "KR":
+            return f"₩{value:,.0f}"
+        return f"${value:,.2f}"
+
+    @staticmethod
+    def _pnl_sign(value: float, market: str = "US") -> str:
+        if market == "KR":
+            return f"+₩{value:,.0f}" if value >= 0 else f"-₩{abs(value):,.0f}"
         return f"+${value:,.2f}" if value >= 0 else f"-${abs(value):,.2f}"
 
     @staticmethod
@@ -467,22 +476,32 @@ class NotificationService:
         name = get_name(symbol) or get_name(symbol, "KR")
         return f"{symbol} ({name})" if name else symbol
 
+    @staticmethod
+    def _detect_market(symbol: str) -> str:
+        """Detect market from symbol (KR stocks are numeric)."""
+        return "KR" if symbol.isdigit() else "US"
+
     # ── Convenience methods ────────────────────────────────────────────
 
     async def notify_trade_executed(
         self, symbol: str, side: str, qty: int, price: float, strategy: str,
+        market: str = "",
     ) -> bool:
+        mkt = market or self._detect_market(symbol)
         label = self._symbol_label(symbol)
+        p = self._fmt_price(price, mkt)
         return await self._dispatch(
             AlertCategory.TRADE, AlertLevel.INFO, symbol,
             "Trade Executed",
-            f"{side.upper()} {label} x{qty} @ ${price:,.2f} | Strategy: {strategy}",
+            f"{side.upper()} {label} x{qty} @ {p} | Strategy: {strategy}",
             {"side": side.upper(), "qty": qty, "price": price, "strategy": strategy},
             {"Symbol": label, "Side": side.upper(), "Qty": qty,
-             "Price": f"${price:,.2f}", "Strategy": strategy},
+             "Price": p, "Strategy": strategy},
         )
 
-    async def notify_order_rejected(self, symbol: str, reason: str) -> bool:
+    async def notify_order_rejected(
+        self, symbol: str, reason: str, market: str = "",
+    ) -> bool:
         label = self._symbol_label(symbol)
         return await self._dispatch(
             AlertCategory.TRADE, AlertLevel.WARNING, symbol,
@@ -494,46 +513,52 @@ class NotificationService:
 
     async def notify_stop_loss(
         self, symbol: str, qty: int, entry: float, exit_price: float, pnl: float,
+        market: str = "",
     ) -> bool:
+        mkt = market or self._detect_market(symbol)
         label = self._symbol_label(symbol)
-        pnl_str = self._pnl_sign(pnl)
+        pnl_str = self._pnl_sign(pnl, mkt)
         return await self._dispatch(
             AlertCategory.POSITION, AlertLevel.WARNING, symbol,
             "Stop-Loss Triggered",
-            f"SELL {label} x{qty} | ${entry:,.2f} -> ${exit_price:,.2f} | P&L: {pnl_str}",
+            f"SELL {label} x{qty} | {self._fmt_price(entry, mkt)} -> {self._fmt_price(exit_price, mkt)} | P&L: {pnl_str}",
             {"qty": qty, "entry": entry, "exit": exit_price, "pnl": pnl},
-            {"Symbol": label, "Entry": f"${entry:,.2f}",
-             "Exit": f"${exit_price:,.2f}", "P&L": pnl_str},
+            {"Symbol": label, "Entry": self._fmt_price(entry, mkt),
+             "Exit": self._fmt_price(exit_price, mkt), "P&L": pnl_str},
         )
 
     async def notify_take_profit(
         self, symbol: str, qty: int, entry: float, exit_price: float, pnl: float,
+        market: str = "",
     ) -> bool:
+        mkt = market or self._detect_market(symbol)
         label = self._symbol_label(symbol)
-        pnl_str = self._pnl_sign(pnl)
+        pnl_str = self._pnl_sign(pnl, mkt)
         return await self._dispatch(
             AlertCategory.POSITION, AlertLevel.INFO, symbol,
             "Take-Profit Hit",
-            f"SELL {label} x{qty} | ${entry:,.2f} -> ${exit_price:,.2f} | P&L: {pnl_str}",
+            f"SELL {label} x{qty} | {self._fmt_price(entry, mkt)} -> {self._fmt_price(exit_price, mkt)} | P&L: {pnl_str}",
             {"qty": qty, "entry": entry, "exit": exit_price, "pnl": pnl},
-            {"Symbol": label, "Entry": f"${entry:,.2f}",
-             "Exit": f"${exit_price:,.2f}", "P&L": pnl_str},
+            {"Symbol": label, "Entry": self._fmt_price(entry, mkt),
+             "Exit": self._fmt_price(exit_price, mkt), "P&L": pnl_str},
         )
 
     async def notify_trailing_stop(
         self, symbol: str, qty: int, entry: float, exit_price: float,
-        highest: float, pnl: float,
+        highest: float, pnl: float, market: str = "",
     ) -> bool:
+        mkt = market or self._detect_market(symbol)
         label = self._symbol_label(symbol)
-        pnl_str = self._pnl_sign(pnl)
+        pnl_str = self._pnl_sign(pnl, mkt)
+        fp = self._fmt_price
         return await self._dispatch(
             AlertCategory.POSITION, AlertLevel.WARNING, symbol,
             "Trailing-Stop Triggered",
-            f"SELL {label} x{qty} | Entry ${entry:,.2f} | High ${highest:,.2f} | "
-            f"Exit ${exit_price:,.2f} | P&L: {pnl_str}",
+            f"SELL {label} x{qty} | Entry {fp(entry, mkt)} | High {fp(highest, mkt)} | "
+            f"Exit {fp(exit_price, mkt)} | P&L: {pnl_str}",
             {"qty": qty, "entry": entry, "exit": exit_price, "highest": highest, "pnl": pnl},
-            {"Symbol": label, "Entry": f"${entry:,.2f}", "Highest": f"${highest:,.2f}",
-             "Exit": f"${exit_price:,.2f}", "P&L": pnl_str},
+            {"Symbol": label, "Entry": fp(entry, mkt), "Highest": fp(highest, mkt),
+             "Exit": fp(exit_price, mkt), "P&L": pnl_str},
         )
 
     async def notify_risk_breach(

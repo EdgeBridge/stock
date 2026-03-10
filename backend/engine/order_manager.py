@@ -171,6 +171,7 @@ class OrderManager:
             if self._notification:
                 await self._notification.notify_trade_executed(
                     symbol, "BUY", sizing.quantity, price, strategy_name,
+                    market=self._market,
                 )
             if _trade_recorder:
                 _trade_recorder({
@@ -250,6 +251,7 @@ class OrderManager:
             if self._notification:
                 await self._notification.notify_trade_executed(
                     symbol, "SELL", quantity, price or 0, strategy_name,
+                    market=self._market,
                 )
             if _trade_recorder:
                 _trade_recorder({

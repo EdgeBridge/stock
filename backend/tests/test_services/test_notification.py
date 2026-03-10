@@ -814,6 +814,54 @@ async def test_pnl_sign_formatting():
 
 
 @pytest.mark.asyncio
+async def test_pnl_sign_formatting_kr():
+    assert NotificationService._pnl_sign(100000.0, "KR") == "+₩100,000"
+    assert NotificationService._pnl_sign(-50000.0, "KR") == "-₩50,000"
+    assert NotificationService._pnl_sign(0.0, "KR") == "+₩0"
+
+
+@pytest.mark.asyncio
+async def test_fmt_price():
+    assert NotificationService._fmt_price(150.50) == "$150.50"
+    assert NotificationService._fmt_price(72300.0, "KR") == "₩72,300"
+    assert NotificationService._fmt_price(1500000.0, "KR") == "₩1,500,000"
+
+
+@pytest.mark.asyncio
+async def test_detect_market():
+    assert NotificationService._detect_market("AAPL") == "US"
+    assert NotificationService._detect_market("005930") == "KR"
+    assert NotificationService._detect_market("TSLA") == "US"
+    assert NotificationService._detect_market("069500") == "KR"
+
+
+@pytest.mark.asyncio
+async def test_kr_trade_notification_uses_won():
+    svc, adapter = _svc_with_mock()
+    await svc.notify_trade_executed("005930", "BUY", 10, 72300.0, "trend", market="KR")
+    title, body, level, fields = adapter.sent_rich[0]
+    assert "₩72,300" in body
+    assert "$" not in body
+
+
+@pytest.mark.asyncio
+async def test_kr_trade_auto_detected():
+    """KR symbol (numeric) auto-detects market without explicit param."""
+    svc, adapter = _svc_with_mock()
+    await svc.notify_trade_executed("005930", "BUY", 10, 72300.0, "trend")
+    title, body, level, fields = adapter.sent_rich[0]
+    assert "₩72,300" in body
+
+
+@pytest.mark.asyncio
+async def test_us_trade_still_uses_dollar():
+    svc, adapter = _svc_with_mock()
+    await svc.notify_trade_executed("AAPL", "BUY", 10, 150.50, "trend")
+    title, body, level, fields = adapter.sent_rich[0]
+    assert "$150.50" in body
+
+
+@pytest.mark.asyncio
 async def test_pct_formatting():
     assert NotificationService._pct(0.65) == "65.0%"
     assert NotificationService._pct(1.0) == "100.0%"
