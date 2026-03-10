@@ -1209,6 +1209,32 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("Startup position reconciliation failed: %s", e)
 
+    # Cancel orphaned pending orders on KIS (from previous server instance)
+    try:
+        for label, adapter_inst in [("US", adapter), ("KR", kr_adapter)]:
+            pending = await adapter_inst.fetch_pending_orders()
+            if pending:
+                cancelled = 0
+                for order in pending:
+                    try:
+                        ok = await adapter_inst.cancel_order(order.order_id, order.symbol)
+                        if ok:
+                            cancelled += 1
+                            logger.info(
+                                "Cancelled orphaned %s order: %s %s %s %d @ %.0f",
+                                label, order.order_id, order.side,
+                                order.symbol, int(order.quantity), order.price or 0,
+                            )
+                    except Exception as cancel_err:
+                        logger.warning("Failed to cancel order %s: %s", order.order_id, cancel_err)
+                if cancelled:
+                    await notification.notify_system_event(
+                        "orphaned_orders_cancelled",
+                        f"{label}: {cancelled}/{len(pending)} orphaned pending orders cancelled on startup.",
+                    )
+    except Exception as e:
+        logger.warning("Orphaned order cleanup failed: %s", e)
+
     # Auto-start scheduler (store task ref to detect crashes)
     _scheduler_task = asyncio.create_task(scheduler.start(), name="scheduler")
 
