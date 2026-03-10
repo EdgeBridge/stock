@@ -50,7 +50,9 @@ async def stop_engine(request: Request):
 
 @router.get("/market-state")
 async def market_state(request: Request):
-    """Get current market state assessment."""
+    """Get current market state assessment (US + KR)."""
+    from engine.scheduler import get_kr_market_phase
+
     phase = get_market_phase()
     result = {"market_phase": phase.value}
 
@@ -65,6 +67,20 @@ async def market_state(request: Request):
             "spy_distance_pct": state.spy_distance_pct,
             "vix_level": state.vix_level,
             "confidence": state.confidence,
+        })
+
+    # KR market state
+    kr_phase = get_kr_market_phase()
+    result["kr_market_phase"] = kr_phase.value
+
+    kr_detector = getattr(request.app.state, "kr_market_state_detector", None)
+    if kr_detector and kr_detector.last_state:
+        kr_state = kr_detector.last_state
+        result.update({
+            "kr_regime": kr_state.regime.value,
+            "kr_index_price": kr_state.spy_price,
+            "kr_index_sma200": kr_state.spy_sma200,
+            "kr_confidence": kr_state.confidence,
         })
 
     return result

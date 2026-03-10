@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Request
 
-from data.stock_name_service import get_name
+from data.stock_name_service import get_name, resolve_names
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 
@@ -104,18 +104,7 @@ async def list_positions(request: Request, market: str = "ALL"):
                 continue
             try:
                 positions = await md.get_positions()
-                for p in positions:
-                    results.append({
-                        "symbol": p.symbol,
-                        "name": get_name(p.symbol, m) or "",
-                        "exchange": p.exchange,
-                        "quantity": p.quantity,
-                        "avg_price": p.avg_price,
-                        "current_price": p.current_price,
-                        "unrealized_pnl": p.unrealized_pnl,
-                        "unrealized_pnl_pct": p.unrealized_pnl_pct,
-                        "market": m,
-                    })
+                results.extend(await _enrich_positions(positions, m, request))
             except Exception:
                 continue
         return results
@@ -125,8 +114,29 @@ async def list_positions(request: Request, market: str = "ALL"):
         return []
 
     positions = await md.get_positions()
-    return [
-        {
+    return await _enrich_positions(positions, market, request)
+
+
+async def _enrich_positions(positions, market: str, request: Request) -> list[dict]:
+    """Build position dicts with names and SL/TP info from position tracker."""
+    # Resolve missing names in background
+    unknown = [p.symbol for p in positions if not get_name(p.symbol, market)]
+    if unknown:
+        try:
+            await resolve_names(unknown, market)
+        except Exception:
+            pass
+
+    # Get tracked position info (SL/TP/trailing stop)
+    tracker = _get_position_tracker(request, market)
+    tracked_map = {}
+    if tracker:
+        for t in tracker.get_status():
+            tracked_map[t["symbol"]] = t
+
+    results = []
+    for p in positions:
+        entry = {
             "symbol": p.symbol,
             "name": get_name(p.symbol, market) or "",
             "exchange": p.exchange,
@@ -137,8 +147,15 @@ async def list_positions(request: Request, market: str = "ALL"):
             "unrealized_pnl_pct": p.unrealized_pnl_pct,
             "market": market,
         }
-        for p in positions
-    ]
+        # Add SL/TP tracking info if available
+        tracked = tracked_map.get(p.symbol)
+        if tracked:
+            entry["stop_loss_pct"] = tracked.get("stop_loss_pct")
+            entry["take_profit_pct"] = tracked.get("take_profit_pct")
+            entry["highest_price"] = tracked.get("highest_price")
+            entry["trailing_active"] = tracked.get("trailing_active", False)
+        results.append(entry)
+    return results
 
 
 @router.get("/equity-history")
@@ -158,3 +175,10 @@ def _get_market_data(request: Request, market: str = "US"):
     if market == "KR":
         return getattr(request.app.state, "kr_market_data", None)
     return getattr(request.app.state, "market_data", None)
+
+
+def _get_position_tracker(request: Request, market: str = "US"):
+    """Get position tracker for the specified market."""
+    if market == "KR":
+        return getattr(request.app.state, "kr_position_tracker", None)
+    return getattr(request.app.state, "position_tracker", None)

@@ -485,18 +485,29 @@ class NotificationService:
 
     async def notify_trade_executed(
         self, symbol: str, side: str, qty: int, price: float, strategy: str,
-        market: str = "",
+        market: str = "", stop_loss_pct: float = 0.0, take_profit_pct: float = 0.0,
     ) -> bool:
         mkt = market or self._detect_market(symbol)
         label = self._symbol_label(symbol)
         p = self._fmt_price(price, mkt)
+        sl_tp = ""
+        fields: dict = {"Symbol": label, "Side": side.upper(), "Qty": qty,
+             "Price": p, "Strategy": strategy}
+        if side.upper() == "BUY" and stop_loss_pct > 0:
+            sl_price = price * (1 - stop_loss_pct)
+            tp_price = price * (1 + take_profit_pct) if take_profit_pct > 0 else 0
+            sl_tp = f" | SL {self._fmt_price(sl_price, mkt)} (-{stop_loss_pct*100:.0f}%)"
+            if tp_price > 0:
+                sl_tp += f" / TP {self._fmt_price(tp_price, mkt)} (+{take_profit_pct*100:.0f}%)"
+            fields["SL"] = f"{self._fmt_price(sl_price, mkt)} (-{stop_loss_pct*100:.0f}%)"
+            if tp_price > 0:
+                fields["TP"] = f"{self._fmt_price(tp_price, mkt)} (+{take_profit_pct*100:.0f}%)"
         return await self._dispatch(
             AlertCategory.TRADE, AlertLevel.INFO, symbol,
             "Trade Executed",
-            f"{side.upper()} {label} x{qty} @ {p} | Strategy: {strategy}",
+            f"{side.upper()} {label} x{qty} @ {p} | Strategy: {strategy}{sl_tp}",
             {"side": side.upper(), "qty": qty, "price": price, "strategy": strategy},
-            {"Symbol": label, "Side": side.upper(), "Qty": qty,
-             "Price": p, "Strategy": strategy},
+            fields,
         )
 
     async def notify_order_rejected(

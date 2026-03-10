@@ -113,6 +113,9 @@ class SignalCombiner:
         total_weight = 0.0
         reasons = []
         all_indicators = {}
+        # Track top contributing strategy per side
+        top_buy: tuple[float, str] = (0.0, "")   # (weighted_conf, name)
+        top_sell: tuple[float, str] = (0.0, "")
 
         for signal in signals:
             w = effective_weights.get(signal.strategy_name, 0.0)
@@ -126,11 +129,15 @@ class SignalCombiner:
                 buy_score += weighted_conf
                 active_weight += w
                 reasons.append(f"+{signal.strategy_name}({signal.confidence:.0%})")
+                if weighted_conf > top_buy[0]:
+                    top_buy = (weighted_conf, signal.strategy_name)
             elif signal.signal_type == SignalType.SELL:
                 weighted_conf = signal.confidence * w
                 sell_score += weighted_conf
                 active_weight += w
                 reasons.append(f"-{signal.strategy_name}({signal.confidence:.0%})")
+                if weighted_conf > top_sell[0]:
+                    top_sell = (weighted_conf, signal.strategy_name)
 
             # Collect indicators
             for k, v in signal.indicators.items():
@@ -166,7 +173,7 @@ class SignalCombiner:
             return Signal(
                 signal_type=SignalType.BUY,
                 confidence=buy_norm,
-                strategy_name="combiner",
+                strategy_name=top_buy[1] or "combiner",
                 reason=f"BUY consensus: {', '.join(reasons)}",
                 indicators=all_indicators,
             )
@@ -175,7 +182,7 @@ class SignalCombiner:
             return Signal(
                 signal_type=SignalType.SELL,
                 confidence=sell_norm,
-                strategy_name="combiner",
+                strategy_name=top_sell[1] or "combiner",
                 reason=f"SELL consensus: {', '.join(reasons)}",
                 indicators=all_indicators,
             )

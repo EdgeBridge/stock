@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { usePortfolioSummary, usePositions } from '../hooks/useApi'
+import { usePortfolioSummary, usePositions, useEngineStatus } from '../hooks/useApi'
 import { usePriceStream } from '../hooks/usePriceStream'
 import { fetchMacroIndicators, fetchMarketState } from '../api/client'
 import { formatCurrency } from '../utils/format'
@@ -11,14 +11,41 @@ function PnLText({ value, currency }: { value: number; currency: string }) {
   return <span className={color}>{sign}{formatCurrency(value, currency)}</span>
 }
 
+function PctText({ value }: { value: number }) {
+  const color = value >= 0 ? 'text-green-400' : 'text-red-400'
+  const sign = value >= 0 ? '+' : ''
+  return <span className={color}>{sign}{value.toFixed(2)}%</span>
+}
+
 export default function Dashboard() {
   const { data: summary, isLoading } = usePortfolioSummary()
   const { data: positions } = usePositions()
+  const { data: engineStatus } = useEngineStatus()
   const symbols = useMemo(
     () => (positions ?? []).map(p => p.symbol),
     [positions],
   )
   const { prices, connected } = usePriceStream(symbols)
+
+  // Determine active markets from engine status
+  const usPhase = engineStatus?.market_phase ?? 'closed'
+  const krPhase = engineStatus?.kr_market_phase ?? 'closed'
+  const usActive = usPhase === 'regular'
+  const krActive = krPhase === 'regular'
+
+  // Sort positions: active market first, then by absolute P&L descending
+  const sortedPositions = useMemo(() => {
+    if (!positions) return []
+    return [...positions].sort((a, b) => {
+      const aMkt = (a as { market?: string }).market ?? 'US'
+      const bMkt = (b as { market?: string }).market ?? 'US'
+      const aActive = (aMkt === 'KR' && krActive) || (aMkt === 'US' && usActive)
+      const bActive = (bMkt === 'KR' && krActive) || (bMkt === 'US' && usActive)
+      if (aActive !== bActive) return aActive ? -1 : 1
+      // Within same group, sort by absolute unrealized P&L descending
+      return Math.abs(b.unrealized_pnl ?? 0) - Math.abs(a.unrealized_pnl ?? 0)
+    })
+  }, [positions, usActive, krActive])
 
   if (isLoading || !summary) {
     return <div className="text-gray-500">Loading...</div>
@@ -56,20 +83,34 @@ export default function Dashboard() {
         />
       </div>
 
-      {/* All Positions (US + KR) */}
-      {positions && positions.length > 0 && (
+      {/* All Positions (US + KR) — active market first */}
+      {sortedPositions.length > 0 && (
         <div className="bg-gray-900 rounded-lg p-4">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-lg font-semibold">Holdings</h2>
-            {connected && (
-              <span className="text-xs text-green-500 flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-                Live
-              </span>
-            )}
+            <div className="flex items-center gap-3">
+              {krActive && (
+                <span className="text-xs text-purple-400 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />
+                  KR Open
+                </span>
+              )}
+              {usActive && (
+                <span className="text-xs text-blue-400 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+                  US Open
+                </span>
+              )}
+              {connected && (
+                <span className="text-xs text-green-500 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+                  Live
+                </span>
+              )}
+            </div>
           </div>
           <div className="overflow-x-auto -mx-4 px-4">
-          <table className="w-full text-sm min-w-[600px]">
+          <table className="w-full text-sm min-w-[700px]">
             <thead className="text-gray-400 border-b border-gray-800">
               <tr>
                 <th className="text-left py-2">Symbol</th>
@@ -79,10 +120,11 @@ export default function Dashboard() {
                 <th className="text-right py-2">Current</th>
                 <th className="text-right py-2">P&L</th>
                 <th className="text-right py-2">P&L %</th>
+                <th className="text-right py-2">SL / TP</th>
               </tr>
             </thead>
             <tbody>
-              {positions.map(p => {
+              {sortedPositions.map(p => {
                 const mkt = (p as { market?: string }).market ?? 'US'
                 const cur = mkt === 'KR' ? 'KRW' : 'USD'
                 const live = prices[p.symbol]
@@ -91,8 +133,12 @@ export default function Dashboard() {
                 const pnlPct = p.avg_price > 0
                   ? ((currentPrice - p.avg_price) / p.avg_price) * 100
                   : 0
+                const isActive = (mkt === 'KR' && krActive) || (mkt === 'US' && usActive)
+                const ext = p as { stop_loss_pct?: number; take_profit_pct?: number; trailing_active?: boolean }
+                const slPct = ext.stop_loss_pct ?? 0.08
+                const tpPct = ext.take_profit_pct ?? 0.20
                 return (
-                  <tr key={p.symbol} className="border-b border-gray-800/50">
+                  <tr key={p.symbol} className={`border-b border-gray-800/50 ${isActive ? '' : 'opacity-60'}`}>
                     <td className="py-2 font-medium">
                       {p.symbol}
                       {p.name && <span className="text-gray-500 text-xs ml-1">{p.name}</span>}
@@ -109,7 +155,15 @@ export default function Dashboard() {
                       <PnLText value={pnl} currency={cur} />
                     </td>
                     <td className="text-right">
-                      <PnLText value={pnlPct} currency={cur} />
+                      <PctText value={pnlPct} />
+                    </td>
+                    <td className="text-right text-xs text-gray-500">
+                      <span className="text-red-400/70">-{(slPct * 100).toFixed(0)}%</span>
+                      {' / '}
+                      <span className="text-green-400/70">+{(tpPct * 100).toFixed(0)}%</span>
+                      {ext.trailing_active && (
+                        <span className="ml-1 text-yellow-400/70" title="Trailing stop active">T</span>
+                      )}
                     </td>
                   </tr>
                 )
@@ -136,31 +190,70 @@ function MarketStateCard() {
     refetchInterval: 60_000,
   })
 
+  const phaseColor = (phase: string) => {
+    if (phase === 'regular') return 'text-green-400'
+    if (phase === 'pre_market') return 'text-blue-400'
+    if (phase === 'after_hours') return 'text-orange-400'
+    return 'text-gray-400'
+  }
+
   return (
     <div className="bg-gray-900 rounded-lg p-4">
       <h2 className="text-sm font-semibold text-gray-300 uppercase tracking-wide mb-3">Market State</h2>
       {isLoading && <p className="text-gray-500 text-sm">Loading...</p>}
       {marketState && (
-        <div className="grid grid-cols-2 gap-3 text-sm">
+        <div className="space-y-3">
+          {/* US Market */}
           <div>
-            <span className="text-gray-500">Phase</span>
-            <p className="text-white font-medium">{marketState.market_phase ?? '-'}</p>
+            <div className="text-xs text-blue-400 font-medium mb-1">US Market</div>
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              <div>
+                <span className="text-gray-500">Phase</span>
+                <p className={`font-medium ${phaseColor(marketState.market_phase ?? '')}`}>
+                  {marketState.market_phase ?? '-'}
+                </p>
+              </div>
+              <div>
+                <span className="text-gray-500">Regime</span>
+                <p className="text-white font-medium">{marketState.regime ?? '-'}</p>
+              </div>
+              <div>
+                <span className="text-gray-500">SPY</span>
+                <p className="text-white font-medium">
+                  {marketState.spy_price != null ? `$${Number(marketState.spy_price).toFixed(2)}` : '-'}
+                </p>
+              </div>
+              <div>
+                <span className="text-gray-500">VIX</span>
+                <p className="text-white font-medium">
+                  {marketState.vix_level != null ? Number(marketState.vix_level).toFixed(2) : '-'}
+                </p>
+              </div>
+            </div>
           </div>
-          <div>
-            <span className="text-gray-500">Regime</span>
-            <p className="text-white font-medium">{marketState.regime ?? '-'}</p>
-          </div>
-          <div>
-            <span className="text-gray-500">SPY Price</span>
-            <p className="text-white font-medium">
-              {marketState.spy_price != null ? `$${Number(marketState.spy_price).toFixed(2)}` : '-'}
-            </p>
-          </div>
-          <div>
-            <span className="text-gray-500">VIX Level</span>
-            <p className="text-white font-medium">
-              {marketState.vix_level != null ? Number(marketState.vix_level).toFixed(2) : '-'}
-            </p>
+          {/* KR Market */}
+          <div className="border-t border-gray-800 pt-2">
+            <div className="text-xs text-purple-400 font-medium mb-1">KR Market</div>
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              <div>
+                <span className="text-gray-500">Phase</span>
+                <p className={`font-medium ${phaseColor(marketState.kr_market_phase ?? '')}`}>
+                  {marketState.kr_market_phase ?? '-'}
+                </p>
+              </div>
+              <div>
+                <span className="text-gray-500">Regime</span>
+                <p className="text-white font-medium">{marketState.kr_regime ?? '-'}</p>
+              </div>
+              {marketState.kr_index_price != null && (
+                <div>
+                  <span className="text-gray-500">KODEX 200</span>
+                  <p className="text-white font-medium">
+                    ₩{Number(marketState.kr_index_price).toLocaleString()}
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

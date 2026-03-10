@@ -172,6 +172,8 @@ class OrderManager:
                 await self._notification.notify_trade_executed(
                     symbol, "BUY", sizing.quantity, price, strategy_name,
                     market=self._market,
+                    stop_loss_pct=self._risk.params.default_stop_loss_pct,
+                    take_profit_pct=self._risk.params.default_take_profit_pct,
                 )
             if _trade_recorder:
                 _trade_recorder({
