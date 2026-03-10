@@ -13,14 +13,9 @@ import type {
   ETFStatus,
 } from '../types'
 
-const apiToken = import.meta.env.VITE_API_TOKEN ?? ''
-
 const api = axios.create({
   baseURL: '/api/v1',
   timeout: 15_000,
-  ...(apiToken && {
-    headers: { Authorization: `Bearer ${apiToken}` },
-  }),
 })
 
 // Portfolio
@@ -143,3 +138,16 @@ export const runEvaluation = () =>
 // ETF Engine
 export const fetchETFStatus = (market = 'US') =>
   api.get<ETFStatus>(market === 'KR' ? '/engine/etf/kr' : '/engine/etf').then(r => r.data)
+
+// Signals
+export interface SignalEntry {
+  timestamp: string
+  symbol: string
+  signal: string
+  confidence: number
+  strategy: string
+  market_state: string
+  market: string
+}
+export const fetchSignals = (market = 'ALL', limit = 100) =>
+  api.get<SignalEntry[]>('/engine/signals', { params: { market, limit } }).then(r => r.data)

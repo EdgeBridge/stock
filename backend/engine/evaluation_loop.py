@@ -90,13 +90,30 @@ class EvaluationLoop:
         # Recovery watch: recently sold symbols get re-evaluated for re-entry
         self._recovery_watch: dict[str, float] = {}  # {symbol: timestamp_when_sold}
         self._recovery_watch_secs = 30 * 86400  # 30 days
+        # Recent signals buffer for frontend display (last N signals)
+        from collections import deque
+        self._recent_signals: deque[dict] = deque(maxlen=200)
 
     @property
     def running(self) -> bool:
         return self._running
 
+    # ETF-only symbols that should NOT be traded by the stock combiner.
+    # These are managed exclusively by the ETF Engine.
+    _ETF_ONLY = frozenset({
+        # Leveraged / inverse
+        "TQQQ", "SQQQ", "UPRO", "SPXU", "SOXL", "SOXS", "TECL", "TECS",
+        "FAS", "ERX", "LABU", "SARK",
+        # Volatility products (structural decay on long hold)
+        "VXX", "UVXY", "SVXY",
+        # Safe-haven / non-equity
+        "SHY", "TLT", "GLD", "UUP",
+        # Index ETFs (benchmark, not for active trading)
+        "SPY", "QQQ", "SOXX", "ARKK",
+    })
+
     def set_watchlist(self, symbols: list[str]) -> None:
-        self._watchlist = symbols
+        self._watchlist = [s for s in symbols if s not in self._ETF_ONLY]
 
     def set_market_state(self, state: str) -> None:
         self._prev_market_state = self._market_state
@@ -261,6 +278,19 @@ class EvaluationLoop:
                         symbol, category.value, combined.signal_type.value,
                         combined.confidence,
                     )
+
+                # Log signal for frontend visibility
+                if combined.signal_type in (SignalType.BUY, SignalType.SELL):
+                    from datetime import datetime, timezone
+                    self._recent_signals.append({
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "symbol": symbol,
+                        "signal": combined.signal_type.value,
+                        "confidence": round(combined.confidence, 3),
+                        "strategy": combined.strategy_name,
+                        "market_state": self._market_state,
+                        "market": self._market,
+                    })
 
                 # SELLs execute immediately (no competition for cash)
                 if combined.signal_type == SignalType.SELL:

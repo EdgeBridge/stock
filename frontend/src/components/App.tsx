@@ -14,15 +14,17 @@ import PortfolioChart from './PortfolioChart'
 import SectorHeatmap from './SectorHeatmap'
 import StrategyPerformance from './StrategyPerformance'
 import ETFPanel from './ETFPanel'
+import SignalPanel from './SignalPanel'
 import clsx from 'clsx'
 
-type Tab = 'dashboard' | 'positions' | 'trades' | 'chart' | 'strategies' | 'scanner' | 'watchlist' | 'logs' | 'backtest' | 'optimize' | 'portfolio' | 'sectors' | 'performance' | 'etf'
+type Tab = 'dashboard' | 'positions' | 'trades' | 'signals' | 'chart' | 'strategies' | 'scanner' | 'watchlist' | 'logs' | 'backtest' | 'optimize' | 'portfolio' | 'sectors' | 'performance' | 'etf'
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'portfolio', label: 'Portfolio' },
   { key: 'positions', label: 'Positions' },
   { key: 'trades', label: 'Trades' },
+  { key: 'signals', label: 'Signals' },
   { key: 'chart', label: 'Chart' },
   { key: 'strategies', label: 'Strategies' },
   { key: 'performance', label: 'Performance' },
@@ -68,6 +70,7 @@ export default function App() {
         {tab === 'dashboard' && <Dashboard />}
         {tab === 'positions' && <PositionList />}
         {tab === 'trades' && <TradeHistory />}
+        {tab === 'signals' && <SignalPanel />}
         {tab === 'chart' && <StockChart />}
         {tab === 'strategies' && <StrategyPanel />}
         {tab === 'scanner' && <ScannerPanel />}

@@ -90,12 +90,6 @@ class ExternalDataConfig(BaseSettings):
     model_config = {"env_prefix": "EXTERNAL_"}
 
 
-class AuthConfig(BaseSettings):
-    api_token: str = ""  # Bearer token for API auth; empty = auth disabled
-
-    model_config = {"env_prefix": "AUTH_"}
-
-
 class AppConfig:
     def __init__(self) -> None:
         self.kis = KISConfig()
@@ -107,7 +101,6 @@ class AppConfig:
         self.notification = NotificationConfig()
         self.llm = LLMConfig()
         self.external = ExternalDataConfig()
-        self.auth = AuthConfig()
 
     @property
     def is_live(self) -> bool:

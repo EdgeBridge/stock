@@ -300,6 +300,24 @@ async def kr_etf_engine_status(request: Request):
     return status
 
 
+@router.get("/signals")
+async def recent_signals(request: Request, market: str = "ALL", limit: int = 100):
+    """Get recent strategy signals (BUY/SELL) from evaluation loops."""
+    signals = []
+    for attr in ("evaluation_loop", "kr_evaluation_loop"):
+        loop = getattr(request.app.state, attr, None)
+        if loop and hasattr(loop, "_recent_signals"):
+            signals.extend(loop._recent_signals)
+
+    # Filter by market
+    if market != "ALL":
+        signals = [s for s in signals if s.get("market") == market]
+
+    # Sort newest first
+    signals.sort(key=lambda s: s["timestamp"], reverse=True)
+    return signals[:limit]
+
+
 @router.get("/analytics/factors")
 async def factor_scores(request: Request):
     """Get current factor model scores for watchlist stocks."""
