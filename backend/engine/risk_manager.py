@@ -118,6 +118,11 @@ class RiskManager:
                 allowed=False,
             )
 
+        # Check total exposure limit
+        reject = self._check_exposure_limit(portfolio_value, cash_available)
+        if reject:
+            return reject
+
         # Check daily loss limit
         if self._daily_pnl < 0:
             daily_loss_pct = abs(self._daily_pnl) / portfolio_value
@@ -131,9 +136,10 @@ class RiskManager:
         # Max allocation per position
         max_alloc = portfolio_value * self._params.max_position_pct
 
-        # Respect cash available (with buffer)
+        # Respect cash available (with buffer) — also respect exposure headroom
         max_from_cash = cash_available * 0.95
-        allocation = min(max_alloc, max_from_cash)
+        exposure_headroom = self._get_exposure_headroom(portfolio_value, cash_available)
+        allocation = min(max_alloc, max_from_cash, exposure_headroom)
 
         if allocation <= 0 or price <= 0:
             return PositionSizeResult(
@@ -192,6 +198,11 @@ class RiskManager:
                 allowed=False,
             )
 
+        # Check total exposure limit
+        reject = self._check_exposure_limit(portfolio_value, cash_available)
+        if reject:
+            return reject
+
         if self._daily_pnl < 0:
             daily_loss_pct = abs(self._daily_pnl) / portfolio_value
             if daily_loss_pct >= self._params.daily_loss_limit_pct:
@@ -200,6 +211,9 @@ class RiskManager:
                     reason=f"Daily loss limit hit ({daily_loss_pct:.1%})",
                     allowed=False,
                 )
+
+        # Calculate exposure headroom for capping allocations
+        exposure_headroom = self._get_exposure_headroom(portfolio_value, cash_available)
 
         # Try Kelly sizing if we have trade history
         if win_rate > 0 and avg_win > 0 and avg_loss > 0:
@@ -214,7 +228,7 @@ class RiskManager:
 
             if kelly_result.final_allocation_pct > 0:
                 allocation = portfolio_value * kelly_result.final_allocation_pct
-                allocation = min(allocation, cash_available * 0.95)
+                allocation = min(allocation, cash_available * 0.95, exposure_headroom)
 
                 if allocation > 0 and price > 0:
                     quantity = int(allocation / price)
@@ -253,7 +267,7 @@ class RiskManager:
         adjusted_pct = min(adjusted_pct, self._params.max_position_pct)
 
         allocation = portfolio_value * adjusted_pct
-        allocation = min(allocation, cash_available * 0.95)
+        allocation = min(allocation, cash_available * 0.95, exposure_headroom)
 
         if allocation <= 0 or price <= 0:
             return PositionSizeResult(
@@ -277,6 +291,32 @@ class RiskManager:
             reason=f"Fixed+factors (conf={conf_mult:.2f}, factor={factor_mult:.2f})",
             allowed=True,
         )
+
+    def _check_exposure_limit(
+        self, portfolio_value: float, cash_available: float,
+    ) -> PositionSizeResult | None:
+        """Return rejection result if total exposure exceeds limit."""
+        if portfolio_value <= 0:
+            return None
+        invested = portfolio_value - cash_available
+        exposure = invested / portfolio_value
+        if exposure >= self._params.max_total_exposure_pct:
+            return PositionSizeResult(
+                quantity=0, allocation_usd=0, risk_per_share=0,
+                reason=f"Max exposure reached ({exposure:.0%} >= {self._params.max_total_exposure_pct:.0%})",
+                allowed=False,
+            )
+        return None
+
+    def _get_exposure_headroom(
+        self, portfolio_value: float, cash_available: float,
+    ) -> float:
+        """How much more can be invested before hitting exposure limit."""
+        if portfolio_value <= 0:
+            return 0.0
+        max_invested = portfolio_value * self._params.max_total_exposure_pct
+        current_invested = portfolio_value - cash_available
+        return max(0.0, max_invested - current_invested)
 
     def check_stop_loss(
         self, entry_price: float, current_price: float, stop_loss_pct: float | None = None

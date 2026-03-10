@@ -60,10 +60,33 @@ class TestPositionSizing:
         rm = RiskManager(RiskParams(max_position_pct=0.50))
         result = rm.calculate_position_size(
             symbol="AAPL", price=150.0,
-            portfolio_value=100_000, cash_available=5_000,
+            portfolio_value=100_000, cash_available=30_000,
             current_positions=0,
         )
         assert result.allowed is True
+        assert result.allocation_usd <= 30_000
+
+    def test_exposure_limit_blocks_buy(self):
+        rm = RiskManager(RiskParams(max_total_exposure_pct=0.90))
+        result = rm.calculate_position_size(
+            symbol="AAPL", price=150.0,
+            portfolio_value=100_000, cash_available=5_000,  # 95% invested
+            current_positions=0,
+        )
+        assert result.allowed is False
+        assert "exposure" in result.reason.lower()
+
+    def test_exposure_headroom_caps_allocation(self):
+        rm = RiskManager(RiskParams(max_position_pct=0.10, max_total_exposure_pct=0.90))
+        result = rm.calculate_position_size(
+            symbol="AAPL", price=150.0,
+            portfolio_value=100_000, cash_available=15_000,  # 85% invested, 5% headroom
+            current_positions=0,
+        )
+        assert result.allowed is True
+        # Max exposure headroom = 90% - 85% = 5% = 5,000
+        # Per-position max = 10% = 10,000
+        # Should be capped by headroom
         assert result.allocation_usd <= 5_000
 
 
