@@ -273,7 +273,7 @@ class TestFetchPendingOrders:
                     "sll_buy_dvsn_cd": "02",  # buy
                     "ord_qty": "100",
                     "ord_unpr": "72000",
-                    "nccs_qty": "50",  # 50 unfilled
+                    "psbl_qty": "50",  # 50 unfilled/cancellable
                 },
                 {
                     "odno": "0001234568",
@@ -281,7 +281,7 @@ class TestFetchPendingOrders:
                     "sll_buy_dvsn_cd": "01",  # sell
                     "ord_qty": "10",
                     "ord_unpr": "310000",
-                    "nccs_qty": "0",  # fully filled, should be excluded
+                    "psbl_qty": "0",  # fully filled, should be excluded
                 },
             ],
         })

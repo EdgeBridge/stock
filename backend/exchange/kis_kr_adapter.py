@@ -403,11 +403,19 @@ class KISKRAdapter(ExchangeAdapter):
             self._tr["PENDING_ORDERS"],
             params,
         )
+        raw_output = data.get("output", [])
+        if raw_output:
+            logger.info(
+                "KR pending orders raw: %d items, first=%s",
+                len(raw_output),
+                {k: v for k, v in raw_output[0].items() if v and v != "0"} if raw_output else {},
+            )
         results = []
-        for item in data.get("output", []):
+        for item in raw_output:
             qty = float(item.get("ord_qty", 0))
-            nccs = float(item.get("nccs_qty", 0))
-            if nccs <= 0:
+            # psbl_qty = 취소가능수량 (cancellable/unfilled quantity)
+            psbl = float(item.get("psbl_qty", 0))
+            if psbl <= 0:
                 continue
             results.append(
                 OrderResult(
@@ -417,7 +425,7 @@ class KISKRAdapter(ExchangeAdapter):
                     order_type="limit",
                     quantity=qty,
                     price=float(item.get("ord_unpr", 0)),
-                    filled_quantity=qty - nccs,
+                    filled_quantity=qty - psbl,
                     status="open",
                 )
             )
