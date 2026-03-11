@@ -91,7 +91,7 @@ class EvaluationLoop:
         self._news_sentiment: dict[str, float] = {}  # symbol -> sentiment (-1 to +1)
         # Recovery watch: recently sold symbols get re-evaluated for re-entry
         self._recovery_watch: dict[str, float] = {}  # {symbol: timestamp_when_sold}
-        self._recovery_watch_secs = 30 * 86400  # 30 days
+        self._recovery_watch_secs = 7 * 86400  # 7 days
         # Recent signals buffer for frontend display (last N signals)
         from collections import deque
         self._recent_signals: deque[dict] = deque(maxlen=200)
