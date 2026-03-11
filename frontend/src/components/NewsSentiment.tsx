@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNewsSentiment } from '../hooks/useApi'
 import { fetchStockNames } from '../api/client'
 import type { SentimentSummary, SentimentSignal } from '../api/client'
+import { useMarket } from '../contexts/MarketContext'
 
 function sentimentColor(v: number): string {
   if (v >= 0.3) return 'text-green-400'
@@ -226,7 +227,7 @@ function SentimentPanel({ summary, signals, symbolList, sectorList, updatedAt, n
 
 export default function NewsSentiment() {
   const { data, isLoading } = useNewsSentiment()
-  const [market, setMarket] = useState<'US' | 'KR'>('US')
+  const { market } = useMarket()
   const [names, setNames] = useState<Record<string, string>>({})
 
   // Resolve stock names when data changes
@@ -309,24 +310,8 @@ export default function NewsSentiment() {
 
   return (
     <div className="space-y-4">
-      {/* Header with market toggle */}
-      <div className="flex items-center gap-3">
-        <h2 className="text-lg font-semibold">News Sentiment</h2>
-        <div className="flex rounded-md overflow-hidden border border-gray-700">
-          <button
-            onClick={() => setMarket('US')}
-            className={`px-3 py-1 text-xs font-medium ${market === 'US' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
-          >
-            US {hasUs ? '' : '(-)'}
-          </button>
-          <button
-            onClick={() => setMarket('KR')}
-            className={`px-3 py-1 text-xs font-medium ${market === 'KR' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
-          >
-            KR {hasKr ? '' : '(-)'}
-          </button>
-        </div>
-      </div>
+      {/* Header */}
+      <h2 className="text-lg font-semibold">News Sentiment</h2>
 
       {activeData && activeData.updated_at ? (
         <SentimentPanel

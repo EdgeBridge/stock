@@ -17,6 +17,7 @@ import ETFPanel from './ETFPanel'
 import SignalPanel from './SignalPanel'
 import NewsSentiment from './NewsSentiment'
 import EventsCalendar from './EventsCalendar'
+import MarketToggle from './MarketToggle'
 import clsx from 'clsx'
 
 type Tab = 'dashboard' | 'positions' | 'trades' | 'signals' | 'chart' | 'strategies' | 'scanner' | 'watchlist' | 'logs' | 'backtest' | 'optimize' | 'portfolio' | 'sectors' | 'performance' | 'etf' | 'sentiment'
@@ -83,7 +84,7 @@ export default function App() {
         {tab === 'portfolio' && <PortfolioChart />}
         {tab === 'sectors' && <SectorHeatmap />}
         {tab === 'performance' && <StrategyPerformance />}
-        {tab === 'sentiment' && <><NewsSentiment /><div className="mt-6"><EventsCalendar /></div></>}
+        {tab === 'sentiment' && <><div className="flex items-center justify-between mb-4"><h2 className="text-lg font-semibold">Sentiment & Events</h2><MarketToggle /></div><NewsSentiment /><div className="mt-6"><EventsCalendar /></div></>}
         {tab === 'etf' && <ETFPanel />}
         {tab === 'logs' && <LogPanel />}
       </main>

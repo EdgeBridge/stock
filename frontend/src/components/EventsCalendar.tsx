@@ -1,6 +1,5 @@
 import { useMarketEvents } from '../hooks/useApi'
 import { useMarket } from '../contexts/MarketContext'
-import MarketToggle from './MarketToggle'
 
 function eventBadge(type: string) {
   const cls = type === 'FOMC' || type === 'BOK'
@@ -33,24 +32,14 @@ export default function EventsCalendar() {
 
   if (!hasData) {
     return (
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-gray-300">Events Calendar</h2>
-          <MarketToggle />
-        </div>
-        <div className="bg-gray-900 rounded-lg p-6 text-center">
-          <p className="text-gray-500">No event data available. Refreshes daily pre-market.</p>
-        </div>
+      <div className="bg-gray-900 rounded-lg p-6 text-center">
+        <p className="text-gray-500">No event data available. Refreshes daily pre-market.</p>
       </div>
     )
   }
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-gray-300">Events Calendar</h2>
-        <MarketToggle />
-      </div>
 
       {/* Macro Events */}
       {macro.length > 0 && (
