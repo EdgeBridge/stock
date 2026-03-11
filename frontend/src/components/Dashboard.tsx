@@ -21,9 +21,14 @@ export default function Dashboard() {
   const { data: summary, isLoading } = usePortfolioSummary()
   const { data: positions } = usePositions()
   const { data: engineStatus } = useEngineStatus()
-  const { data: tradeSummary } = useQuery({
-    queryKey: ['portfolio', 'trade-summary'],
-    queryFn: () => fetchTradeSummaryPeriods(),
+  const { data: usTradeSummary } = useQuery({
+    queryKey: ['portfolio', 'trade-summary', 'US'],
+    queryFn: () => fetchTradeSummaryPeriods('US'),
+    refetchInterval: 60_000,
+  })
+  const { data: krTradeSummary } = useQuery({
+    queryKey: ['portfolio', 'trade-summary', 'KR'],
+    queryFn: () => fetchTradeSummaryPeriods('KR'),
     refetchInterval: 60_000,
   })
   const symbols = useMemo(
@@ -97,12 +102,12 @@ export default function Dashboard() {
       </div>
 
       {/* Realized P&L by Period */}
-      {tradeSummary && (
+      {(usTradeSummary || krTradeSummary) && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <PnLCard label="Today" data={tradeSummary.today} />
-          <PnLCard label="This Week" data={tradeSummary.week} />
-          <PnLCard label="This Month" data={tradeSummary.month} />
-          <PnLCard label="All Time" data={tradeSummary.all_time} />
+          <PnLCard label="Today" us={usTradeSummary?.today} kr={krTradeSummary?.today} rate={rate} />
+          <PnLCard label="This Week" us={usTradeSummary?.week} kr={krTradeSummary?.week} rate={rate} />
+          <PnLCard label="This Month" us={usTradeSummary?.month} kr={krTradeSummary?.month} rate={rate} />
+          <PnLCard label="All Time" us={usTradeSummary?.all_time} kr={krTradeSummary?.all_time} rate={rate} />
         </div>
       )}
 
@@ -343,18 +348,30 @@ function Card({ title, value, sub }: { title: string; value: React.ReactNode; su
   )
 }
 
-function PnLCard({ label, data }: { label: string; data: { pnl: number; trades: number; wins: number; losses: number; win_rate: number } }) {
-  const color = data.pnl >= 0 ? 'text-green-400' : 'text-red-400'
-  const sign = data.pnl >= 0 ? '+' : ''
+interface PeriodData { pnl: number; trades: number; wins: number; losses: number; win_rate: number }
+
+function PnLCard({ label, us, kr, rate }: { label: string; us?: PeriodData; kr?: PeriodData; rate: number }) {
+  const usPnl = us?.pnl ?? 0
+  const krPnl = kr?.pnl ?? 0
+  const totalKrw = krPnl + usPnl * rate
+  const totalTrades = (us?.trades ?? 0) + (kr?.trades ?? 0)
+  const totalWins = (us?.wins ?? 0) + (kr?.wins ?? 0)
+  const totalLosses = (us?.losses ?? 0) + (kr?.losses ?? 0)
+
+  const color = totalKrw >= 0 ? 'text-green-400' : 'text-red-400'
+  const sign = totalKrw >= 0 ? '+' : ''
+
   return (
     <div className="bg-gray-900 rounded-lg p-4">
       <div className="text-xs text-gray-400 uppercase tracking-wide">{label}</div>
       <div className={`text-xl font-bold mt-1 ${color}`}>
-        {data.trades > 0 ? `${sign}${formatCurrency(data.pnl, 'USD')}` : '—'}
+        {totalTrades > 0 ? `${sign}${formatCurrency(totalKrw, 'KRW')}` : '—'}
       </div>
-      {data.trades > 0 && (
-        <div className="text-xs text-gray-500 mt-0.5">
-          {data.trades} trades · WR {data.win_rate.toFixed(0)}% ({data.wins}W/{data.losses}L)
+      {totalTrades > 0 && (
+        <div className="text-xs text-gray-500 mt-0.5 space-y-0.5">
+          <div>{totalTrades} trades · {totalWins}W/{totalLosses}L</div>
+          {(kr?.trades ?? 0) > 0 && <div>KR {formatCurrency(krPnl, 'KRW')}</div>}
+          {(us?.trades ?? 0) > 0 && <div>US {formatCurrency(usPnl, 'USD')}</div>}
         </div>
       )}
     </div>
