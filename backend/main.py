@@ -989,13 +989,15 @@ async def lifespan(app: FastAPI):
     async def task_news_analysis():
         """Fetch Finnhub news and run LLM sentiment analysis.
 
-        Runs hourly during regular hours. Results are cached on the
-        scanner pipeline for use in the next scan cycle.
+        Runs pre-market (once) + every 30min during regular hours.
+        Results cached on scanner pipeline + API endpoint.
         """
         if not news_service.available:
             return
         try:
             from db.trade_repository import TradeRepository
+            from api.news import update_sentiment_cache
+
             # Get current watchlist symbols
             async with session_factory() as session:
                 repo = TradeRepository(session)
@@ -1031,6 +1033,12 @@ async def lifespan(app: FastAPI):
                     summary.market_sentiment, actionable,
                 )
 
+                # Cache for API endpoint
+                update_sentiment_cache(
+                    summary.to_dict(),
+                    [s.to_dict() for s in summary.actionable_signals],
+                )
+
                 # Feed sentiment to evaluation loop for protective sells
                 if summary.symbol_sentiments:
                     evaluation_loop.update_news_sentiment(summary.symbol_sentiments)
@@ -1054,7 +1062,7 @@ async def lifespan(app: FastAPI):
 
     scheduler.add_task(
         "news_analysis", task_news_analysis,
-        interval_sec=3600, phases=[MarketPhase.REGULAR],
+        interval_sec=1800, phases=[MarketPhase.PRE_MARKET, MarketPhase.REGULAR],
     )
 
     # ── KR market tasks ──────────────────────────────────────────────

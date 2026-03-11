@@ -124,3 +124,11 @@ export function useETFStatus(market = 'US') {
     refetchInterval: 30_000,
   })
 }
+
+export function useNewsSentiment() {
+  return useQuery({
+    queryKey: ['news', 'sentiment'],
+    queryFn: api.fetchNewsSentiment,
+    refetchInterval: 60_000,
+  })
+}

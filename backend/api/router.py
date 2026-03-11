@@ -11,6 +11,7 @@ from api.watchlist import router as watchlist_router
 from api.ws import router as ws_router
 from api.trades import router as trades_router
 from api.backtest_api import router as backtest_router
+from api.news import router as news_router
 
 api_router = APIRouter()
 
@@ -23,3 +24,4 @@ api_router.include_router(watchlist_router)
 api_router.include_router(trades_router)
 api_router.include_router(backtest_router)
 api_router.include_router(ws_router)
+api_router.include_router(news_router)

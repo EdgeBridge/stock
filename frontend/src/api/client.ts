@@ -158,6 +158,32 @@ export interface TradeSummaryPeriods {
 export const fetchTradeSummaryPeriods = (market?: string) =>
   api.get<TradeSummaryPeriods>('/portfolio/trade-summary', { params: { ...(market && { market }) } }).then(r => r.data)
 
+// News Sentiment
+export interface SentimentSignal {
+  symbol: string
+  sentiment: number
+  impact: string
+  category: string
+  sector_impact: string[]
+  key_event: string
+  trading_signal: string
+  time_sensitivity: string
+  is_actionable: boolean
+}
+export interface NewsSentimentData {
+  summary: {
+    symbol_sentiments: Record<string, number>
+    sector_sentiments: Record<string, number>
+    market_sentiment: number
+    actionable_count: number
+    analyzed_count: number
+  }
+  signals: SentimentSignal[]
+  updated_at: string | null
+}
+export const fetchNewsSentiment = () =>
+  api.get<NewsSentimentData>('/news/sentiment').then(r => r.data)
+
 // Signals
 export interface SignalEntry {
   timestamp: string
