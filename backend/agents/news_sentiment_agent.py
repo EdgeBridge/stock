@@ -145,8 +145,8 @@ class NewsSentimentAgent:
         if not self._llm_client or not articles:
             return NewsSentimentSummary()
 
-        # Chunk articles to fit token limits (roughly 20 per chunk)
-        chunk_size = 20
+        # Chunk articles (10 per chunk — keeps LLM output within token limits)
+        chunk_size = 10
         all_results: list[SentimentResult] = []
 
         for i in range(0, len(articles), chunk_size):
@@ -187,7 +187,7 @@ class NewsSentimentAgent:
             response = await self._llm_client.generate(
                 messages=[{"role": "user", "content": prompt}],
                 system=SYSTEM_PROMPT,
-                max_tokens=2048,
+                max_tokens=4096,
                 model=self._model_override,
             )
             return self._parse_response(response.text or "")
@@ -239,6 +239,32 @@ class NewsSentimentAgent:
         )
         return "\n".join(parts)
 
+    @staticmethod
+    def _try_parse_json(text: str) -> list | None:
+        """Try to parse JSON, recovering from truncated output."""
+        text = text.strip()
+        try:
+            data = json.loads(text)
+            return data if isinstance(data, list) else [data]
+        except json.JSONDecodeError:
+            pass
+
+        # Try recovering truncated JSON array: find last complete object
+        if text.startswith("["):
+            # Find last '}' and close the array
+            last_brace = text.rfind("}")
+            if last_brace > 0:
+                truncated = text[:last_brace + 1] + "]"
+                try:
+                    data = json.loads(truncated)
+                    if isinstance(data, list):
+                        logger.debug("Recovered %d items from truncated JSON", len(data))
+                        return data
+                except json.JSONDecodeError:
+                    pass
+
+        return None
+
     def _parse_response(self, text: str) -> list[SentimentResult]:
         """Parse LLM JSON array response into SentimentResult list."""
         try:
@@ -248,9 +274,10 @@ class NewsSentimentAgent:
             elif "```" in text:
                 json_str = text.split("```")[1].split("```")[0]
 
-            data = json.loads(json_str.strip())
-            if not isinstance(data, list):
-                data = [data]
+            data = self._try_parse_json(json_str)
+            if data is None:
+                logger.warning("Failed to parse news sentiment response (unrecoverable)")
+                return []
 
             results = []
             for item in data:
@@ -273,7 +300,7 @@ class NewsSentimentAgent:
 
             return results
 
-        except (json.JSONDecodeError, IndexError) as e:
+        except (IndexError, KeyError) as e:
             logger.warning("Failed to parse news sentiment response: %s", e)
             return []
 

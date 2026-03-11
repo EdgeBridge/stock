@@ -221,12 +221,12 @@ class TestNewsSentimentAgent:
         client = _make_llm_client(response)
         agent = NewsSentimentAgent(llm_client=client)
 
-        # 25 articles > chunk_size of 20
+        # 25 articles > chunk_size of 10
         articles = _make_articles(25)
         result = await agent.analyze_batch(articles)
 
-        # Should have made 2 LLM calls (20 + 5)
-        assert client.generate.call_count == 2
+        # Should have made 3 LLM calls (10 + 10 + 5)
+        assert client.generate.call_count == 3
         assert result.analyzed_count == 25
 
 
