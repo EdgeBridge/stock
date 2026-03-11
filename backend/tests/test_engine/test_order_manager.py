@@ -278,7 +278,7 @@ class TestPartialFill:
         )
         assert order is not None
         assert order.filled_quantity == 60
-        assert order.quantity == 66  # risk-sized quantity
+        assert order.quantity == 46  # risk-sized quantity (7% regime cap at uptrend)
 
     async def test_zero_fill_tracked(self, mock_adapter, risk_manager):
         mock_adapter.create_buy_order = AsyncMock(return_value=OrderResult(

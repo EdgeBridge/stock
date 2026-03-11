@@ -309,8 +309,8 @@ class TestConfidenceBasedSizing:
             current_positions=0, signal_confidence=0.0,
         )
         assert result.allowed
-        # Should get a much smaller position than max (10%)
-        assert result.allocation_usd < 100_000 * 0.06
+        # Should get a much smaller position than max (7%)
+        assert result.allocation_usd < 100_000 * 0.04
 
     def test_full_confidence_gets_near_max(self):
         rm = RiskManager()
@@ -320,5 +320,5 @@ class TestConfidenceBasedSizing:
             current_positions=0, signal_confidence=1.0,
         )
         assert result.allowed
-        # Should be close to max position (10%)
-        assert result.allocation_usd >= 100_000 * 0.09
+        # Should be close to max regime position (7% for uptrend)
+        assert result.allocation_usd >= 100_000 * 0.06

@@ -38,10 +38,10 @@ class PositionSizeResult:
 
 # Regime-adaptive position sizing and exposure
 REGIME_POSITION_PCT: dict[str, float] = {
-    "strong_uptrend": 0.15,  # Concentrate on winners
-    "uptrend": 0.10,
-    "sideways": 0.08,
-    "downtrend": 0.05,       # Defensive
+    "strong_uptrend": 0.08,  # Max per position (diversified)
+    "uptrend": 0.07,
+    "sideways": 0.06,
+    "downtrend": 0.04,       # Defensive
 }
 REGIME_EXPOSURE_PCT: dict[str, float] = {
     "strong_uptrend": 0.95,

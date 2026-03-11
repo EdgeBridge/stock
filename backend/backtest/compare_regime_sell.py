@@ -1,4 +1,4 @@
-"""Compare full pipeline backtest: default vs tuned parameters.
+"""Compare full pipeline backtest: SL/TP strategies.
 
 Usage:
     cd backend && python -m backtest.compare_regime_sell [period]
@@ -40,94 +40,67 @@ async def main():
         universe=list(TEST_UNIVERSE),
         initial_equity=100_000,
         enable_regime_sells=True,
+        min_active_ratio=0.05,
+        min_confidence=0.35,
+        min_screen_grade="C",
+        screen_interval=10,
+        max_positions=10,
+        max_watchlist=25,
+        max_position_pct=0.15,
+        max_exposure_pct=0.95,
+        kelly_fraction=0.40,
+        confidence_exponent=1.2,
+        min_position_pct=0.05,
+        recovery_watch_days=30,
     )
 
-    # ── A: Current best (WIDE_TP) ────────────────────────────────
+    # ── A: Current best — ATR dynamic SL/TP (default) ──────────────
     cfg_a = PipelineConfig(
         **base,
-        min_active_ratio=0.05,
-        min_confidence=0.35,
-        min_screen_grade="C",
-        screen_interval=10,
-        max_positions=10,
-        max_watchlist=25,
-        max_position_pct=0.15,
-        max_exposure_pct=0.95,
-        kelly_fraction=0.40,
-        confidence_exponent=1.2,
-        min_position_pct=0.05,
+        dynamic_sl_tp=True,
         default_stop_loss_pct=0.12,
         default_take_profit_pct=0.50,
-        recovery_watch_days=30,
     )
 
-    # ── B: Park in QQQ instead of SPY ────────────────────────────
+    # ── B: Fixed 12% SL / 50% TP (no ATR) ──────────────────────────
     cfg_b = PipelineConfig(
         **base,
-        min_active_ratio=0.05,
-        min_confidence=0.35,
-        min_screen_grade="C",
-        screen_interval=10,
-        max_positions=10,
-        max_watchlist=25,
-        max_position_pct=0.15,
-        max_exposure_pct=0.95,
-        kelly_fraction=0.40,
-        confidence_exponent=1.2,
-        min_position_pct=0.05,
+        dynamic_sl_tp=False,
         default_stop_loss_pct=0.12,
         default_take_profit_pct=0.50,
-        recovery_watch_days=30,
-        enable_cash_parking=True,
-        cash_parking_symbol="QQQ",
-        cash_parking_threshold=0.15,
     )
 
-    # ── C: Ultra aggressive: 25% positions, 5 max, 60% Kelly ────
+    # ── C: Fixed tighter 8% SL / 20% TP ────────────────────────────
     cfg_c = PipelineConfig(
         **base,
-        min_active_ratio=0.05,
-        min_confidence=0.30,          # lower bar
-        min_screen_grade="C",
-        screen_interval=10,
-        max_positions=5,
-        max_watchlist=25,
-        max_position_pct=0.25,        # 25% per position!
-        max_exposure_pct=0.95,
-        kelly_fraction=0.60,          # 60% Kelly
-        confidence_exponent=1.0,      # no penalty
-        min_position_pct=0.10,        # 10% minimum
-        default_stop_loss_pct=0.15,
-        default_take_profit_pct=9.99, # no TP
-        recovery_watch_days=30,
-        enable_cash_parking=True,
-        cash_parking_symbol="QQQ",
-        cash_parking_threshold=0.15,
+        dynamic_sl_tp=False,
+        default_stop_loss_pct=0.08,
+        default_take_profit_pct=0.20,
     )
 
-    # ── D: Like C but 8 positions + 20% max ──────────────────────
+    # ── D: Fixed 8% SL / 30% TP ────────────────────────────────────
     cfg_d = PipelineConfig(
         **base,
-        min_active_ratio=0.05,
-        min_confidence=0.30,
-        min_screen_grade="C",
-        screen_interval=10,
-        max_positions=8,
-        max_watchlist=25,
-        max_position_pct=0.20,
-        max_exposure_pct=0.95,
-        kelly_fraction=0.50,
-        confidence_exponent=1.0,
-        min_position_pct=0.08,
-        default_stop_loss_pct=0.15,
-        default_take_profit_pct=9.99,
-        recovery_watch_days=30,
-        enable_cash_parking=True,
-        cash_parking_symbol="QQQ",
-        cash_parking_threshold=0.15,
+        dynamic_sl_tp=False,
+        default_stop_loss_pct=0.08,
+        default_take_profit_pct=0.30,
     )
 
-    configs = {"WIDE_TP": cfg_a, "QQQ_PARK": cfg_b, "ULTRA_AGG": cfg_c, "AGG_8POS": cfg_d}
+    # ── E: Fixed 10% SL / 25% TP ───────────────────────────────────
+    cfg_e = PipelineConfig(
+        **base,
+        dynamic_sl_tp=False,
+        default_stop_loss_pct=0.10,
+        default_take_profit_pct=0.25,
+    )
+
+    configs = {
+        "ATR_DYN": cfg_a,
+        "FIX12/50": cfg_b,
+        "FIX8/20": cfg_c,
+        "FIX8/30": cfg_d,
+        "FIX10/25": cfg_e,
+    }
     results = {}
 
     for name, cfg in configs.items():
