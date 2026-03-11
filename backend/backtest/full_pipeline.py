@@ -98,6 +98,9 @@ class PipelineConfig:
     # Protective sells
     enable_regime_sells: bool = True  # Sell losing positions on regime deterioration
 
+    # Strategy sell pairing
+    paired_strategy_sells: bool = False  # Only sell when buy strategy votes SELL
+
     # Signal combiner
     min_active_ratio: float = 0.15  # Min fraction of strategies that must be active
     min_confidence: float = 0.50  # Min combined confidence to generate BUY/SELL
@@ -465,7 +468,22 @@ class FullPipelineBacktest:
 
                 # Execute SELLs immediately
                 if combined.signal_type == SignalType.SELL:
-                    self._execute_sell(symbol, stock_data, date_idx, date, combined)
+                    if cfg.paired_strategy_sells and symbol in self._positions:
+                        # Paired mode: only sell if the BUY strategy votes SELL
+                        buy_strat = self._positions[symbol].strategy_name
+                        buy_strat_sells = any(
+                            s.signal_type == SignalType.SELL
+                            and s.strategy_name == buy_strat
+                            for s in signals
+                        )
+                        if buy_strat_sells:
+                            self._execute_sell(
+                                symbol, stock_data, date_idx, date, combined,
+                            )
+                    else:
+                        self._execute_sell(
+                            symbol, stock_data, date_idx, date, combined,
+                        )
                 elif combined.signal_type == SignalType.BUY:
                     buy_candidates.append((combined.confidence, symbol, combined))
 

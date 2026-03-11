@@ -70,7 +70,7 @@ export default function Dashboard() {
         <Card
           title="Available Cash"
           value={formatCurrency(summary.balance.available, 'KRW')}
-          sub={hasUsd ? `(${formatCurrency(summary.usd_balance!.available, 'USD')})` : undefined}
+          sub={hasUsd ? `+ ${formatCurrency(summary.usd_balance!.available, 'USD')}` : undefined}
         />
         <Card title="Positions" value={String(summary.positions_count)} />
         <Card
