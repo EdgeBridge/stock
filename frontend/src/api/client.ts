@@ -100,6 +100,20 @@ export const fetchBacktestStrategies = () =>
 export const fetchEquityHistory = (days = 30, market = 'US') =>
   api.get('/portfolio/equity-history', { params: { days, market } }).then(r => r.data)
 
+// Portfolio returns (daily/weekly/monthly)
+export interface PeriodReturn {
+  change: number
+  pct: number
+  base_equity: number
+}
+export interface PortfolioReturns {
+  daily: PeriodReturn | null
+  weekly: PeriodReturn | null
+  monthly: PeriodReturn | null
+}
+export const fetchPortfolioReturns = () =>
+  api.get<PortfolioReturns>('/portfolio/returns').then(r => r.data)
+
 // Recovery
 export const fetchRecoveryStatus = () =>
   api.get('/engine/recovery').then(r => r.data)

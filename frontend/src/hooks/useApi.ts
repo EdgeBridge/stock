@@ -17,6 +17,14 @@ export function usePositions(market = 'ALL') {
   })
 }
 
+export function usePortfolioReturns() {
+  return useQuery({
+    queryKey: ['portfolio', 'returns'],
+    queryFn: api.fetchPortfolioReturns,
+    refetchInterval: 60_000,
+  })
+}
+
 export function usePrice(symbol: string) {
   return useQuery({
     queryKey: ['market', 'price', symbol],

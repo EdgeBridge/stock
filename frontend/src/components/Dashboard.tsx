@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { usePortfolioSummary, usePositions, useEngineStatus } from '../hooks/useApi'
+import { usePortfolioSummary, usePositions, useEngineStatus, usePortfolioReturns } from '../hooks/useApi'
 import { usePriceStream } from '../hooks/usePriceStream'
 import { fetchMacroIndicators, fetchMarketState } from '../api/client'
 import { formatCurrency } from '../utils/format'
@@ -21,6 +21,7 @@ export default function Dashboard() {
   const { data: summary, isLoading } = usePortfolioSummary()
   const { data: positions } = usePositions()
   const { data: engineStatus } = useEngineStatus()
+  const { data: returns } = usePortfolioReturns()
   const symbols = useMemo(
     () => (positions ?? []).map(p => p.symbol),
     [positions],
@@ -90,6 +91,15 @@ export default function Dashboard() {
           }
         />
       </div>
+
+      {/* Cumulative Returns */}
+      {returns && (
+        <div className="grid grid-cols-3 gap-4">
+          <ReturnCard label="Daily" data={returns.daily} />
+          <ReturnCard label="Weekly" data={returns.weekly} />
+          <ReturnCard label="Monthly" data={returns.monthly} />
+        </div>
+      )}
 
       {/* All Positions (US + KR) — active market first */}
       {sortedPositions.length > 0 && (
@@ -324,6 +334,26 @@ function Card({ title, value, sub }: { title: string; value: React.ReactNode; su
       <div className="text-xs text-gray-400 uppercase tracking-wide">{title}</div>
       <div className="text-2xl font-bold mt-1">{value}</div>
       {sub && <div className="text-xs text-gray-500 mt-0.5">{sub}</div>}
+    </div>
+  )
+}
+
+function ReturnCard({ label, data }: { label: string; data: { change: number; pct: number; base_equity: number } | null }) {
+  if (!data) {
+    return (
+      <div className="bg-gray-900 rounded-lg p-4">
+        <div className="text-xs text-gray-400 uppercase tracking-wide">{label} Return</div>
+        <div className="text-lg text-gray-600 mt-1">—</div>
+      </div>
+    )
+  }
+  const color = data.pct >= 0 ? 'text-green-400' : 'text-red-400'
+  const sign = data.pct >= 0 ? '+' : ''
+  return (
+    <div className="bg-gray-900 rounded-lg p-4">
+      <div className="text-xs text-gray-400 uppercase tracking-wide">{label} Return</div>
+      <div className={`text-2xl font-bold mt-1 ${color}`}>{sign}{data.pct.toFixed(2)}%</div>
+      <div className="text-xs text-gray-500 mt-0.5">{sign}{formatCurrency(data.change, 'KRW')}</div>
     </div>
   )
 }

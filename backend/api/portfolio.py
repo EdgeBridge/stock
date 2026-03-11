@@ -178,6 +178,88 @@ async def _enrich_positions(positions, market: str, request: Request) -> list[di
     return results
 
 
+@router.get("/returns")
+async def portfolio_returns(request: Request):
+    """Get cumulative returns: daily, weekly, monthly (from equity snapshots)."""
+    from core.models import PortfolioSnapshot
+    from sqlalchemy import select
+
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if not session_factory:
+        return {"daily": None, "weekly": None, "monthly": None}
+
+    now = datetime.utcnow()
+    periods = {
+        "daily": now - timedelta(days=1),
+        "weekly": now - timedelta(days=7),
+        "monthly": now - timedelta(days=30),
+    }
+
+    # Get the latest snapshot per market as "current" equity
+    async with session_factory() as session:
+        result = {}
+        for period_name, since in periods.items():
+            # Get oldest snapshot after `since` for each market
+            us_old = await _get_oldest_snapshot(session, since, "US")
+            kr_old = await _get_oldest_snapshot(session, since, "KR")
+            us_new = await _get_latest_snapshot(session, "US")
+            kr_new = await _get_latest_snapshot(session, "KR")
+
+            old_equity = 0.0
+            new_equity = 0.0
+
+            if us_old and us_new:
+                old_equity += us_old.total_value_usd * _cached_usd_krw
+                new_equity += us_new.total_value_usd * _cached_usd_krw
+            if kr_old and kr_new:
+                old_equity += kr_old.total_value_usd
+                new_equity += kr_new.total_value_usd
+
+            if old_equity > 0:
+                change = new_equity - old_equity
+                pct = (change / old_equity) * 100
+                result[period_name] = {
+                    "change": round(change, 0),
+                    "pct": round(pct, 2),
+                    "base_equity": round(old_equity, 0),
+                }
+            else:
+                result[period_name] = None
+
+        return result
+
+
+async def _get_oldest_snapshot(session, since, market: str):
+    """Get the oldest snapshot after a given time for a market."""
+    from core.models import PortfolioSnapshot
+    from sqlalchemy import select
+
+    stmt = (
+        select(PortfolioSnapshot)
+        .where(PortfolioSnapshot.recorded_at >= since)
+        .where(PortfolioSnapshot.market == market)
+        .order_by(PortfolioSnapshot.recorded_at.asc())
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def _get_latest_snapshot(session, market: str):
+    """Get the most recent snapshot for a market."""
+    from core.models import PortfolioSnapshot
+    from sqlalchemy import select, desc
+
+    stmt = (
+        select(PortfolioSnapshot)
+        .where(PortfolioSnapshot.market == market)
+        .order_by(desc(PortfolioSnapshot.recorded_at))
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
 @router.get("/equity-history")
 async def equity_history(request: Request, days: int = 30, market: str = "US"):
     """Get portfolio equity history for charting."""
