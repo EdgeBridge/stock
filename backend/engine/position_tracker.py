@@ -42,12 +42,14 @@ class PositionTracker:
         order_manager: OrderManager,
         notification=None,
         market_data: MarketDataService | None = None,
+        event_calendar=None,
     ):
         self._adapter = adapter
         self._market_data = market_data
         self._risk = risk_manager
         self._orders = order_manager
         self._notification = notification
+        self._event_calendar = event_calendar
         self._tracked: dict[str, TrackedPosition] = {}
 
     def track(
@@ -117,9 +119,16 @@ class PositionTracker:
 
     def _evaluate(self, tracked: TrackedPosition, current_price: float) -> dict | None:
         """Evaluate if any exit condition is met."""
+        # Widen SL if earnings are near
+        sl_pct = tracked.stop_loss_pct
+        if self._event_calendar and sl_pct:
+            sl_mult = self._event_calendar.get_sl_multiplier(tracked.symbol)
+            if sl_mult:
+                sl_pct = sl_pct * sl_mult
+
         # Stop-loss
         if self._risk.check_stop_loss(
-            tracked.entry_price, current_price, tracked.stop_loss_pct
+            tracked.entry_price, current_price, sl_pct
         ):
             pnl = (current_price - tracked.entry_price) * tracked.quantity
             return {

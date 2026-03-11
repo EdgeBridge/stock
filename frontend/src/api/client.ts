@@ -184,6 +184,37 @@ export interface NewsSentimentData {
 export const fetchNewsSentiment = () =>
   api.get<NewsSentimentData>('/news/sentiment').then(r => r.data)
 
+// Market Events
+export interface EarningsEvent {
+  symbol: string
+  date: string
+  hour: string
+  eps_estimate: number | null
+  eps_actual: number | null
+  revenue_estimate: number | null
+  revenue_actual: number | null
+}
+export interface MacroEvent {
+  date: string
+  event_type: string
+  description: string
+}
+export interface InsiderSignal {
+  symbol: string
+  signal: string
+  total_value: number
+  count: number
+  top_buyer?: string
+  top_seller?: string
+}
+export interface EventCalendarData {
+  earnings: EarningsEvent[]
+  macro: MacroEvent[]
+  insider: InsiderSignal[]
+}
+export const fetchMarketEvents = () =>
+  api.get<EventCalendarData>('/market/events').then(r => r.data)
+
 // Signals
 export interface SignalEntry {
   timestamp: string

@@ -60,6 +60,7 @@ class EvaluationLoop:
         exchange_resolver: ExchangeResolver | None = None,
         position_tracker=None,
         market: str = "US",
+        event_calendar=None,
     ):
         self._adapter = adapter
         self._market_data = market_data
@@ -80,6 +81,7 @@ class EvaluationLoop:
         self._exchange_resolver = exchange_resolver or ExchangeResolver()
         self._position_tracker = position_tracker
         self._market = market
+        self._event_calendar = event_calendar
         self._factor_scores: dict[str, FactorScores] = {}
         self._last_classify_time: dict[str, float] = {}
         self._reclassify_interval = 86400  # re-classify every 24h
@@ -425,12 +427,25 @@ class EvaluationLoop:
                 logger.debug("Skipping BUY for %s: pending order exists", symbol)
                 return
 
+            # Event calendar checks (earnings proximity, FOMC day)
+            if self._event_calendar:
+                skip, reason = self._event_calendar.should_skip_buy(symbol)
+                if skip:
+                    logger.info("Skipping BUY for %s: %s", symbol, reason)
+                    return
+
             balance = await self._market_data.get_balance()
             positions = await self._market_data.get_positions()
 
             # Get factor score for this stock
             factor = self._factor_scores.get(symbol)
             factor_score = factor.composite if factor else 0.0
+
+            # Insider confidence adjustment
+            confidence = signal.confidence
+            if self._event_calendar:
+                confidence += self._event_calendar.get_confidence_adjustment(symbol)
+                confidence = max(0.0, min(1.0, confidence))
 
             # Get strategy quality metrics for Kelly inputs
             strategy_name = signal.strategy_name
@@ -447,10 +462,18 @@ class EvaluationLoop:
                 win_rate=win_rate,
                 avg_win=avg_win,
                 avg_loss=avg_loss,
-                signal_confidence=signal.confidence,
+                signal_confidence=confidence,
                 factor_score=factor_score,
                 market=self._market,
             )
+
+            # Macro event sizing reduction (CPI/JOBS day = half size)
+            if sizing.allowed and self._event_calendar:
+                macro_mult = self._event_calendar.get_sizing_multiplier()
+                if macro_mult < 1.0:
+                    sizing.quantity = max(1, int(sizing.quantity * macro_mult))
+                    sizing.allocation_usd *= macro_mult
+                    logger.info("Macro event sizing: %s reduced to %.0f%%", symbol, macro_mult * 100)
 
             if not sizing.allowed:
                 logger.info(

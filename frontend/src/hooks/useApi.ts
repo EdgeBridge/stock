@@ -132,3 +132,11 @@ export function useNewsSentiment() {
     refetchInterval: 60_000,
   })
 }
+
+export function useMarketEvents() {
+  return useQuery({
+    queryKey: ['market', 'events'],
+    queryFn: api.fetchMarketEvents,
+    refetchInterval: 300_000,
+  })
+}

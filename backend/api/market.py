@@ -60,6 +60,15 @@ async def get_chart(
     return {"symbol": symbol, "timeframe": timeframe, "data": records}
 
 
+@router.get("/events")
+async def get_market_events(request: Request):
+    """Get event calendar data (earnings, macro, insider)."""
+    event_svc = getattr(request.app.state, "event_calendar", None)
+    if not event_svc:
+        return {"earnings": [], "macro": [], "insider": [], "updated_at": None}
+    return event_svc.to_dict()
+
+
 @router.get("/names")
 async def get_stock_names(
     symbols: str = Query(..., description="Comma-separated symbols"),
