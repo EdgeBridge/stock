@@ -218,8 +218,8 @@ export interface EventCalendarData {
   macro: MacroEvent[]
   insider: InsiderSignal[]
 }
-export const fetchMarketEvents = () =>
-  api.get<EventCalendarData>('/market/events').then(r => r.data)
+export const fetchMarketEvents = (market: string = 'US') =>
+  api.get<EventCalendarData>('/market/events', { params: { market } }).then(r => r.data)
 
 // Signals
 export interface SignalEntry {

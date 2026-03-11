@@ -1,12 +1,17 @@
 import { useMarketEvents } from '../hooks/useApi'
+import { useMarket } from '../contexts/MarketContext'
+import MarketToggle from './MarketToggle'
 
 function eventBadge(type: string) {
-  const cls = type === 'FOMC'
+  const cls = type === 'FOMC' || type === 'BOK'
     ? 'bg-red-900/60 text-red-300'
-    : type === 'CPI'
+    : type === 'CPI' || type === 'KR_CPI'
       ? 'bg-yellow-900/60 text-yellow-300'
-      : 'bg-blue-900/60 text-blue-300'
-  return <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${cls}`}>{type}</span>
+      : type === 'KR_GDP'
+        ? 'bg-purple-900/60 text-purple-300'
+        : 'bg-blue-900/60 text-blue-300'
+  const label = type.replace('KR_', '')
+  return <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${cls}`}>{label}</span>
 }
 
 function formatValue(v: number) {
@@ -16,28 +21,43 @@ function formatValue(v: number) {
 }
 
 export default function EventsCalendar() {
-  const { data, isLoading } = useMarketEvents()
+  const { market } = useMarket()
+  const { data, isLoading } = useMarketEvents(market)
 
   if (isLoading) return <div className="text-gray-500">Loading events...</div>
   if (!data) return null
 
   const { earnings, macro, insider } = data
-  const hasData = earnings.length > 0 || macro.length > 0 || insider.length > 0
+  const isKR = market === 'KR'
+  const hasData = macro.length > 0 || (!isKR && (earnings.length > 0 || insider.length > 0))
 
   if (!hasData) {
     return (
-      <div className="bg-gray-900 rounded-lg p-6 text-center">
-        <p className="text-gray-500">No event data available. Refreshes daily pre-market.</p>
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-gray-300">Events Calendar</h2>
+          <MarketToggle />
+        </div>
+        <div className="bg-gray-900 rounded-lg p-6 text-center">
+          <p className="text-gray-500">No event data available. Refreshes daily pre-market.</p>
+        </div>
       </div>
     )
   }
 
   return (
     <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-gray-300">Events Calendar</h2>
+        <MarketToggle />
+      </div>
+
       {/* Macro Events */}
       {macro.length > 0 && (
         <div className="bg-gray-900 rounded-lg p-4">
-          <h3 className="text-sm font-semibold mb-3 text-gray-300">Upcoming Macro Events</h3>
+          <h3 className="text-sm font-semibold mb-3 text-gray-300">
+            {isKR ? 'KR Macro Events' : 'Upcoming Macro Events'}
+          </h3>
           <div className="space-y-2">
             {macro.map((e, i) => {
               const isToday = e.date === new Date().toISOString().slice(0, 10)
@@ -57,8 +77,8 @@ export default function EventsCalendar() {
         </div>
       )}
 
-      {/* Earnings Calendar */}
-      {earnings.length > 0 && (
+      {/* Earnings Calendar (US only) */}
+      {!isKR && earnings.length > 0 && (
         <div className="bg-gray-900 rounded-lg p-4">
           <h3 className="text-sm font-semibold mb-3 text-gray-300">Upcoming Earnings</h3>
           <div className="overflow-x-auto">
@@ -94,8 +114,8 @@ export default function EventsCalendar() {
         </div>
       )}
 
-      {/* Insider Activity */}
-      {insider.length > 0 && (
+      {/* Insider Activity (US only) */}
+      {!isKR && insider.length > 0 && (
         <div className="bg-gray-900 rounded-lg p-4">
           <h3 className="text-sm font-semibold mb-3 text-gray-300">Notable Insider Activity</h3>
           <div className="overflow-x-auto">

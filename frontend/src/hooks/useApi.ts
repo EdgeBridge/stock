@@ -133,10 +133,10 @@ export function useNewsSentiment() {
   })
 }
 
-export function useMarketEvents() {
+export function useMarketEvents(market: string = 'US') {
   return useQuery({
-    queryKey: ['market', 'events'],
-    queryFn: api.fetchMarketEvents,
+    queryKey: ['market', 'events', market],
+    queryFn: () => api.fetchMarketEvents(market),
     refetchInterval: 300_000,
   })
 }

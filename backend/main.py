@@ -278,7 +278,11 @@ async def lifespan(app: FastAPI):
     event_calendar = EventCalendarService(earnings_svc, macro_svc, insider_svc)
     app.state.event_calendar = event_calendar
     position_tracker._event_calendar = event_calendar
-    logger.info("Event calendar services initialized")
+
+    from data.kr_macro_calendar import KRMacroCalendarService
+    kr_macro_calendar = KRMacroCalendarService()
+    app.state.kr_macro_calendar = kr_macro_calendar
+    logger.info("Event calendar services initialized (US + KR)")
 
     # Scanner pipeline (with AI agent + news enricher if available)
     enricher = FundamentalEnricher()

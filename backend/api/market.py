@@ -61,8 +61,14 @@ async def get_chart(
 
 
 @router.get("/events")
-async def get_market_events(request: Request):
+async def get_market_events(request: Request, market: str = Query("US")):
     """Get event calendar data (earnings, macro, insider)."""
+    if market == "KR":
+        kr_macro = getattr(request.app.state, "kr_macro_calendar", None)
+        if not kr_macro:
+            return {"earnings": [], "macro": [], "insider": []}
+        return {"earnings": [], "macro": kr_macro.to_dict(), "insider": []}
+
     event_svc = getattr(request.app.state, "event_calendar", None)
     if not event_svc:
         return {"earnings": [], "macro": [], "insider": [], "updated_at": None}
