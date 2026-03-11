@@ -244,9 +244,10 @@ async def lifespan(app: FastAPI):
             llm_client=llm_client, context_service=agent_ctx,
             model_override=config.llm.gemini_fallback_model or None,
         )
-        # KR agent: no Gemini override — Gemini Flash struggles with Korean text
+        # KR agent: no Gemini override (struggles with Korean), no shared context
+        # (US agent memory leaks irrelevant context into KR analysis)
         kr_news_sentiment_agent = NewsSentimentAgent(
-            llm_client=llm_client, context_service=agent_ctx,
+            llm_client=llm_client,
         )
         logger.info("AI agents enabled (analyst, risk, trade_review, news_sentiment)")
     app.state.risk_agent = risk_agent
