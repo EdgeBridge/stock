@@ -364,6 +364,10 @@ class EvaluationLoop:
                     "KRX" if self._market == "KR"
                     else self._exchange_resolver.resolve(symbol)
                 )
+                # Look up original buy strategy from position tracker
+                orig_strategy = ""
+                if self._position_tracker:
+                    orig_strategy = self._position_tracker.get_buy_strategy(symbol)
                 sell_order = await self._order_manager.place_sell(
                     symbol=symbol,
                     quantity=int(pos.quantity),
@@ -371,6 +375,7 @@ class EvaluationLoop:
                     strategy_name=sell_reason,
                     exchange=exchange,
                     entry_price=pos.avg_price,
+                    buy_strategy=orig_strategy,
                 )
                 if sell_order and self._position_tracker:
                     self._position_tracker.untrack(symbol)
@@ -521,6 +526,9 @@ class EvaluationLoop:
             pos = next((p for p in positions if p.symbol == symbol), None)
             if pos and pos.quantity > 0:
                 exchange = "KRX" if self._market == "KR" else self._exchange_resolver.resolve(symbol)
+                orig_strategy = ""
+                if self._position_tracker:
+                    orig_strategy = self._position_tracker.get_buy_strategy(symbol)
                 sell_order = await self._order_manager.place_sell(
                     symbol=symbol,
                     quantity=int(pos.quantity),
@@ -528,6 +536,7 @@ class EvaluationLoop:
                     strategy_name=signal.strategy_name,
                     exchange=exchange,
                     entry_price=pos.avg_price,
+                    buy_strategy=orig_strategy,
                 )
                 if sell_order and self._position_tracker:
                     self._position_tracker.untrack(symbol)

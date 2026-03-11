@@ -37,6 +37,7 @@ class Order(Base):
     filled_price = Column(Float)
     status = Column(String(20), nullable=False, default="pending")
     strategy_name = Column(String(50))
+    buy_strategy = Column(String(50))   # original buy strategy (for SELL attribution)
     kis_order_id = Column(String(50))
     pnl = Column(Float)
     created_at = Column(DateTime, default=datetime.utcnow)

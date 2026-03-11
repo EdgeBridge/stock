@@ -246,6 +246,7 @@ class ETFEngine:
                         strategy_name="etf_engine_regime",
                         exchange=self._etf.get_exchange(sym),
                         entry_price=pos.avg_price,
+                        buy_strategy="etf_engine",
                     )
                     if sell_result is None:
                         logger.warning("ETF Engine: SELL %s failed", sym)
@@ -271,6 +272,7 @@ class ETFEngine:
                                 strategy_name="etf_engine_regime",
                                 exchange=self._etf.get_exchange(sib),
                                 entry_price=pos.avg_price,
+                                buy_strategy="etf_engine",
                             )
                             if sell_result:
                                 self._managed_positions.pop(sib, None)
@@ -384,6 +386,7 @@ class ETFEngine:
                         strategy_name="etf_engine_sector",
                         exchange=self._etf.get_exchange(etf_sym),
                         entry_price=pos.avg_price,
+                        buy_strategy="etf_engine",
                     )
                     if sell_result is None:
                         logger.warning("ETF Engine: SELL %s (sector) failed", etf_sym)
@@ -470,6 +473,7 @@ class ETFEngine:
                         strategy_name="etf_engine_hold_limit",
                         exchange=self._etf.get_exchange(sym),
                         entry_price=pos.avg_price,
+                        buy_strategy="etf_engine",
                     )
                     hold_days = hold_seconds / 86400
                     actions.append(

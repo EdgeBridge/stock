@@ -203,8 +203,9 @@ class OrderManager:
         order_type: str = "limit",
         exchange: str = "NASD",
         entry_price: float | None = None,
+        buy_strategy: str = "",
     ) -> ManagedOrder | None:
-        """Place a sell order. Pass entry_price to calculate PnL."""
+        """Place a sell order. Pass entry_price for PnL, buy_strategy for attribution."""
         try:
             result = await self._adapter.create_sell_order(
                 symbol=symbol,
@@ -276,6 +277,7 @@ class OrderManager:
                     "filled_quantity": filled_qty,
                     "slippage": slippage,
                     "strategy": strategy_name, "status": result.status,
+                    "buy_strategy": buy_strategy,
                     "pnl": pnl,
                     "created_at": order.created_at,
                     "market": self._market,

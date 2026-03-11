@@ -179,6 +179,7 @@ class PositionTracker:
             strategy_name=f"{tracked.strategy}:{reason}",
             order_type="market",
             entry_price=tracked.entry_price,
+            buy_strategy=tracked.strategy,
         )
 
         if order:
@@ -319,6 +320,11 @@ class PositionTracker:
                 ", ".join(r["symbol"] for r in restored),
             )
         return restored
+
+    def get_buy_strategy(self, symbol: str) -> str:
+        """Get the original buy strategy for a tracked position."""
+        tracked = self._tracked.get(symbol)
+        return tracked.strategy if tracked else ""
 
     @property
     def tracked_symbols(self) -> list[str]:

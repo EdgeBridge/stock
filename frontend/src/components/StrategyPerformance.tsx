@@ -36,15 +36,18 @@ export default function StrategyPerformance() {
     const grouped = new Map<string, { pnls: number[]; wins: number; losses: number }>()
 
     for (const t of filled) {
-      const key = t.strategy || 'unknown'
-      if (!grouped.has(key)) {
-        grouped.set(key, { pnls: [], wins: 0, losses: 0 })
+      // For SELL trades with PnL, attribute to the original buy strategy
+      // For BUY trades (no PnL), skip — performance is measured on exits
+      if (t.side === 'SELL' && t.pnl != null) {
+        const key = t.buy_strategy || t.strategy || 'unknown'
+        if (!grouped.has(key)) {
+          grouped.set(key, { pnls: [], wins: 0, losses: 0 })
+        }
+        const g = grouped.get(key)!
+        g.pnls.push(t.pnl)
+        if (t.pnl > 0) g.wins++
+        else if (t.pnl < 0) g.losses++
       }
-      const g = grouped.get(key)!
-      const pnl = t.pnl ?? 0
-      g.pnls.push(pnl)
-      if (pnl > 0) g.wins++
-      else if (pnl < 0) g.losses++
     }
 
     const metrics: StrategyMetrics[] = []
@@ -63,6 +66,23 @@ export default function StrategyPerformance() {
     }
 
     return metrics.sort((a, b) => b.totalPnl - a.totalPnl)
+  }, [trades])
+
+  // Also aggregate sell triggers
+  const sellTriggers = useMemo(() => {
+    if (!trades) return []
+    const filled = trades.filter(t => t.status === 'filled' && t.side === 'SELL' && t.pnl != null)
+    const grouped = new Map<string, { count: number; pnl: number }>()
+    for (const t of filled) {
+      const key = t.strategy || 'unknown'
+      const g = grouped.get(key) ?? { count: 0, pnl: 0 }
+      g.count++
+      g.pnl += t.pnl!
+      grouped.set(key, g)
+    }
+    return [...grouped.entries()]
+      .map(([trigger, g]) => ({ trigger, ...g }))
+      .sort((a, b) => b.count - a.count)
   }, [trades])
 
   const yTickFormatter = (v: number) => `$${v.toLocaleString()}`
@@ -164,6 +184,37 @@ export default function StrategyPerformance() {
           </table>
         </div>
       </div>
+
+      {/* Sell Triggers */}
+      {sellTriggers.length > 0 && (
+        <div className="bg-gray-900 rounded-lg p-4">
+          <h2 className="text-lg font-semibold mb-3">Sell Triggers</h2>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-[300px]">
+              <thead className="text-gray-400 border-b border-gray-800">
+                <tr>
+                  <th className="text-left py-2">Trigger</th>
+                  <th className="text-right py-2">Count</th>
+                  <th className="text-right py-2">Total P&L</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sellTriggers.map(s => (
+                  <tr key={s.trigger} className="border-b border-gray-800/50">
+                    <td className="py-2 font-medium text-gray-300">{s.trigger}</td>
+                    <td className="text-right py-2">{s.count}</td>
+                    <td className="text-right py-2">
+                      <span className={s.pnl >= 0 ? 'text-green-400' : 'text-red-400'}>
+                        {s.pnl >= 0 ? '+' : ''}{formatCurrency(s.pnl, currency)}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

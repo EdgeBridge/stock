@@ -113,6 +113,7 @@ export interface Trade {
   price: number
   filled_price: number | null
   strategy: string
+  buy_strategy?: string
   status: string
   pnl: number | null
   created_at: string
