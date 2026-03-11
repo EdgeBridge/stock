@@ -11,6 +11,8 @@ import {
 } from 'recharts'
 import { useTrades } from '../hooks/useApi'
 import { formatCurrency } from '../utils/format'
+import { useMarket } from '../contexts/MarketContext'
+import MarketToggle from './MarketToggle'
 
 interface StrategyMetrics {
   strategy: string
@@ -23,8 +25,9 @@ interface StrategyMetrics {
 }
 
 export default function StrategyPerformance() {
-  const currency = 'USD'
-  const { data: trades, isLoading } = useTrades(200)
+  const { market } = useMarket()
+  const currency = market === 'KR' ? 'KRW' : 'USD'
+  const { data: trades, isLoading } = useTrades(200, market)
 
   const strategyMetrics = useMemo(() => {
     if (!trades || trades.length === 0) return []
@@ -85,7 +88,7 @@ export default function StrategyPerformance() {
       .sort((a, b) => b.count - a.count)
   }, [trades])
 
-  const yTickFormatter = (v: number) => `$${v.toLocaleString()}`
+  const yTickFormatter = (v: number) => formatCurrency(v, currency)
 
   if (isLoading) {
     return <div className="text-gray-500">Loading trade data...</div>
@@ -101,6 +104,11 @@ export default function StrategyPerformance() {
 
   return (
     <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-gray-300">Strategy Performance</h2>
+        <MarketToggle />
+      </div>
+
       {/* Bar Chart */}
       {strategyMetrics.length > 0 && (
         <div className="bg-gray-900 rounded-lg p-4">
