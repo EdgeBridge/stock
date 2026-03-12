@@ -954,7 +954,7 @@ async def lifespan(app: FastAPI):
                     "quantity": t.quantity,
                     "strategy": t.strategy_name,
                     "pnl": getattr(t, "pnl", 0),
-                    "executed_at": str(t.executed_at),
+                    "filled_at": str(t.filled_at),
                 }
                 for t in recent_trades
             ]

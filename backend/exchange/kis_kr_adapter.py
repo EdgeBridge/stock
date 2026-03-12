@@ -530,6 +530,14 @@ class KISKRAdapter(ExchangeAdapter):
         output = data.get("output", {})
         success = data.get("rt_cd") == "0"
 
+        if not success:
+            msg_cd = data.get("msg_cd", "")
+            msg = data.get("msg1", "")
+            logger.warning(
+                "KIS KR order failed: %s %s %s qty=%d msg_cd=%s msg=%s",
+                side, symbol, order_type, quantity, msg_cd, msg,
+            )
+
         return OrderResult(
             order_id=output.get("ODNO", ""),
             symbol=symbol,

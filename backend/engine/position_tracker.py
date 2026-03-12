@@ -9,6 +9,7 @@ resumes immediately after a restart.
 """
 
 import logging
+import time
 from dataclasses import dataclass, field
 
 from exchange.base import ExchangeAdapter, Position
@@ -30,6 +31,7 @@ class TrackedPosition:
     take_profit_pct: float | None = None
     trailing_activation_pct: float = 0.0   # disabled: cuts winners short
     trailing_stop_pct: float = 0.0
+    tracked_at: float = field(default_factory=time.monotonic)
 
 
 class PositionTracker:
@@ -97,6 +99,15 @@ class PositionTracker:
         for symbol, tracked in list(self._tracked.items()):
             pos = position_map.get(symbol)
             if not pos:
+                # Grace period: don't remove recently tracked positions
+                # (buy order may still be pending/unfilled)
+                age = time.monotonic() - tracked.tracked_at
+                if age < 300:  # 5 minutes
+                    logger.debug(
+                        "Position %s not in exchange yet (%.0fs since tracked), keeping",
+                        symbol, age,
+                    )
+                    continue
                 logger.info("Position %s no longer held, removing tracker", symbol)
                 self.untrack(symbol)
                 continue

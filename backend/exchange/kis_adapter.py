@@ -543,7 +543,7 @@ class KISAdapter(ExchangeAdapter):
         params = {
             "AUTH": "",
             "EXCD": exchange,
-            "MIXN": "5",        # 10 min window
+            "MINX": "5",        # 10 min window
             "VOL_RANG": "1",    # >= 100 shares
             "KEYB": "",
         }
@@ -562,7 +562,6 @@ class KISAdapter(ExchangeAdapter):
         params = {
             "AUTH": "",
             "EXCD": exchange,
-            "NDAY": "0",        # today
             "GUBN": "1" if direction == "up" else "0",
             "VOL_RANG": "1",    # >= 100 shares
             "KEYB": "",
@@ -582,7 +581,7 @@ class KISAdapter(ExchangeAdapter):
         params = {
             "AUTH": "",
             "EXCD": exchange,
-            "MIXN": "9",        # 120 min window
+            "MINX": "9",        # 120 min window
             "VOL_RANG": "1",    # >= 100 shares
             "GUBN": "1" if high else "0",
             "GUBN2": "1",       # sustained (not momentary)

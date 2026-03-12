@@ -74,7 +74,7 @@ export default function App() {
         {tab === 'dashboard' && <Dashboard />}
         {tab === 'positions' && <PositionList />}
         {tab === 'trades' && <TradeHistory />}
-        {tab === 'signals' && <SignalPanel />}
+        {tab === 'signals' && <><div className="flex items-center justify-between mb-4"><h2 className="text-lg font-semibold">Strategy Signals</h2><MarketToggle /></div><SignalPanel /></>}
         {tab === 'chart' && <StockChart />}
         {tab === 'strategies' && <StrategyPanel />}
         {tab === 'scanner' && <ScannerPanel />}

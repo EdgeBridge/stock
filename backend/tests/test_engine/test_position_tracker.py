@@ -150,13 +150,19 @@ async def test_no_trigger_when_within_range(adapter, risk, order_mgr):
 
 @pytest.mark.asyncio
 async def test_position_gone_removes_tracker(adapter, risk, order_mgr):
-    """If position no longer exists on exchange, tracker is removed."""
+    """If position no longer exists on exchange, tracker is removed after grace period."""
     adapter.fetch_positions = AsyncMock(return_value=[])  # no positions
 
     tracker = PositionTracker(adapter, risk, order_mgr)
     tracker.track("AAPL", 150.0, 10)
     assert "AAPL" in tracker.tracked_symbols
 
+    # Within grace period (5 min) — should NOT be removed
+    await tracker.check_all()
+    assert "AAPL" in tracker.tracked_symbols
+
+    # Simulate grace period elapsed
+    tracker._tracked["AAPL"].tracked_at -= 400  # 400s ago (> 300s grace)
     await tracker.check_all()
     assert "AAPL" not in tracker.tracked_symbols
 
