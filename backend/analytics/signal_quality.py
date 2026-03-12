@@ -101,7 +101,7 @@ class SignalQualityTracker:
 
         returns = [t.return_pct for t in trades]
         wins = [r for r in returns if r > 0]
-        losses = [r for r in returns if r <= 0]
+        losses = [r for r in returns if r < 0]
 
         total = len(returns)
         win_rate = len(wins) / total if total > 0 else 0

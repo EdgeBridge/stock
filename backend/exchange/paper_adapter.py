@@ -115,7 +115,7 @@ class PaperAdapter(ExchangeAdapter):
         if symbol in self._positions:
             pos = self._positions[symbol]
             total_qty = pos.quantity + quantity
-            pos.avg_price = (pos.avg_price * pos.quantity + fill_price * quantity) / total_qty
+            pos.avg_price = round((pos.avg_price * pos.quantity + fill_price * quantity) / total_qty, 4)
             pos.quantity = total_qty
         else:
             self._positions[symbol] = Position(

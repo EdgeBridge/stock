@@ -42,6 +42,7 @@ TR_ID_KR_LIVE = {
     # Account
     "BALANCE": "TTTC8434R",
     "PENDING_ORDERS": "TTTC8036R",
+    "EXECUTED_ORDERS": "TTTC8001R",
     "BUYING_POWER": "TTTC8908R",
 }
 
@@ -52,6 +53,7 @@ TR_ID_KR_PAPER = {
     "CANCEL": "VTTC0803U",
     "BALANCE": "VTTC8434R",
     "PENDING_ORDERS": "VTTC8036R",
+    "EXECUTED_ORDERS": "VTTC8001R",
     "BUYING_POWER": "VTTC8908R",
 }
 
@@ -375,8 +377,14 @@ class KISKRAdapter(ExchangeAdapter):
         return data.get("rt_cd") == "0"
 
     async def fetch_order(self, order_id: str, symbol: str) -> OrderResult:
+        # 1) Check pending (unfilled) orders
         orders = await self.fetch_pending_orders()
         for o in orders:
+            if o.order_id == order_id:
+                return o
+        # 2) Check today's executed orders (체결내역)
+        executed = await self.fetch_executed_orders()
+        for o in executed:
             if o.order_id == order_id:
                 return o
         return OrderResult(
@@ -387,6 +395,54 @@ class KISKRAdapter(ExchangeAdapter):
             quantity=0,
             status="not_found",
         )
+
+    async def fetch_executed_orders(self) -> list[OrderResult]:
+        """Fetch today's executed (filled) orders — 주식일별주문체결조회."""
+        await self._auth.ensure_valid_token()
+        from datetime import datetime
+        today = datetime.now().strftime("%Y%m%d")
+        params = {
+            "CANO": self._config.account_no,
+            "ACNT_PRDT_CD": self._config.account_product,
+            "INQR_STRT_DT": today,
+            "INQR_END_DT": today,
+            "SLL_BUY_DVSN_CD": "00",  # 전체 (매수+매도)
+            "INQR_DVSN": "00",  # 역순
+            "PDNO": "",
+            "CCLD_DVSN": "01",  # 체결만
+            "ORD_GNO_BRNO": "",
+            "ODNO": "",
+            "INQR_DVSN_3": "00",
+            "INQR_DVSN_1": "",
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": "",
+        }
+        data = await self._get(
+            "/uapi/domestic-stock/v1/trading/inquire-daily-ccld",
+            self._tr["EXECUTED_ORDERS"],
+            params,
+        )
+        results = []
+        for item in data.get("output1", []):
+            total_qty = float(item.get("ord_qty", 0))
+            filled_qty = float(item.get("tot_ccld_qty", 0))
+            filled_price = float(item.get("avg_prvs", 0)) or None
+            if filled_qty <= 0:
+                continue
+            results.append(
+                OrderResult(
+                    order_id=item.get("odno", ""),
+                    symbol=item.get("pdno", ""),
+                    side="buy" if item.get("sll_buy_dvsn_cd") == "02" else "sell",
+                    order_type="limit",
+                    quantity=total_qty,
+                    price=float(item.get("ord_unpr", 0)),
+                    filled_quantity=filled_qty,
+                    filled_price=filled_price,
+                    status="filled" if filled_qty >= total_qty else "partial",
+                )
+            )
+        return results
 
     async def fetch_pending_orders(self) -> list[OrderResult]:
         await self._auth.ensure_valid_token()

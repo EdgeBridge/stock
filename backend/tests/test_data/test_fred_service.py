@@ -1,6 +1,6 @@
 """Tests for FRED Service."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, AsyncMock
 import pandas as pd
 import pytest
 
@@ -65,36 +65,40 @@ class TestFREDService:
         svc = FREDService(api_key="test")
         assert svc.last_indicators is None
 
-    def test_fetch_macro_no_key(self):
+    @pytest.mark.asyncio
+    async def test_fetch_macro_no_key(self):
         svc = FREDService(api_key="")
-        result = svc.fetch_macro_indicators()
+        result = await svc.fetch_macro_indicators()
         assert result.fed_funds_rate is None
 
     @patch("data.fred_service.FREDService._get_client")
-    def test_fetch_latest(self, mock_client):
+    @pytest.mark.asyncio
+    async def test_fetch_latest(self, mock_client):
         mock_fred = MagicMock()
         mock_fred.get_series.return_value = pd.Series([4.5, 4.55, 4.6])
         mock_client.return_value = mock_fred
 
         svc = FREDService(api_key="test")
         svc._fred = mock_fred
-        val = svc.fetch_latest("DGS10")
+        val = await svc.fetch_latest("DGS10")
         assert val == 4.6
 
     @patch("data.fred_service.FREDService._get_client")
-    def test_fetch_series_empty(self, mock_client):
+    @pytest.mark.asyncio
+    async def test_fetch_series_empty(self, mock_client):
         mock_fred = MagicMock()
         mock_fred.get_series.side_effect = Exception("network error")
         mock_client.return_value = mock_fred
 
         svc = FREDService(api_key="test")
         svc._fred = mock_fred
-        result = svc.fetch_series("BAD_SERIES")
+        result = await svc.fetch_series("BAD_SERIES")
         assert result.empty
 
-    @patch("data.fred_service.FREDService.fetch_latest")
-    @patch("data.fred_service.FREDService.fetch_series")
-    def test_fetch_macro_indicators(self, mock_series, mock_latest):
+    @patch("data.fred_service.FREDService.fetch_latest", new_callable=AsyncMock)
+    @patch("data.fred_service.FREDService.fetch_series", new_callable=AsyncMock)
+    @pytest.mark.asyncio
+    async def test_fetch_macro_indicators(self, mock_series, mock_latest):
         mock_latest.side_effect = [5.25, 4.5, 4.8, 3.7, 230_000]
         # CPI series: 13 months
         mock_series.return_value = pd.Series(
@@ -102,7 +106,7 @@ class TestFREDService:
         )
 
         svc = FREDService(api_key="test")
-        result = svc.fetch_macro_indicators()
+        result = await svc.fetch_macro_indicators()
 
         assert result.fed_funds_rate == 5.25
         assert result.treasury_10y == 4.5

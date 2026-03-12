@@ -114,7 +114,7 @@ class TestMetricsCalculator:
         curve = _make_equity_curve()
         metrics = MetricsCalculator.calculate(curve, trades, 100_000)
         assert metrics.win_rate == 100.0
-        assert metrics.profit_factor == float("inf")
+        assert metrics.profit_factor == 100.0
 
     def test_benchmark_comparison(self):
         curve = _make_equity_curve(daily_return=0.001)

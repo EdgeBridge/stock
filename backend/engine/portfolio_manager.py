@@ -111,9 +111,7 @@ class PortfolioManager:
     async def get_daily_pnl(self) -> float:
         """Calculate today's PnL from snapshots."""
         balance = await self._market_data.get_balance()
-        positions = await self._market_data.get_positions()
-        unrealized_pnl = sum(p.unrealized_pnl for p in positions)
-        current_equity = balance.total + unrealized_pnl
+        current_equity = balance.total  # already includes position market value
 
         pnl = await self._calculate_daily_pnl(current_equity)
         return pnl if pnl is not None else 0.0

@@ -275,7 +275,7 @@ Provide your daily trade review as JSON."""
                 summary=data.get("summary", ""),
             )
         except (json.JSONDecodeError, KeyError, ValueError) as e:
-            logger.warning("Failed to parse trade review for %s: %s", symbol, e)
+            logger.warning("Failed to parse trade review for %s: %s | text=%s", symbol, e, text[:300])
             return TradeReview(
                 symbol=symbol, trade_date=trade_date, side=side, summary=text[:500],
             )
@@ -302,7 +302,7 @@ Provide your daily trade review as JSON."""
                 "summary": data.get("summary", ""),
             }
         except (json.JSONDecodeError, KeyError, ValueError) as e:
-            logger.warning("Failed to parse daily review: %s", e)
+            logger.warning("Failed to parse daily review: %s | text=%s", e, text[:300])
             return {
                 "overall_grade": "C",
                 "overall_score": 50,

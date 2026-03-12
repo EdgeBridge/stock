@@ -206,5 +206,5 @@ class MarketAnalystAgent:
                 summary=data.get("summary", ""),
             )
         except (json.JSONDecodeError, KeyError, ValueError) as e:
-            logger.warning("Failed to parse AI response for %s: %s", symbol, e)
+            logger.warning("Failed to parse AI response for %s: %s | text=%s", symbol, e, text[:300])
             return AIRecommendation(symbol=symbol, summary=text[:500])

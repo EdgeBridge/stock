@@ -251,7 +251,7 @@ Should this trade be approved from a risk management perspective? Respond as JSO
                 summary=data.get("summary", ""),
             )
         except (json.JSONDecodeError, KeyError, ValueError) as e:
-            logger.warning("Failed to parse risk assessment: %s", e)
+            logger.warning("Failed to parse risk assessment: %s | text=%s", e, text[:300])
             return RiskAssessment(summary=text[:500])
 
     def _parse_pre_trade_response(self, text: str, proposed_size: float) -> dict:
@@ -272,7 +272,7 @@ Should this trade be approved from a risk management perspective? Respond as JSO
                 "warnings": data.get("warnings", []),
             }
         except (json.JSONDecodeError, KeyError, ValueError) as e:
-            logger.warning("Failed to parse pre-trade response: %s", e)
+            logger.warning("Failed to parse pre-trade response: %s | text=%s", e, text[:300])
             return {
                 "approved": True,
                 "risk_level": "MEDIUM",

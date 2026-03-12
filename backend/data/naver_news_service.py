@@ -172,19 +172,28 @@ class NaverNewsService:
         if not date_str:
             return datetime.now()
 
-        for fmt in (
-            "%Y%m%d%H%M",                # Naver compact: 202603111649
-            "%Y%m%d%H%M%S",              # Compact with seconds
-            "%Y-%m-%dT%H:%M:%S%z",       # ISO with TZ
-            "%Y-%m-%dT%H:%M:%S",         # ISO without TZ
-            "%Y-%m-%d %H:%M:%S",         # Standard datetime
-            "%Y-%m-%d %H:%M",            # Without seconds
-            "%Y.%m.%d %H:%M",            # Korean style
-            "%Y.%m.%d",                   # Date only
-            "%Y-%m-%d",                   # Date only ISO
-        ):
+        # Format specifiers like %Y expand to 4 chars but are 2 chars in the
+        # format string, so we pair each format with its expected output length.
+        fmt_with_len: list[tuple[str, int]] = [
+            ("%Y%m%d%H%M", 12),              # 202603111649
+            ("%Y%m%d%H%M%S", 14),            # 20260311164900
+            ("%Y-%m-%dT%H:%M:%S", 19),       # 2026-03-11T16:49:00
+            ("%Y-%m-%d %H:%M:%S", 19),       # 2026-03-11 16:49:00
+            ("%Y-%m-%d %H:%M", 16),          # 2026-03-11 16:49
+            ("%Y.%m.%d %H:%M", 16),          # 2026.03.11 16:49
+            ("%Y.%m.%d", 10),                # 2026.03.11
+            ("%Y-%m-%d", 10),                # 2026-03-11
+        ]
+
+        # Try ISO with timezone first (variable length)
+        try:
+            return datetime.strptime(date_str.strip(), "%Y-%m-%dT%H:%M:%S%z")
+        except (ValueError, IndexError):
+            pass
+
+        for fmt, expected_len in fmt_with_len:
             try:
-                return datetime.strptime(date_str[:len(fmt) + 5], fmt)
+                return datetime.strptime(date_str[:expected_len], fmt)
             except (ValueError, IndexError):
                 continue
 

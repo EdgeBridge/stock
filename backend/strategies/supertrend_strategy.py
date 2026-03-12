@@ -46,10 +46,11 @@ class SupertrendStrategy(BaseStrategy):
         }
 
         # Check confirmation: direction consistent for N bars
-        confirmed = self._check_confirmation(df)
+        confirmed_bull = self._check_confirmation(df, bullish=True)
+        confirmed_bear = self._check_confirmation(df, bullish=False)
 
         # BUY: bullish supertrend confirmed
-        if st_dir > 0 and confirmed and price > supertrend:
+        if st_dir > 0 and confirmed_bull and price > supertrend:
             confidence = self._calc_confidence(adx, rsi, price, supertrend)
             return Signal(
                 signal_type=SignalType.BUY,
@@ -60,8 +61,8 @@ class SupertrendStrategy(BaseStrategy):
                 indicators=indicators,
             )
 
-        # SELL: bearish supertrend
-        if st_dir < 0 and price < supertrend:
+        # SELL: bearish supertrend confirmed
+        if st_dir < 0 and confirmed_bear and price < supertrend:
             return Signal(
                 signal_type=SignalType.SELL,
                 confidence=0.7,
@@ -73,7 +74,7 @@ class SupertrendStrategy(BaseStrategy):
 
         return self._hold("No supertrend signal")
 
-    def _check_confirmation(self, df: pd.DataFrame) -> bool:
+    def _check_confirmation(self, df: pd.DataFrame, bullish: bool = True) -> bool:
         """Check if supertrend direction is consistent for N bars."""
         if len(df) < self._confirmation_bars + 1:
             return False
@@ -83,7 +84,9 @@ class SupertrendStrategy(BaseStrategy):
         if directions is None:
             return False
 
-        return all(not pd.isna(d) and d > 0 for d in directions)
+        if bullish:
+            return all(not pd.isna(d) and d > 0 for d in directions)
+        return all(not pd.isna(d) and d < 0 for d in directions)
 
     def _calc_confidence(self, adx, rsi, price, supertrend) -> float:
         conf = 0.55

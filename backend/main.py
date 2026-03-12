@@ -878,7 +878,7 @@ async def lifespan(app: FastAPI):
         if not fred_service.available:
             return
         try:
-            indicators = fred_service.fetch_macro_indicators()
+            indicators = await fred_service.fetch_macro_indicators()
             if indicators.yield_curve_inverted:
                 logger.warning("Yield curve inverted — recession signal")
             logger.info(

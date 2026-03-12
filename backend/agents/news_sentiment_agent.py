@@ -276,7 +276,7 @@ class NewsSentimentAgent:
 
             data = self._try_parse_json(json_str)
             if data is None:
-                logger.warning("Failed to parse news sentiment response (unrecoverable)")
+                logger.warning("Failed to parse news sentiment response | text=%s", json_str[:300])
                 return []
 
             results = []

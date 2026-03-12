@@ -102,24 +102,14 @@ class FREDService:
     def last_indicators(self) -> MacroIndicators | None:
         return self._last_indicators
 
-    def fetch_series(
+    def _fetch_series_sync(
         self,
         series_id: str,
         start: str | None = None,
         end: str | None = None,
         periods: int = 12,
     ) -> pd.Series:
-        """Fetch a FRED time series.
-
-        Args:
-            series_id: FRED series ID (e.g. 'DGS10')
-            start: Start date YYYY-MM-DD
-            end: End date YYYY-MM-DD
-            periods: If start not given, fetch last N data points
-
-        Returns:
-            pandas Series with datetime index
-        """
+        """Synchronous FRED fetch (use fetch_series for async context)."""
         try:
             fred = self._get_client()
             if start:
@@ -133,14 +123,27 @@ class FREDService:
             logger.warning("Failed to fetch FRED series %s: %s", series_id, e)
             return pd.Series(dtype=float)
 
-    def fetch_latest(self, series_id: str) -> float | None:
+    async def fetch_series(
+        self,
+        series_id: str,
+        start: str | None = None,
+        end: str | None = None,
+        periods: int = 12,
+    ) -> pd.Series:
+        """Fetch a FRED time series (runs in thread to avoid blocking event loop)."""
+        import asyncio
+        return await asyncio.to_thread(
+            self._fetch_series_sync, series_id, start, end, periods,
+        )
+
+    async def fetch_latest(self, series_id: str) -> float | None:
         """Fetch the most recent value for a FRED series."""
-        data = self.fetch_series(series_id, periods=5)
+        data = await self.fetch_series(series_id, periods=5)
         if data.empty:
             return None
         return float(data.iloc[-1])
 
-    def fetch_macro_indicators(self) -> MacroIndicators:
+    async def fetch_macro_indicators(self) -> MacroIndicators:
         """Fetch all key macro indicators and return a snapshot."""
         indicators = MacroIndicators(fetched_at=datetime.now().isoformat())
 
@@ -149,20 +152,20 @@ class FREDService:
             return indicators
 
         try:
-            indicators.fed_funds_rate = self.fetch_latest(FRED_SERIES["fed_funds_rate"])
-            indicators.treasury_10y = self.fetch_latest(FRED_SERIES["treasury_10y"])
-            indicators.treasury_2y = self.fetch_latest(FRED_SERIES["treasury_2y"])
+            indicators.fed_funds_rate = await self.fetch_latest(FRED_SERIES["fed_funds_rate"])
+            indicators.treasury_10y = await self.fetch_latest(FRED_SERIES["treasury_10y"])
+            indicators.treasury_2y = await self.fetch_latest(FRED_SERIES["treasury_2y"])
 
             if indicators.treasury_10y is not None and indicators.treasury_2y is not None:
                 indicators.yield_spread = round(
                     indicators.treasury_10y - indicators.treasury_2y, 2
                 )
 
-            indicators.unemployment_rate = self.fetch_latest(FRED_SERIES["unemployment_rate"])
-            indicators.initial_claims = self.fetch_latest(FRED_SERIES["initial_claims"])
+            indicators.unemployment_rate = await self.fetch_latest(FRED_SERIES["unemployment_rate"])
+            indicators.initial_claims = await self.fetch_latest(FRED_SERIES["initial_claims"])
 
             # CPI YoY: compute from last 13 months
-            cpi_data = self.fetch_series(FRED_SERIES["cpi"], periods=14)
+            cpi_data = await self.fetch_series(FRED_SERIES["cpi"], periods=14)
             if len(cpi_data) >= 13:
                 cpi_latest = float(cpi_data.iloc[-1])
                 cpi_year_ago = float(cpi_data.iloc[-13])
@@ -186,14 +189,14 @@ class FREDService:
 
         return indicators
 
-    def get_yield_curve_history(
+    async def get_yield_curve_history(
         self, months: int = 24
     ) -> pd.DataFrame:
         """Get yield curve spread history (10Y - 2Y) for trend analysis."""
         start = (datetime.now() - timedelta(days=months * 30)).strftime("%Y-%m-%d")
         try:
-            t10 = self.fetch_series(FRED_SERIES["treasury_10y"], start=start)
-            t2 = self.fetch_series(FRED_SERIES["treasury_2y"], start=start)
+            t10 = await self.fetch_series(FRED_SERIES["treasury_10y"], start=start)
+            t2 = await self.fetch_series(FRED_SERIES["treasury_2y"], start=start)
 
             if t10.empty or t2.empty:
                 return pd.DataFrame()

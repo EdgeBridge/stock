@@ -245,8 +245,8 @@ class UniverseExpander:
             # Skip symbols with special characters (warrants, units)
             if not sym.replace("-", "").isalpha():
                 continue
-            # Skip very short symbols (likely ETFs or indices)
-            if len(sym) < 1:
+            # Skip single-char symbols (likely indices)
+            if len(sym) < 2:
                 continue
             filtered.add(sym)
 

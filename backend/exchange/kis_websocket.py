@@ -66,6 +66,7 @@ class KISWebSocket:
         self._running = False
         self._reconnect_delay = MIN_RECONNECT_INTERVAL_SEC
         self._listen_task: asyncio.Task | None = None
+        self._refresh_task: asyncio.Task | None = None
         self._max_session_sec = max_session_sec
         self._connected_at: float = 0
         self._last_connect_attempt: float = 0
@@ -117,6 +118,8 @@ class KISWebSocket:
         """Gracefully close WebSocket connection."""
         self._intentional_close = True
         self._running = False
+        if self._refresh_task and not self._refresh_task.done():
+            self._refresh_task.cancel()
         if self._listen_task and not self._listen_task.done():
             self._listen_task.cancel()
         if self._ws:
@@ -306,7 +309,7 @@ class KISWebSocket:
                 if self.session_age_sec > self._max_session_sec:
                     logger.info("WS session expired (%.0fs > %ds), refreshing",
                                 self.session_age_sec, self._max_session_sec)
-                    asyncio.create_task(self.refresh_session())
+                    self._refresh_task = asyncio.create_task(self.refresh_session())
                     return
 
                 message = await asyncio.wait_for(

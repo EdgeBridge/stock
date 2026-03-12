@@ -299,10 +299,6 @@ class KISAdapter(ExchangeAdapter):
                     break
 
             if krw_balance <= 0:
-                # Query exchange rate from KIS
-                rate = await self._fetch_exchange_rate()
-                if rate <= 0:
-                    rate = 1380.0  # fallback approximate rate
                 # Get total KRW from all available fields
                 for field in ("dnca_tot_amt", "nass_amt", "tot_evlu_amt"):
                     val = output2.get(field, "")
@@ -313,7 +309,7 @@ class KISAdapter(ExchangeAdapter):
             if krw_balance > 0:
                 rate = await self._fetch_exchange_rate()
                 if rate <= 0:
-                    rate = 1380.0
+                    rate = 1380.0  # fallback approximate rate
                 usd_equiv = krw_balance / rate * 0.99  # 1% buffer for FX spread
                 logger.info(
                     "Estimated USD buying power from KRW: ₩%.0f / %.1f = $%.2f",
@@ -437,9 +433,14 @@ class KISAdapter(ExchangeAdapter):
         return data.get("rt_cd") == "0"
 
     async def fetch_order(self, order_id: str, symbol: str) -> OrderResult:
-        # KIS doesn't have single-order lookup; search in history
+        # 1) Check pending (unfilled) orders
         orders = await self.fetch_pending_orders()
         for o in orders:
+            if o.order_id == order_id:
+                return o
+        # 2) Check today's executed orders (체결내역)
+        executed = await self.fetch_executed_orders()
+        for o in executed:
             if o.order_id == order_id:
                 return o
         return OrderResult(
@@ -450,6 +451,56 @@ class KISAdapter(ExchangeAdapter):
             quantity=0,
             status="not_found",
         )
+
+    async def fetch_executed_orders(self) -> list[OrderResult]:
+        """Fetch today's executed (filled) orders — 해외주식 체결내역."""
+        await self._auth.ensure_valid_token()
+        from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
+        # Use US Eastern time for query date
+        now_et = datetime.now(ZoneInfo("America/New_York"))
+        today = now_et.strftime("%Y%m%d")
+        params = {
+            "CANO": self._config.account_no,
+            "ACNT_PRDT_CD": self._config.account_product,
+            "PDNO": "%",  # all symbols
+            "ORD_STRT_DT": today,
+            "ORD_END_DT": today,
+            "SLL_BUY_DVSN_CD": "00",  # all (buy+sell)
+            "CCLD_NCCS_DVSN": "01",  # 체결만
+            "OVRS_EXCG_CD": "NASD",
+            "SORT_SQN": "DS",
+            "ORD_GNO_BRNO": "",
+            "ODNO": "",
+            "CTX_AREA_FK200": "",
+            "CTX_AREA_NK200": "",
+        }
+        data = await self._get(
+            "/uapi/overseas-stock/v1/trading/inquire-ccnl",
+            self._tr["ORDER_HISTORY"],
+            params,
+        )
+        results = []
+        for item in data.get("output", []):
+            total_qty = float(item.get("ft_ord_qty", 0))
+            filled_qty = float(item.get("ft_ccld_qty", 0))
+            filled_price = float(item.get("ft_ccld_unpr3", 0)) or None
+            if filled_qty <= 0:
+                continue
+            results.append(
+                OrderResult(
+                    order_id=item.get("odno", ""),
+                    symbol=item.get("pdno", ""),
+                    side="buy" if item.get("sll_buy_dvsn_cd") == "02" else "sell",
+                    order_type="limit",
+                    quantity=total_qty,
+                    price=float(item.get("ft_ord_unpr3", 0)),
+                    filled_quantity=filled_qty,
+                    filled_price=filled_price,
+                    status="filled" if filled_qty >= total_qty else "partial",
+                )
+            )
+        return results
 
     async def fetch_pending_orders(self) -> list[OrderResult]:
         await self._auth.ensure_valid_token()

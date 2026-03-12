@@ -312,7 +312,7 @@ class PositionTracker:
                 take_profit_pct=take_profit_pct,
             )
 
-            pnl_pct = ((pos.current_price / entry_price) - 1) * 100 if entry_price else 0
+            pnl_pct = ((pos.current_price / entry_price) - 1) * 100 if entry_price > 0 else 0
             restored.append({
                 "symbol": pos.symbol,
                 "quantity": int(pos.quantity),

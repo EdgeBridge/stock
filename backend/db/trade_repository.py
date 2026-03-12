@@ -90,7 +90,9 @@ class TradeRepository:
         return list(result.scalars().all())
 
     async def get_open_orders(self) -> list[Order]:
-        stmt = select(Order).where(Order.status.in_(["pending", "open", "submitted"]))
+        stmt = select(Order).where(
+            Order.status.in_(["pending", "open", "submitted", "not_found"])
+        )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 

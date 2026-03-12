@@ -107,7 +107,7 @@ class CISMomentumStrategy(BaseStrategy):
         vol = df["volume"]
         vol_ma = vol.rolling(20).mean().iloc[-1]
         current_vol = float(vol.iloc[-1])
-        if vol_ma > 0 and not pd.isna(vol_ma):
+        if vol_ma > 0 and not pd.isna(vol_ma) and not pd.isna(current_vol):
             return current_vol / float(vol_ma)
         return 1.0
 

@@ -67,6 +67,8 @@ class RSIDivergenceStrategy(BaseStrategy):
                 first_min_r = float(np.nanmin(rsi_first)) if not np.all(np.isnan(rsi_first)) else 50
                 second_min_r = float(np.nanmin(rsi_second)) if not np.all(np.isnan(rsi_second)) else 50
 
+                if first_min_p <= 0:
+                    return self._hold("Invalid price data for divergence")
                 price_drop = (first_min_p - second_min_p) / first_min_p * 100
                 if price_drop > self._min_price_move_pct and second_min_r > first_min_r:
                     # Bullish divergence confirmed

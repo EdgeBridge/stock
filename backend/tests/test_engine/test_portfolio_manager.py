@@ -133,9 +133,9 @@ class TestGetDailyPnl:
             session.add(snapshot)
             await session.commit()
 
-        # Current equity = 100_000 + 150 = 100_150
+        # Current equity = balance.total = 100_000 (already includes positions)
         pnl = await manager.get_daily_pnl()
-        assert pnl == pytest.approx(100_150.0 - 99_000.0)
+        assert pnl == pytest.approx(100_000.0 - 99_000.0)
 
 
 class TestGetEquityHistory:
