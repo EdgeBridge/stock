@@ -104,10 +104,10 @@ export default function Dashboard() {
       {/* Realized P&L by Period */}
       {(usTradeSummary || krTradeSummary) && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <PnLCard label="Today" us={usTradeSummary?.today} kr={krTradeSummary?.today} rate={rate} />
-          <PnLCard label="This Week" us={usTradeSummary?.week} kr={krTradeSummary?.week} rate={rate} />
-          <PnLCard label="This Month" us={usTradeSummary?.month} kr={krTradeSummary?.month} rate={rate} />
-          <PnLCard label="All Time" us={usTradeSummary?.all_time} kr={krTradeSummary?.all_time} rate={rate} />
+          <PnLCard label="Today" us={usTradeSummary?.today} kr={krTradeSummary?.today} />
+          <PnLCard label="This Week" us={usTradeSummary?.week} kr={krTradeSummary?.week} />
+          <PnLCard label="This Month" us={usTradeSummary?.month} kr={krTradeSummary?.month} />
+          <PnLCard label="All Time" us={usTradeSummary?.all_time} kr={krTradeSummary?.all_time} />
         </div>
       )}
 
@@ -350,28 +350,40 @@ function Card({ title, value, sub }: { title: string; value: React.ReactNode; su
 
 interface PeriodData { pnl: number; trades: number; wins: number; losses: number; win_rate: number }
 
-function PnLCard({ label, us, kr, rate }: { label: string; us?: PeriodData; kr?: PeriodData; rate: number }) {
-  const usPnl = us?.pnl ?? 0
-  const krPnl = kr?.pnl ?? 0
-  const totalKrw = krPnl + usPnl * rate
-  const totalTrades = (us?.trades ?? 0) + (kr?.trades ?? 0)
-  const totalWins = (us?.wins ?? 0) + (kr?.wins ?? 0)
-  const totalLosses = (us?.losses ?? 0) + (kr?.losses ?? 0)
+function PnLLine({ pnl, currency, trades, wins, losses }: { pnl: number; currency: string; trades: number; wins: number; losses: number }) {
+  const color = pnl >= 0 ? 'text-green-400' : 'text-red-400'
+  const sign = pnl >= 0 ? '+' : ''
+  return (
+    <div className="flex items-baseline justify-between gap-2">
+      <span className={`text-lg font-bold ${color}`}>{sign}{formatCurrency(pnl, currency)}</span>
+      <span className="text-xs text-gray-500">{trades}T {wins}W/{losses}L</span>
+    </div>
+  )
+}
 
-  const color = totalKrw >= 0 ? 'text-green-400' : 'text-red-400'
-  const sign = totalKrw >= 0 ? '+' : ''
+function PnLCard({ label, us, kr }: { label: string; us?: PeriodData; kr?: PeriodData }) {
+  const hasKr = (kr?.trades ?? 0) > 0
+  const hasUs = (us?.trades ?? 0) > 0
 
   return (
     <div className="bg-gray-900 rounded-lg p-4">
-      <div className="text-xs text-gray-400 uppercase tracking-wide">{label}</div>
-      <div className={`text-xl font-bold mt-1 ${color}`}>
-        {totalTrades > 0 ? `${sign}${formatCurrency(totalKrw, 'KRW')}` : '—'}
-      </div>
-      {totalTrades > 0 && (
-        <div className="text-xs text-gray-500 mt-0.5 space-y-0.5">
-          <div>{totalTrades} trades · {totalWins}W/{totalLosses}L</div>
-          {(kr?.trades ?? 0) > 0 && <div>KR {formatCurrency(krPnl, 'KRW')}</div>}
-          {(us?.trades ?? 0) > 0 && <div>US {formatCurrency(usPnl, 'USD')}</div>}
+      <div className="text-xs text-gray-400 uppercase tracking-wide mb-2">{label}</div>
+      {!hasKr && !hasUs ? (
+        <div className="text-lg text-gray-600">—</div>
+      ) : (
+        <div className="space-y-1">
+          {hasKr && (
+            <div>
+              <div className="text-[10px] text-purple-400 mb-0.5">KR</div>
+              <PnLLine pnl={kr!.pnl} currency="KRW" trades={kr!.trades} wins={kr!.wins} losses={kr!.losses} />
+            </div>
+          )}
+          {hasUs && (
+            <div>
+              <div className="text-[10px] text-blue-400 mb-0.5">US</div>
+              <PnLLine pnl={us!.pnl} currency="USD" trades={us!.trades} wins={us!.wins} losses={us!.losses} />
+            </div>
+          )}
         </div>
       )}
     </div>
