@@ -1,8 +1,9 @@
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { fetchSignals, type SignalEntry } from '../api/client'
+import { fetchSignals, fetchStockNames, type SignalEntry } from '../api/client'
 import { useMarket } from '../contexts/MarketContext'
 
-function SignalRow({ s }: { s: SignalEntry }) {
+function SignalRow({ s, name }: { s: SignalEntry; name?: string }) {
   const isBuy = s.signal === 'BUY'
   const color = isBuy ? 'text-green-400' : 'text-red-400'
   const bg = isBuy ? 'bg-green-900/20' : 'bg-red-900/20'
@@ -13,7 +14,10 @@ function SignalRow({ s }: { s: SignalEntry }) {
   return (
     <tr className={`${bg} border-b border-gray-800/50`}>
       <td className="px-3 py-2 text-xs text-gray-400">{date} {time}</td>
-      <td className="px-3 py-2 text-sm font-mono font-medium text-white">{s.symbol}</td>
+      <td className="px-3 py-2 text-sm font-mono font-medium text-white">
+        {s.symbol}
+        {name && <span className="ml-1.5 text-xs text-gray-500 font-sans">{name}</span>}
+      </td>
       <td className={`px-3 py-2 text-sm font-bold ${color}`}>{s.signal}</td>
       <td className="px-3 py-2 text-sm text-gray-300">{(s.confidence * 100).toFixed(0)}%</td>
       <td className="px-3 py-2 text-xs text-gray-400">{s.strategy}</td>
@@ -30,6 +34,26 @@ export default function SignalPanel() {
     queryFn: () => fetchSignals(market, 100),
     refetchInterval: 30_000,
   })
+
+  const [names, setNames] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    if (!signals || signals.length === 0) return
+    const usSyms = [...new Set(signals.filter(s => s.market === 'US').map(s => s.symbol))]
+    const krSyms = [...new Set(signals.filter(s => s.market === 'KR').map(s => s.symbol))]
+
+    const promises: Promise<Record<string, string>>[] = []
+    if (usSyms.length) promises.push(fetchStockNames(usSyms, 'US'))
+    if (krSyms.length) promises.push(fetchStockNames(krSyms, 'KR'))
+
+    if (promises.length) {
+      Promise.all(promises).then(results => {
+        const merged: Record<string, string> = {}
+        for (const r of results) Object.assign(merged, r)
+        setNames(merged)
+      })
+    }
+  }, [signals])
 
   if (isLoading) return <div className="text-gray-500">Loading signals...</div>
   if (!signals || signals.length === 0) {
@@ -65,7 +89,7 @@ export default function SignalPanel() {
             </tr>
           </thead>
           <tbody>
-            {signals.map((s, i) => <SignalRow key={i} s={s} />)}
+            {signals.map((s, i) => <SignalRow key={i} s={s} name={names[s.symbol]} />)}
           </tbody>
         </table>
       </div>
