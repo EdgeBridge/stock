@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { fetchSignals, fetchStockNames, type SignalEntry } from '../api/client'
 import { useMarket } from '../contexts/MarketContext'
@@ -35,25 +35,32 @@ export default function SignalPanel() {
     refetchInterval: 30_000,
   })
 
-  const [names, setNames] = useState<Record<string, string>>({})
-
-  useEffect(() => {
-    if (!signals || signals.length === 0) return
-    const usSyms = [...new Set(signals.filter(s => s.market === 'US').map(s => s.symbol))]
-    const krSyms = [...new Set(signals.filter(s => s.market === 'KR').map(s => s.symbol))]
-
-    const promises: Promise<Record<string, string>>[] = []
-    if (usSyms.length) promises.push(fetchStockNames(usSyms, 'US'))
-    if (krSyms.length) promises.push(fetchStockNames(krSyms, 'KR'))
-
-    if (promises.length) {
-      Promise.all(promises).then(results => {
-        const merged: Record<string, string> = {}
-        for (const r of results) Object.assign(merged, r)
-        setNames(merged)
-      })
-    }
+  // Extract unique symbols per market for name lookup
+  const { usSyms, krSyms } = useMemo(() => {
+    if (!signals?.length) return { usSyms: [] as string[], krSyms: [] as string[] }
+    const us = [...new Set(signals.filter(s => s.market === 'US').map(s => s.symbol))].sort()
+    const kr = [...new Set(signals.filter(s => s.market === 'KR').map(s => s.symbol))].sort()
+    return { usSyms: us, krSyms: kr }
   }, [signals])
+
+  const { data: usNames } = useQuery({
+    queryKey: ['stockNames', 'US', usSyms],
+    queryFn: () => fetchStockNames(usSyms, 'US'),
+    enabled: usSyms.length > 0,
+    staleTime: 5 * 60_000,
+  })
+
+  const { data: krNames } = useQuery({
+    queryKey: ['stockNames', 'KR', krSyms],
+    queryFn: () => fetchStockNames(krSyms, 'KR'),
+    enabled: krSyms.length > 0,
+    staleTime: 5 * 60_000,
+  })
+
+  const names: Record<string, string> = useMemo(
+    () => ({ ...usNames, ...krNames }),
+    [usNames, krNames],
+  )
 
   if (isLoading) return <div className="text-gray-500">Loading signals...</div>
   if (!signals || signals.length === 0) {
