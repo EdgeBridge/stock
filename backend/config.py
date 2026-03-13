@@ -83,6 +83,22 @@ class LLMConfig(BaseSettings):
     model_config = {"env_prefix": "LLM_"}
 
 
+class ExtendedHoursConfig(BaseSettings):
+    """Extended hours trading configuration (kill switch + risk params)."""
+    enabled: bool = False  # Master kill switch
+    us_enabled: bool = False  # US pre-market / after-hours
+    kr_enabled: bool = False  # KR 시간외 / NXT
+    # Conservative risk parameters (vs regular session)
+    max_position_pct: float = 0.03  # 3% per position (regular: 8%)
+    max_positions: int = 5
+    min_confidence: float = 0.70  # Higher bar for entry
+    slippage_multiplier: float = 3.0  # 3x slippage vs regular
+    # Step-by-step activation
+    sl_tp_monitoring_only: bool = True  # Phase 1: only monitor SL/TP, no new buys
+
+    model_config = {"env_prefix": "EXTENDED_HOURS_"}
+
+
 class ExternalDataConfig(BaseSettings):
     fred_api_key: str = ""
     finnhub_api_key: str = ""
@@ -96,6 +112,7 @@ class AppConfig:
         self.trading = TradingConfig()
         self.etf = ETFConfig()
         self.risk = RiskConfig()
+        self.extended_hours = ExtendedHoursConfig()
         self.database = DatabaseConfig()
         self.redis = RedisConfig()
         self.notification = NotificationConfig()

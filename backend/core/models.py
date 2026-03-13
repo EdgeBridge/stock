@@ -40,6 +40,7 @@ class Order(Base):
     buy_strategy = Column(String(50))   # original buy strategy (for SELL attribution)
     kis_order_id = Column(String(50))
     pnl = Column(Float)
+    session = Column(String(20), nullable=True, default="regular")  # regular/pre_market/after_hours/extended_nxt
     created_at = Column(DateTime, default=datetime.utcnow)
     filled_at = Column(DateTime)
 

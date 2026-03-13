@@ -364,6 +364,77 @@ class RiskManager:
         current_invested = portfolio_value - cash_available
         return max(0.0, max_invested - current_invested)
 
+    def calculate_extended_hours_position_size(
+        self,
+        symbol: str,
+        price: float,
+        portfolio_value: float,
+        cash_available: float,
+        current_positions: int,
+        max_position_pct: float = 0.03,
+        max_positions: int = 5,
+        market: str | None = None,
+        combined_portfolio_value: float | None = None,
+    ) -> PositionSizeResult:
+        """Conservative position sizing for extended hours trading.
+
+        Uses tighter limits than regular session:
+        - 3% max per position (vs 8% regular)
+        - 5 max positions (vs 20 regular)
+        - Limit orders only (enforced by caller)
+        """
+        portfolio_value, cash_available = self._apply_market_cap(
+            portfolio_value, cash_available, market, combined_portfolio_value,
+        )
+
+        if current_positions >= max_positions:
+            return PositionSizeResult(
+                quantity=0, allocation_usd=0, risk_per_share=0,
+                reason=f"Extended hours max positions ({max_positions})",
+                allowed=False,
+            )
+
+        reject = self._check_exposure_limit(portfolio_value, cash_available)
+        if reject:
+            return reject
+
+        if self._daily_pnl < 0 and portfolio_value > 0:
+            daily_loss_pct = abs(self._daily_pnl) / portfolio_value
+            if daily_loss_pct >= self._params.daily_loss_limit_pct:
+                return PositionSizeResult(
+                    quantity=0, allocation_usd=0, risk_per_share=0,
+                    reason=f"Daily loss limit hit ({daily_loss_pct:.1%})",
+                    allowed=False,
+                )
+
+        max_alloc = portfolio_value * max_position_pct
+        max_from_cash = cash_available * 0.95
+        exposure_headroom = self._get_exposure_headroom(portfolio_value, cash_available)
+        allocation = min(max_alloc, max_from_cash, exposure_headroom)
+
+        if allocation <= 0 or price <= 0:
+            return PositionSizeResult(
+                quantity=0, allocation_usd=0, risk_per_share=0,
+                reason="No cash available (extended hours)",
+                allowed=False,
+            )
+
+        quantity = int(allocation / price)
+        if quantity <= 0:
+            return PositionSizeResult(
+                quantity=0, allocation_usd=0, risk_per_share=0,
+                reason="Price too high for extended hours allocation",
+                allowed=False,
+            )
+
+        return PositionSizeResult(
+            quantity=quantity,
+            allocation_usd=quantity * price,
+            risk_per_share=price * self._params.default_stop_loss_pct,
+            reason="OK (extended hours)",
+            allowed=True,
+        )
+
     def calculate_dynamic_sl_tp(
         self,
         price: float,

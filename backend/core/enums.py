@@ -97,6 +97,14 @@ class ExitAction(str, Enum):
     EXIT = "EXIT"
 
 
+class TradingSession(str, Enum):
+    """Trading session for order execution."""
+    REGULAR = "regular"
+    PRE_MARKET = "pre_market"
+    AFTER_HOURS = "after_hours"
+    EXTENDED_NXT = "extended_nxt"  # KR NXT exchange
+
+
 class ScanType(str, Enum):
     VOLUME_SURGE = "volume_surge"
     PRICE_MOVER = "price_mover"
