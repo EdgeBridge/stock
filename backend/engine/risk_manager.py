@@ -131,7 +131,12 @@ class RiskManager:
         capped_portfolio = base * cap_pct
         # Never exceed what this market actually has
         capped_portfolio = min(capped_portfolio, portfolio_value)
-        capped_cash = min(cash_available, capped_portfolio)
+        # Preserve actual invested amount so exposure check works correctly.
+        # Bug fix: old code did `capped_cash = min(cash, capped_portfolio)` which
+        # made invested=0 whenever cash > capped_portfolio, bypassing exposure limits.
+        invested = portfolio_value - cash_available
+        capped_cash = max(0.0, capped_portfolio - invested)
+        capped_cash = min(capped_cash, cash_available)  # can't exceed real cash
         return capped_portfolio, capped_cash
 
     def calculate_position_size(

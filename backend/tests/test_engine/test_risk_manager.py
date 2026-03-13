@@ -326,6 +326,56 @@ class TestMarketAllocation:
         )
         assert with_combined.quantity >= without.quantity
 
+    def test_exposure_check_with_existing_positions(self):
+        """When positions exist, exposure is correctly calculated after capping.
+
+        Regression test: previously capped_cash == capped_portfolio when
+        cash > cap, making invested=0 and exposure=0% — bypassing limits.
+        """
+        rm = self._make_rm(us=0.5, kr=0.5)
+        # KR: portfolio=9M, cash=7.7M → invested=1.3M
+        # combined=9.7M, cap=50% → capped_portfolio=4.85M
+        # capped_cash should be 4.85M - 1.3M = 3.55M (not 4.85M!)
+        result = rm.calculate_position_size(
+            symbol="005930", price=50_000.0,
+            portfolio_value=9_000_000, cash_available=7_700_000,
+            current_positions=0, market="KR",
+            combined_portfolio_value=9_700_000,
+        )
+        assert result.allowed is True
+        # Max allocation: capped_portfolio(4.85M) * 7%(uptrend) = 339,500
+        assert result.allocation_usd <= 4_850_000 * 0.08 + 1
+
+    def test_exposure_blocks_when_heavily_invested(self):
+        """Already invested beyond cap → no new positions allowed."""
+        rm = self._make_rm(us=0.5, kr=0.5)
+        # KR: portfolio=9M, cash=1M → invested=8M
+        # combined=9.7M, cap=50% → capped_portfolio=4.85M
+        # invested(8M) > capped_portfolio(4.85M) → capped_cash=0
+        result = rm.calculate_position_size(
+            symbol="005930", price=50_000.0,
+            portfolio_value=9_000_000, cash_available=1_000_000,
+            current_positions=0, market="KR",
+            combined_portfolio_value=9_700_000,
+        )
+        assert result.allowed is False
+        assert "exposure" in result.reason.lower() or "cash" in result.reason.lower()
+
+    def test_exposure_correct_without_combined(self):
+        """Without combined_portfolio, exposure still correctly tracks invested."""
+        rm = self._make_rm(us=0.5, kr=0.5)
+        # portfolio=100K, cash=60K → invested=40K
+        # cap=50% → capped_portfolio=50K
+        # capped_cash = 50K - 40K = 10K
+        result = rm.calculate_position_size(
+            symbol="AAPL", price=100.0,
+            portfolio_value=100_000, cash_available=60_000,
+            current_positions=0, market="US",
+        )
+        assert result.allowed is True
+        # allocation from 10K cash (limited)
+        assert result.allocation_usd <= 10_000 + 1
+
 
 class TestConfidenceBasedSizing:
     """Test that signal confidence affects position size meaningfully."""
