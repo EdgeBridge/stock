@@ -29,6 +29,7 @@ class Trade:
     pnl_pct: float = 0.0
     holding_days: int = 0
     strategy_name: str = ""
+    session: str = "regular"  # "regular" or "extended"
 
 
 @dataclass
@@ -53,6 +54,11 @@ class BacktestMetrics:
     # Benchmark
     benchmark_return_pct: float = 0.0
     alpha: float = 0.0
+    # Extended hours stats
+    extended_trades: int = 0
+    extended_wins: int = 0
+    extended_win_rate: float = 0.0
+    extended_pnl: float = 0.0
     # Summary
     start_date: str = ""
     end_date: str = ""
@@ -162,6 +168,15 @@ class MetricsCalculator:
                 metrics.avg_loss_pct = np.mean([t.pnl_pct for t in losers])
 
             metrics.avg_holding_days = np.mean([t.holding_days for t in trades])
+
+        # Extended hours stats
+        ext_trades = [t for t in trades if getattr(t, "session", "regular") == "extended"]
+        if ext_trades:
+            metrics.extended_trades = len(ext_trades)
+            ext_wins = [t for t in ext_trades if t.pnl > 0]
+            metrics.extended_wins = len(ext_wins)
+            metrics.extended_win_rate = len(ext_wins) / len(ext_trades) * 100
+            metrics.extended_pnl = sum(t.pnl for t in ext_trades)
 
         # Benchmark comparison
         if benchmark_returns is not None and not benchmark_returns.empty:
