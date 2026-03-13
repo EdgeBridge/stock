@@ -94,7 +94,9 @@ class TestLLMClientFallbackChain:
         client._gemini = MagicMock()
         chain = client._build_fallback_chain()
         assert len(chain) == 3
-        assert chain[2][0] == "gemini-3-flash-preview"
+        # Cost-aware order: Haiku → Gemini (free) → Sonnet (expensive)
+        assert chain[1][0] == "gemini-3-flash-preview"
+        assert chain[2][0] == "claude-sonnet-4-6"
 
     def test_chain_with_model_override(self):
         client, _ = _make_client_with_mock_provider()
