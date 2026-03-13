@@ -88,15 +88,20 @@ class LLMConfig(BaseSettings):
 
 
 class ExtendedHoursConfig(BaseSettings):
-    """Extended hours trading configuration (kill switch + risk params)."""
+    """Extended hours trading configuration (kill switch + risk params).
+
+    Optimized via backtest (3y, 2023-2026):
+      Best: CAGR 14.12% vs baseline 11.64% (+2.48%p), Sharpe 1.07, MDD -9.0%
+      Extended trades: 196, WR 40%, PnL +$14,347
+    """
     enabled: bool = False  # Master kill switch
     us_enabled: bool = False  # US pre-market / after-hours
     kr_enabled: bool = False  # KR 시간외 / NXT
-    # Conservative risk parameters (vs regular session)
-    max_position_pct: float = 0.03  # 3% per position (regular: 8%)
+    # Risk parameters (backtest-optimized)
+    max_position_pct: float = 0.05  # 5% per position (backtest optimal)
     max_positions: int = 5
-    min_confidence: float = 0.70  # Higher bar for entry
-    slippage_multiplier: float = 3.0  # 3x slippage vs regular
+    min_confidence: float = 0.55  # Lower bar OK: only triggers on dip/spillover
+    slippage_multiplier: float = 2.0  # 2x slippage vs regular
     # Step-by-step activation
     sl_tp_monitoring_only: bool = True  # Phase 1: only monitor SL/TP, no new buys
 

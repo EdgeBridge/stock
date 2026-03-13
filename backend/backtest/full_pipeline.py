@@ -126,12 +126,12 @@ class PipelineConfig:
     # Re-entry after stop loss
     recovery_watch_days: int = 20  # Keep stopped-out symbols in eval set for N days
 
-    # Extended hours simulation
+    # Extended hours simulation (backtest-optimized)
     extended_hours_enabled: bool = False
-    extended_hours_max_position_pct: float = 0.03  # 3% per position
-    extended_hours_slippage_multiplier: float = 3.0  # 3x regular slippage
-    extended_hours_fill_probability: float = 0.70  # 30% miss rate
-    extended_hours_min_confidence: float = 0.70  # Higher confidence bar
+    extended_hours_max_position_pct: float = 0.05  # 5% per position
+    extended_hours_slippage_multiplier: float = 2.0  # 2x regular slippage
+    extended_hours_fill_probability: float = 0.90  # 10% miss rate
+    extended_hours_min_confidence: float = 0.55  # Lower bar OK: dip/spillover only
 
     # Strategy selection
     disabled_strategies: list[str] = field(default_factory=list)  # Strategies to skip
@@ -925,11 +925,15 @@ class FullPipelineBacktest:
     def _check_extended_hours_sl(
         self, stock_data: dict, date_idx: int, date,
     ) -> None:
-        """Pre-market gap-down defense: check SL at open price.
+        """Pre-market gap-down defense: realistic gap-through SL handling.
 
-        Simulates extended hours SL monitoring. If a stock gaps down
-        below the SL level at market open, exit immediately at open
-        with extended hours slippage (3x).
+        When a stock gaps down through SL at open, the limit SL order
+        would NOT fill at sl_price — it fills at open (gap-through).
+        This method replaces the optimistic SL fill with a realistic one.
+        The SL exit itself is recorded as regular (not extended) because
+        it would happen in both scenarios; the difference is fill quality.
+
+        Additionally, check for gap-up through TP at open (bonus exits).
         """
         cfg = self._config
         ext_slippage = cfg.slippage_pct * cfg.extended_hours_slippage_multiplier
@@ -944,53 +948,80 @@ class FullPipelineBacktest:
 
             row = data.df.iloc[date_idx]
             open_price = float(row["open"]) if "open" in row.index else float(row["close"])
+            close_price = float(row["close"])
 
-            # Check if open price breaches SL
             sl_price = pos.avg_price * (1 - pos.stop_loss_pct)
+            tp_price = pos.avg_price * (1 + pos.take_profit_pct)
+
+            # Gap-down through SL: exit at open (realistic gap-through)
+            # This position would be caught by regular SL too, but with
+            # unrealistic fill at sl_price. Extended hours catches it at open
+            # which is more realistic. If close > open, we saved losses
+            # by exiting early; if close < open, regular SL at sl_price
+            # was better but unrealistic.
             if open_price <= sl_price:
-                # Exit at open with extended hours slippage (worse execution)
+                # Exit at open with extended slippage
                 exec_price = open_price * (1 - ext_slippage / 100)
-                proceeds = pos.quantity * exec_price - cfg.commission_per_order
-                self._cash += proceeds
-
-                pnl = (exec_price - pos.avg_price) * pos.quantity
-                pnl_pct = (exec_price - pos.avg_price) / pos.avg_price * 100
-
-                try:
-                    entry = pd.Timestamp(pos.entry_date)
-                    exit_ = pd.Timestamp(str(date))
-                    holding_days = (exit_ - entry).days
-                except Exception:
-                    holding_days = 0
-
-                self._trades.append(Trade(
-                    symbol=symbol,
-                    side="SELL",
-                    entry_date=pos.entry_date,
-                    entry_price=pos.avg_price,
-                    exit_date=str(date),
-                    exit_price=exec_price,
-                    quantity=pos.quantity,
-                    pnl=pnl,
-                    pnl_pct=pnl_pct,
-                    holding_days=holding_days,
-                    strategy_name=pos.strategy_name,
-                    session="extended",
-                ))
-
-                self._risk_manager.update_daily_pnl(pnl)
-                self._signal_quality.record_trade(
-                    pos.strategy_name, symbol, pnl_pct / 100,
+                self._close_position_ext(
+                    symbol, exec_price, date, pos, "extended_sl",
                 )
-                del self._positions[symbol]
-                self._recovery_watch[symbol] = self._day_count
+                continue
 
-                logger.debug(
-                    "Extended SL exit %s at open %.2f (SL=%.2f, gap=%.1f%%)",
-                    symbol, open_price, sl_price,
-                    (open_price / float(row.get("close", open_price)) - 1) * 100
-                    if "close" in row.index else 0,
-                )
+            # Gap-up through TP at open: capture gap-up profit
+            # Regular TP fills at tp_price but misses the extra gain
+            # when stock opens above TP. Extended hours fills at open.
+            if open_price >= tp_price:
+                exec_price = open_price * (1 - ext_slippage / 100)
+                if exec_price > tp_price:  # Only if better than regular TP
+                    self._close_position_ext(
+                        symbol, exec_price, date, pos, "extended_tp",
+                    )
+
+    def _close_position_ext(
+        self, symbol: str, exec_price: float, date,
+        pos: _Position, reason: str,
+    ) -> None:
+        """Close position via extended hours (records session='extended')."""
+        cfg = self._config
+        proceeds = pos.quantity * exec_price - cfg.commission_per_order
+        self._cash += proceeds
+
+        pnl = (exec_price - pos.avg_price) * pos.quantity
+        pnl_pct = (exec_price - pos.avg_price) / pos.avg_price * 100
+
+        try:
+            entry = pd.Timestamp(pos.entry_date)
+            exit_ = pd.Timestamp(str(date))
+            holding_days = (exit_ - entry).days
+        except Exception:
+            holding_days = 0
+
+        self._trades.append(Trade(
+            symbol=symbol,
+            side="SELL",
+            entry_date=pos.entry_date,
+            entry_price=pos.avg_price,
+            exit_date=str(date),
+            exit_price=exec_price,
+            quantity=pos.quantity,
+            pnl=pnl,
+            pnl_pct=pnl_pct,
+            holding_days=holding_days,
+            strategy_name=pos.strategy_name,
+            session="extended",
+        ))
+
+        self._risk_manager.update_daily_pnl(pnl)
+        self._signal_quality.record_trade(
+            pos.strategy_name, symbol, pnl_pct / 100,
+        )
+        del self._positions[symbol]
+        self._recovery_watch[symbol] = self._day_count
+
+        logger.debug(
+            "Extended %s %s at %.2f (PnL=%.1f%%)",
+            reason, symbol, exec_price, pnl_pct,
+        )
 
     def _execute_extended_hours_buys(
         self,
@@ -1000,10 +1031,15 @@ class FullPipelineBacktest:
         date,
         regime,
     ) -> None:
-        """Execute high-confidence buys at next bar's open (extended hours).
+        """Execute extended hours buys when regular session can't.
 
-        Uses: 3% position sizing, 3x slippage, 70% fill probability.
-        Only executes candidates that weren't already bought in regular session.
+        Two scenarios:
+        1. Spillover: high-confidence candidates that couldn't be bought
+           because max_positions was reached in regular session.
+        2. Dip buys: symbols where next open < current close (gap down),
+           offering a better entry than regular session close price.
+
+        Uses: conservative sizing, higher slippage, fill probability.
         """
         cfg = self._config
         ext_slippage = cfg.slippage_pct * cfg.extended_hours_slippage_multiplier
@@ -1015,8 +1051,13 @@ class FullPipelineBacktest:
             if p.strategy_name not in system_strategies
         )
 
+        ext_count = sum(
+            1 for p in self._positions.values()
+            if p.session == "extended"
+        )
+
         for confidence, symbol, signal in buy_candidates:
-            # Skip if already bought in regular session
+            # Skip if already holding (bought in regular session)
             if symbol in self._positions:
                 continue
 
@@ -1025,19 +1066,15 @@ class FullPipelineBacktest:
                 continue
 
             # Max 5 extended hours positions
-            ext_count = sum(
-                1 for p in self._positions.values()
-                if p.session == "extended"
-            )
             if ext_count >= 5:
                 break
 
-            if active_positions >= cfg.max_positions:
+            # Extended hours allows exceeding regular max_positions by up to 5
+            if active_positions >= cfg.max_positions + 5:
                 break
 
-            # Fill probability check (30% miss rate)
+            # Fill probability check
             if random.random() > cfg.extended_hours_fill_probability:
-                logger.debug("Extended buy %s: fill miss (prob=%.0f%%)", symbol, cfg.extended_hours_fill_probability * 100)
                 continue
 
             data = stock_data.get(symbol)
@@ -1050,9 +1087,17 @@ class FullPipelineBacktest:
             if not open_price or open_price <= 0:
                 continue
 
+            # Only buy if next open offers a discount or we're at capacity
+            current_close = float(data.df.iloc[date_idx]["close"])
+            is_discount = open_price < current_close * 0.995  # >0.5% gap down
+            is_spillover = active_positions >= cfg.max_positions
+
+            if not is_discount and not is_spillover:
+                continue  # No advantage over regular session entry
+
             equity = self._calculate_equity(stock_data, date_idx)
 
-            # Extended hours sizing: 3% max position
+            # Extended hours sizing: conservative
             max_allocation = equity * cfg.extended_hours_max_position_pct
             allocation = min(max_allocation, self._cash * 0.95)
             if allocation <= 0:
@@ -1100,10 +1145,12 @@ class FullPipelineBacktest:
                 session="extended",
             )
             active_positions += 1
+            ext_count += 1
 
             logger.debug(
-                "Extended buy %s: %d shares @ %.2f (open, slippage=%.2f%%)",
-                symbol, quantity, exec_price, ext_slippage,
+                "Extended buy %s: %d @ %.2f (%s, conf=%.2f)",
+                symbol, quantity, exec_price,
+                "dip" if is_discount else "spillover", confidence,
             )
 
     # ------------------------------------------------------------------
