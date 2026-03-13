@@ -119,6 +119,7 @@ class ExchangeAdapter(ABC):
         price: float | None = None,
         order_type: str = "limit",
         exchange: str = "NASD",
+        session: str = "regular",
     ) -> OrderResult:
         ...
 
@@ -130,6 +131,7 @@ class ExchangeAdapter(ABC):
         price: float | None = None,
         order_type: str = "limit",
         exchange: str = "NASD",
+        session: str = "regular",
     ) -> OrderResult:
         ...
 

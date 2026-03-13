@@ -346,7 +346,22 @@ class KISKRAdapter(ExchangeAdapter):
         price: float | None = None,
         order_type: str = "limit",
         exchange: str = "KRX",
+        session: str = "regular",
     ) -> OrderResult:
+        if session == "pre_market":
+            # 장전시간외 (07:30~08:30): 전일종가 only, ORD_DVSN=05
+            return await self._place_order(
+                symbol, "buy", quantity, price, "limit", self._tr["BUY"],
+                ord_dvsn_override="05",
+            )
+        elif session == "after_hours":
+            # 장후시간외 (15:40~16:00): 당일종가 only, ORD_DVSN=06
+            return await self._place_order(
+                symbol, "buy", quantity, price, "limit", self._tr["BUY"],
+                ord_dvsn_override="06",
+            )
+        elif session == "extended_nxt":
+            return await self._place_nxt_order(symbol, "buy", quantity, price)
         return await self._place_order(
             symbol, "buy", quantity, price, order_type, self._tr["BUY"]
         )
@@ -358,7 +373,20 @@ class KISKRAdapter(ExchangeAdapter):
         price: float | None = None,
         order_type: str = "limit",
         exchange: str = "KRX",
+        session: str = "regular",
     ) -> OrderResult:
+        if session == "pre_market":
+            return await self._place_order(
+                symbol, "sell", quantity, price, "limit", self._tr["SELL"],
+                ord_dvsn_override="05",
+            )
+        elif session == "after_hours":
+            return await self._place_order(
+                symbol, "sell", quantity, price, "limit", self._tr["SELL"],
+                ord_dvsn_override="06",
+            )
+        elif session == "extended_nxt":
+            return await self._place_nxt_order(symbol, "sell", quantity, price)
         return await self._place_order(
             symbol, "sell", quantity, price, order_type, self._tr["SELL"]
         )
@@ -498,6 +526,59 @@ class KISKRAdapter(ExchangeAdapter):
 
     # -- Private helpers --
 
+    async def _place_nxt_order(
+        self, symbol: str, side: str, quantity: int, price: float | None,
+    ) -> OrderResult:
+        """Place order on NXT (넥스트레이드) exchange.
+
+        NXT TR_IDs: Buy TTTC0012U (paper: VTTTC0012U), Sell TTTC0011U (paper: VTTTC0011U).
+        EXCG_ID_DVSN_CD: NXT (direct) or SOR (smart order routing).
+        Limit orders only. Trading hours: pre 08:00~09:00, after 15:40~20:00.
+        """
+        await self._auth.ensure_valid_token()
+
+        if side == "buy":
+            tr_id = "VTTC0012U" if self._is_paper else "TTTC0012U"
+        else:
+            tr_id = "VTTC0011U" if self._is_paper else "TTTC0011U"
+
+        body = {
+            "CANO": self._config.account_no,
+            "ACNT_PRDT_CD": self._config.account_product,
+            "PDNO": symbol,
+            "ORD_QTY": str(quantity),
+            "ORD_UNPR": str(int(price)) if price else "0",
+            "EXCG_ID_DVSN_CD": "NXT",
+            "ORD_DVSN": "00",  # Limit only
+        }
+
+        hashkey = await self._auth.get_hashkey(body)
+        data = await self._post(
+            "/uapi/domestic-stock/v1/trading/order-cash",
+            tr_id,
+            body,
+            hashkey,
+        )
+
+        output = data.get("output", {})
+        success = data.get("rt_cd") == "0"
+
+        if not success:
+            logger.warning(
+                "KIS KR NXT order failed: %s %s qty=%d msg=%s",
+                side, symbol, quantity, data.get("msg1", ""),
+            )
+
+        return OrderResult(
+            order_id=output.get("ODNO", ""),
+            symbol=symbol,
+            side=side,
+            order_type="limit",
+            quantity=quantity,
+            price=price,
+            status="pending" if success else "failed",
+        )
+
     async def _place_order(
         self,
         symbol: str,
@@ -506,10 +587,11 @@ class KISKRAdapter(ExchangeAdapter):
         price: float | None,
         order_type: str,
         tr_id: str,
+        ord_dvsn_override: str | None = None,
     ) -> OrderResult:
         await self._auth.ensure_valid_token()
 
-        ord_dvsn = "00" if order_type == "limit" else "01"
+        ord_dvsn = ord_dvsn_override or ("00" if order_type == "limit" else "01")
         body = {
             "CANO": self._config.account_no,
             "ACNT_PRDT_CD": self._config.account_product,

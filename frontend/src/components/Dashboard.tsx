@@ -63,7 +63,11 @@ export default function Dashboard() {
 
   const hasUsd = summary.usd_balance && summary.usd_balance.total > 0
   const rate = summary.exchange_rate ?? 1450
-  const totalEquity = summary.total_equity ?? (summary.balance.total + (summary.usd_balance?.total ?? 0) * rate)
+  // Fallback: use available cash + positions invested (avoid double-counting deposits)
+  const totalEquity = summary.total_equity ??
+    (summary.available_cash ?? summary.balance.available) +
+    Math.max(0, (summary.usd_balance?.total ?? 0) - (summary.usd_balance?.available ?? 0)) * rate +
+    Math.max(0, summary.balance.total - summary.balance.available)
 
   return (
     <div className="space-y-6">

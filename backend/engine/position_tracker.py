@@ -79,8 +79,13 @@ class PositionTracker:
         """Stop tracking a position."""
         self._tracked.pop(symbol, None)
 
-    async def check_all(self) -> list[dict]:
-        """Check all tracked positions. Returns list of triggered actions."""
+    async def check_all(self, session: str = "regular") -> list[dict]:
+        """Check all tracked positions. Returns list of triggered actions.
+
+        Args:
+            session: Trading session for sell execution (regular/pre_market/after_hours).
+                     Extended hours sells use limit orders only.
+        """
         if not self._tracked:
             return []
 
@@ -124,7 +129,8 @@ class PositionTracker:
             action = self._evaluate(tracked, current_price)
             if action:
                 triggered.append(action)
-                await self._execute_sell(tracked, current_price, action["reason"])
+                await self._execute_sell(tracked, current_price, action["reason"],
+                                         session=session)
 
         return triggered
 
@@ -184,22 +190,29 @@ class PositionTracker:
         return None
 
     async def _execute_sell(
-        self, tracked: TrackedPosition, price: float, reason: str
+        self, tracked: TrackedPosition, price: float, reason: str,
+        session: str = "regular",
     ) -> None:
         """Execute a sell order and notify."""
+        session_tag = f" [{session}]" if session != "regular" else ""
         logger.warning(
-            "%s triggered for %s: entry=$%.2f current=$%.2f",
-            reason.upper(), tracked.symbol, tracked.entry_price, price,
+            "%s triggered for %s%s: entry=$%.2f current=$%.2f",
+            reason.upper(), tracked.symbol, session_tag,
+            tracked.entry_price, price,
         )
+
+        # Extended hours: force limit order (market orders not supported)
+        order_type = "limit" if session != "regular" else "market"
 
         order = await self._orders.place_sell(
             symbol=tracked.symbol,
             quantity=tracked.quantity,
             price=price,
             strategy_name=f"{tracked.strategy}:{reason}",
-            order_type="market",
+            order_type=order_type,
             entry_price=tracked.entry_price,
             buy_strategy=tracked.strategy,
+            session=session,
         )
 
         if order:

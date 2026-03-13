@@ -49,10 +49,14 @@ TR_ID_LIVE = {
     "ORDERBOOK": "HHDFS76200100",
     "MINUTE_CANDLE": "HHDFS76950200",
     "DAILY_CANDLE": "HHDFS76240000",
-    # Orders
+    # Orders (regular session)
     "BUY_US": "TTTT1002U",
     "SELL_US": "TTTT1006U",
     "CANCEL_US": "TTTT1004U",
+    # Orders (daytime / extended hours)
+    "BUY_DAYTIME": "TTTS6036U",
+    "SELL_DAYTIME": "TTTS6037U",
+    "CANCEL_DAYTIME": "TTTS6038U",
     # Account
     "BALANCE": "TTTS3012R",
     "BUYING_POWER": "TTTS3007R",
@@ -71,11 +75,17 @@ TR_ID_PAPER = {
     "BUY_US": "VTTT1002U",
     "SELL_US": "VTTT1006U",
     "CANCEL_US": "VTTT1004U",
+    "BUY_DAYTIME": "VTTS6036U",   # Paper daytime (may not be supported)
+    "SELL_DAYTIME": "VTTS6037U",
+    "CANCEL_DAYTIME": "VTTS6038U",
     "BALANCE": "VTTS3012R",
     "BUYING_POWER": "VTTS3007R",
     "ORDER_HISTORY": "VTTS3035R",
     "PENDING_ORDERS": "VTTS3018R",
 }
+
+# Daytime (extended hours) exchange codes: regular NASD->BAQ, NYSE->BAY, AMEX->BAA
+_DAYTIME_EXCHANGE = {"NASD": "BAQ", "NYSE": "BAY", "AMEX": "BAA"}
 
 
 # Market data endpoints use 3-char codes; trading endpoints use 4-char codes
@@ -93,6 +103,7 @@ class KISAdapter(ExchangeAdapter):
         self._tr = TR_ID_PAPER if self._is_paper else TR_ID_LIVE
         self._last_exchange_rate: float = 1450.0  # USD/KRW
         self._usd_deposit_krw: float = 0.0  # 달러예수금 (KRW equivalent)
+        self._tot_asst_krw: float = 0.0  # CTRP6504R tot_asst_amt (통합증거금 전체 자산)
 
     async def initialize(self) -> None:
         self._session = aiohttp.ClientSession()
@@ -276,8 +287,9 @@ class KISAdapter(ExchangeAdapter):
         if available <= 0:
             available = await self._estimate_usd_from_krw()
 
-        # Cache exchange rate and USD deposit for cross-market calculations
+        # Cache exchange rate, total, and USD deposit for cross-market calculations
         self._last_exchange_rate = exrt
+        self._tot_asst_krw = tot_asst_krw  # 통합증거금 total (KR+US+cash)
         self._usd_deposit_krw = float(pb_o3.get("frcr_evlu_tota", 0)) if pb_o3 else 0
 
         # 4. Total: use present-balance total if available, else fallback
@@ -426,7 +438,12 @@ class KISAdapter(ExchangeAdapter):
         price: float | None = None,
         order_type: str = "limit",
         exchange: str = "NASD",
+        session: str = "regular",
     ) -> OrderResult:
+        if session in ("pre_market", "after_hours"):
+            return await self._place_daytime_order(
+                symbol, "buy", quantity, price, exchange,
+            )
         return await self._place_order(
             symbol, "buy", quantity, price, order_type, exchange, self._tr["BUY_US"]
         )
@@ -438,7 +455,12 @@ class KISAdapter(ExchangeAdapter):
         price: float | None = None,
         order_type: str = "limit",
         exchange: str = "NASD",
+        session: str = "regular",
     ) -> OrderResult:
+        if session in ("pre_market", "after_hours"):
+            return await self._place_daytime_order(
+                symbol, "sell", quantity, price, exchange,
+            )
         return await self._place_order(
             symbol, "sell", quantity, price, order_type, exchange, self._tr["SELL_US"]
         )
@@ -647,6 +669,81 @@ class KISAdapter(ExchangeAdapter):
         return results
 
     # -- Private helpers --
+
+    async def _place_daytime_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: int,
+        price: float | None,
+        exchange: str,
+    ) -> OrderResult:
+        """Place a daytime (extended hours) order via KIS API.
+
+        Uses separate endpoint/TR_ID for US pre-market/after-hours trading.
+        - Endpoint: /uapi/overseas-stock/v1/trading/daytime-order
+        - Buy TR_ID: TTTS6036U, Sell TR_ID: TTTS6037U
+        - Exchange codes: BAQ (NASD), BAY (NYSE), BAA (AMEX)
+        - Limit orders only (ORD_DVSN=00)
+        - Trading hours: KST 10:00~23:20 (DST: 10:00~22:20)
+        """
+        await self._auth.ensure_valid_token()
+
+        if price is None or price <= 0:
+            logger.warning("Daytime order requires limit price, got %s", price)
+            return OrderResult(
+                order_id="", symbol=symbol, side=side,
+                order_type="limit", quantity=quantity,
+                status="failed",
+            )
+
+        daytime_exchange = _DAYTIME_EXCHANGE.get(exchange, "BAQ")
+        tr_id = self._tr["BUY_DAYTIME"] if side == "buy" else self._tr["SELL_DAYTIME"]
+
+        body = {
+            "CANO": self._config.account_no,
+            "ACNT_PRDT_CD": self._config.account_product,
+            "OVRS_EXCG_CD": daytime_exchange,
+            "PDNO": symbol,
+            "ORD_QTY": str(quantity),
+            "OVRS_ORD_UNPR": f"{price:.2f}",
+            "CTAC_TLNO": "",
+            "MGCO_APTM_ODNO": "",
+            "ORD_SVR_DVSN_CD": "0",
+            "ORD_DVSN": "00",  # Limit only
+        }
+
+        hashkey = await self._auth.get_hashkey(body)
+        data = await self._post(
+            "/uapi/overseas-stock/v1/trading/daytime-order",
+            tr_id,
+            body,
+            hashkey,
+        )
+
+        output = data.get("output", {})
+        success = data.get("rt_cd") == "0"
+
+        if success:
+            logger.info(
+                "Daytime %s order placed: %s %d @ $%.2f (exchange=%s)",
+                side, symbol, quantity, price, daytime_exchange,
+            )
+        else:
+            logger.warning(
+                "Daytime %s order failed: %s — %s",
+                side, symbol, data.get("msg1", "unknown"),
+            )
+
+        return OrderResult(
+            order_id=output.get("ODNO", ""),
+            symbol=symbol,
+            side=side,
+            order_type="limit",
+            quantity=quantity,
+            price=price,
+            status="pending" if success else "failed",
+        )
 
     async def _place_order(
         self,

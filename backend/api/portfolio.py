@@ -98,22 +98,24 @@ async def _combined_summary(request: Request) -> dict:
         if _cached_usd_krw <= 0:
             _cached_usd_krw = getattr(adapter, "_last_exchange_rate", 1450.0)
 
-    # Total equity: avoid double-counting the shared deposit (통합증거금)
-    # US present-balance total already includes KRW deposit + US positions.
-    # KR total also includes the same KRW deposit + KR positions.
-    # So only add KR's position value (total - available = invested portion).
-    usd_in_krw = usd_total * _cached_usd_krw
-    kr_position_value = max(0, krw_total - krw_available) if krw_total else 0
-    total_equity = usd_in_krw + kr_position_value
+    # Total equity: use CTRP6504R tot_asst_amt directly (통합증거금 전체 자산).
+    # This is the single source of truth from KIS — includes KR stocks, US stocks,
+    # KRW cash, USD cash, all in KRW. Avoids double-counting across KR/US APIs.
+    tot_asst_krw = getattr(adapter, "_tot_asst_krw", None) if adapter else None
+    if isinstance(tot_asst_krw, (int, float)) and tot_asst_krw > 0:
+        total_equity = tot_asst_krw
+    else:
+        # Fallback: sum up components (may double-count in 통합증거금)
+        us_positions_krw = sum(p.current_price * p.quantity for p in us_positions) * _cached_usd_krw
+        total_equity = krw_total + us_positions_krw
+
+    # Available cash: in 통합증거금, KR orderable already reflects total buying power
+    # (KRW + convertible USD). Don't add USD separately — it double-counts.
+    available_cash = krw_available
 
     all_positions = kr_positions + us_positions
     total_unrealized_pnl_krw = sum(p.unrealized_pnl for p in kr_positions)
     total_unrealized_pnl_usd = sum(p.unrealized_pnl for p in us_positions)
-
-    # Available cash = KR orderable + USD deposit (달러예수금)
-    # KR orderable covers the KRW deposit; USD deposit from present-balance API
-    usd_deposit_krw = getattr(adapter, "_usd_deposit_krw", 0) if adapter else 0
-    available_cash = krw_available + usd_deposit_krw
 
     return {
         "market": "ALL",

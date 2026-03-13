@@ -77,6 +77,7 @@ class OrderManager:
         atr: float | None = None,
         sizing_override: PositionSizeResult | None = None,
         skip_position_limit: bool = False,
+        session: str = "regular",
     ) -> ManagedOrder | None:
         """Place a buy order after risk checks and deduplication.
 
@@ -110,12 +111,16 @@ class OrderManager:
             return None
 
         try:
+            # Extended hours: force limit order
+            if session != "regular":
+                order_type = "limit"
             result = await self._adapter.create_buy_order(
                 symbol=symbol,
                 quantity=sizing.quantity,
                 price=price if order_type == "limit" else None,
                 order_type=order_type,
                 exchange=exchange,
+                session=session,
             )
 
             # Track slippage (filled_price vs intended price)
@@ -207,15 +212,20 @@ class OrderManager:
         exchange: str = "NASD",
         entry_price: float | None = None,
         buy_strategy: str = "",
+        session: str = "regular",
     ) -> ManagedOrder | None:
         """Place a sell order. Pass entry_price for PnL, buy_strategy for attribution."""
         try:
+            # Extended hours: force limit order
+            if session != "regular":
+                order_type = "limit"
             result = await self._adapter.create_sell_order(
                 symbol=symbol,
                 quantity=quantity,
                 price=price,
                 order_type=order_type,
                 exchange=exchange,
+                session=session,
             )
 
             # Track slippage

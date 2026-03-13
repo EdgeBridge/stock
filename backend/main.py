@@ -1413,6 +1413,59 @@ async def lifespan(app: FastAPI):
         interval_sec=900, phases=[MarketPhase.REGULAR], market="KR",
     )
 
+    # ── Extended Hours Tasks ─────────────────────────────────────────
+    # SL/TP monitoring during pre-market/after-hours (US + KR)
+    # Gated by config.extended_hours.enabled kill switch
+
+    async def task_us_extended_position_check():
+        """US extended hours: SL/TP monitoring with limit-order sells."""
+        if not config.extended_hours.enabled or not config.extended_hours.us_enabled:
+            return
+        from engine.scheduler import get_market_phase
+        phase = get_market_phase()
+        session = "pre_market" if phase == MarketPhase.PRE_MARKET else "after_hours"
+        try:
+            triggered = await position_tracker.check_all(session=session)
+            if triggered:
+                logger.info(
+                    "US extended hours [%s]: %d SL/TP triggered",
+                    session, len(triggered),
+                )
+        except Exception as e:
+            logger.error("US extended position check failed: %s", e)
+
+    async def task_kr_extended_position_check():
+        """KR extended hours: SL/TP monitoring with limit-order sells."""
+        if not config.extended_hours.enabled or not config.extended_hours.kr_enabled:
+            return
+        from engine.scheduler import get_kr_market_phase
+        phase = get_kr_market_phase()
+        if phase == MarketPhase.PRE_MARKET:
+            session = "pre_market"
+        elif phase == MarketPhase.AFTER_HOURS:
+            session = "after_hours"
+        else:
+            return
+        try:
+            triggered = await kr_position_tracker.check_all(session=session)
+            if triggered:
+                logger.info(
+                    "KR extended hours [%s]: %d SL/TP triggered",
+                    session, len(triggered),
+                )
+        except Exception as e:
+            logger.error("KR extended position check failed: %s", e)
+
+    scheduler.add_task(
+        "us_extended_position_check", task_us_extended_position_check,
+        interval_sec=120, phases=[MarketPhase.PRE_MARKET, MarketPhase.AFTER_HOURS],
+    )
+    scheduler.add_task(
+        "kr_extended_position_check", task_kr_extended_position_check,
+        interval_sec=120, phases=[MarketPhase.PRE_MARKET, MarketPhase.AFTER_HOURS],
+        market="KR",
+    )
+
     app.state.scheduler = scheduler
 
     # Load watchlists into evaluation loops from DB

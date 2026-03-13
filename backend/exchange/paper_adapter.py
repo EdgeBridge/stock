@@ -94,6 +94,7 @@ class PaperAdapter(ExchangeAdapter):
         price: float | None = None,
         order_type: str = "market",
         exchange: str = "NASD",
+        session: str = "regular",
     ) -> OrderResult:
         fill_price = price or self._prices.get(symbol, 0.0)
         cost = fill_price * quantity
@@ -150,6 +151,7 @@ class PaperAdapter(ExchangeAdapter):
         price: float | None = None,
         order_type: str = "market",
         exchange: str = "NASD",
+        session: str = "regular",
     ) -> OrderResult:
         pos = self._positions.get(symbol)
         if not pos or pos.quantity < quantity:
