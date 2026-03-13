@@ -73,6 +73,7 @@ async def get_trades(
                         "status": o.status, "strategy": o.strategy_name,
                         "pnl": o.pnl,
                         "market": getattr(o, "market", "US"),
+                        "session": getattr(o, "session", "regular") or "regular",
                         "name": get_name(o.symbol, getattr(o, "market", "US")) or "",
                         "created_at": str(o.created_at),
                     }
@@ -148,6 +149,7 @@ async def _persist_trade(trade: dict) -> None:
                 kis_order_id=trade.get("order_id", ""),
                 pnl=trade.get("pnl"),
                 market=trade.get("market", "US"),
+                session=trade.get("session", "regular"),
             )
     except Exception as e:
         logger.warning("Failed to persist trade to DB: %s", e)
@@ -168,6 +170,7 @@ def _order_to_dict(o) -> dict:
         "buy_strategy": getattr(o, "buy_strategy", "") or "",
         "pnl": o.pnl,
         "market": getattr(o, "market", "US"),
+        "session": getattr(o, "session", "regular") or "regular",
         "created_at": str(o.created_at) if o.created_at else "",
         "db_id": o.id,
     }

@@ -119,6 +119,7 @@ export interface Trade {
   pnl: number | null
   created_at: string
   market?: string
+  session?: string
 }
 
 export interface TradeSummary {

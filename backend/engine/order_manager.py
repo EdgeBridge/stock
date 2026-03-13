@@ -184,6 +184,7 @@ class OrderManager:
                     take_profit_pct=self._risk.params.default_take_profit_pct,
                     filled_qty=filled_qty,
                     filled_price=result.filled_price or 0.0,
+                    session=session,
                 )
             if _trade_recorder:
                 _trade_recorder({
@@ -195,6 +196,7 @@ class OrderManager:
                     "strategy": strategy_name, "status": result.status,
                     "created_at": order.created_at,
                     "market": self._market,
+                    "session": session,
                 })
             return order
 
@@ -274,6 +276,7 @@ class OrderManager:
                     market=self._market,
                     filled_qty=filled_qty,
                     filled_price=result.filled_price or 0.0,
+                    session=session,
                 )
             # Calculate PnL if entry_price is known
             pnl = None
@@ -294,6 +297,7 @@ class OrderManager:
                     "pnl": pnl,
                     "created_at": order.created_at,
                     "market": self._market,
+                    "session": session,
                 })
             return order
 

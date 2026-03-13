@@ -71,6 +71,15 @@ export default function TradeHistory() {
                     )}>
                       {t.side}
                     </span>
+                    {t.session && t.session !== 'regular' && (
+                      <span className={clsx('ml-1 px-1 py-0.5 rounded text-[10px] font-semibold', {
+                        'bg-orange-900/40 text-orange-300': t.session === 'pre_market',
+                        'bg-purple-900/40 text-purple-300': t.session === 'after_hours',
+                        'bg-indigo-900/40 text-indigo-300': t.session === 'extended_nxt',
+                      })}>
+                        {t.session === 'pre_market' ? 'PRE' : t.session === 'after_hours' ? 'AH' : 'NXT'}
+                      </span>
+                    )}
                   </td>
                   <td className="py-2 px-3 text-right">{t.quantity}</td>
                   <td className="py-2 px-3 text-right">

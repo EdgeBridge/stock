@@ -489,18 +489,28 @@ class NotificationService:
 
     # ── Convenience methods ────────────────────────────────────────────
 
+    _SESSION_TAGS = {
+        "regular": "",
+        "pre_market": "[PRE-MKT] ",
+        "after_hours": "[AFTER-HRS] ",
+        "extended_nxt": "[NXT] ",
+    }
+
     async def notify_trade_executed(
         self, symbol: str, side: str, qty: int, price: float, strategy: str,
         market: str = "", stop_loss_pct: float = 0.0, take_profit_pct: float = 0.0,
-        filled_qty: int = 0, filled_price: float = 0.0,
+        filled_qty: int = 0, filled_price: float = 0.0, session: str = "regular",
     ) -> bool:
         mkt = market or self._detect_market(symbol)
         label = self._symbol_label(symbol)
         p = self._fmt_price(price, mkt)
         sl_tp = ""
         partial = ""
+        session_tag = self._SESSION_TAGS.get(session, "")
         fields: dict = {"Symbol": label, "Side": side.upper(), "Qty": qty,
              "Price": p, "Strategy": strategy}
+        if session != "regular":
+            fields["Session"] = session_tag.strip()
         if filled_qty and 0 < filled_qty < qty:
             partial = f" | PARTIAL FILL {filled_qty}/{qty}"
             fields["Fill"] = f"{filled_qty}/{qty}"
@@ -517,8 +527,8 @@ class NotificationService:
                 fields["TP"] = f"{self._fmt_price(tp_price, mkt)} (+{take_profit_pct*100:.0f}%)"
         return await self._dispatch(
             AlertCategory.TRADE, AlertLevel.INFO, symbol,
-            "Trade Executed",
-            f"{side.upper()} {label} x{qty} @ {p} | Strategy: {strategy}{sl_tp}{partial}",
+            f"{session_tag}Trade Executed",
+            f"{session_tag}{side.upper()} {label} x{qty} @ {p} | Strategy: {strategy}{sl_tp}{partial}",
             {"side": side.upper(), "qty": qty, "price": price, "strategy": strategy},
             fields,
         )

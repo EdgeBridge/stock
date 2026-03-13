@@ -35,6 +35,7 @@ class TradeRepository:
         pnl: float | None = None,
         exchange: str = "NASD",
         market: str = "US",
+        session: str = "regular",
     ) -> Order:
         order = Order(
             symbol=symbol,
@@ -51,6 +52,7 @@ class TradeRepository:
             kis_order_id=kis_order_id,
             pnl=pnl,
             market=market,
+            session=session,
         )
         self._session.add(order)
         await self._session.commit()
