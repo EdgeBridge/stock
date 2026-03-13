@@ -91,6 +91,8 @@ class EvaluationLoop:
         self._factor_update_interval = 3600  # update factor scores hourly
         self._prev_market_state: str = market_state
         self._news_sentiment: dict[str, float] = {}  # symbol -> sentiment (-1 to +1)
+        # Signal dedup: prevent re-executing the same daily signal within 24h
+        self._last_signal: dict[str, tuple[str, float]] = {}  # symbol -> (signal_type, timestamp)
         # Recovery watch: recently sold symbols get re-evaluated for re-entry
         self._recovery_watch: dict[str, float] = {}  # {symbol: timestamp_when_sold}
         self._recovery_watch_secs = 7 * 86400  # 7 days
@@ -331,7 +333,7 @@ class EvaluationLoop:
         to protect capital. Winning positions are kept (trailing stop will handle).
 
         Sentiment sell: when a held stock has strongly negative news sentiment
-        (score <= -0.5), sell regardless of technical signals.
+        (score <= -0.70), sell if held for at least 4 hours (avoid churn).
         """
         _BEARISH_REGIMES = {"downtrend"}
         regime_worsened = (
@@ -363,14 +365,30 @@ class EvaluationLoop:
                         self._market_state, pnl_pct * 100,
                     )
 
-            # 2. Strongly negative news sentiment
+            # 2. Strongly negative news sentiment (threshold -0.70, min hold 4h)
             sentiment = self._news_sentiment.get(symbol, 0.0)
-            if sentiment <= -0.5:
-                sell_reason = f"negative_sentiment({sentiment:.2f})"
-                logger.warning(
-                    "Sentiment sell %s: score=%.2f",
-                    symbol, sentiment,
-                )
+            if sentiment <= -0.70:
+                # Don't sell if position was opened recently (avoid buy-sell churn)
+                hold_secs = float("inf")
+                if self._position_tracker:
+                    try:
+                        tracked = self._position_tracker._tracked.get(symbol)
+                        if tracked:
+                            hold_secs = time.time() - tracked.tracked_at
+                    except AttributeError:
+                        pass  # mock or missing _tracked
+                min_hold = 4 * 3600  # 4 hours minimum
+                if hold_secs >= min_hold:
+                    sell_reason = f"negative_sentiment({sentiment:.2f})"
+                    logger.warning(
+                        "Sentiment sell %s: score=%.2f (held %.1fh)",
+                        symbol, sentiment, hold_secs / 3600,
+                    )
+                else:
+                    logger.info(
+                        "Sentiment sell skipped %s: score=%.2f but held only %.1fh (min 4h)",
+                        symbol, sentiment, hold_secs / 3600,
+                    )
 
             if sell_reason:
                 exchange = (
@@ -465,6 +483,19 @@ class EvaluationLoop:
             if self._order_manager.has_pending_order(symbol, "BUY"):
                 logger.debug("Skipping BUY for %s: pending order exists", symbol)
                 return
+
+            # Skip if we already hold this symbol (prevent duplicate buys)
+            if self._position_tracker and symbol in self._position_tracker.tracked_symbols:
+                logger.debug("Skipping BUY for %s: already held", symbol)
+                return
+
+            # Skip if signal hasn't changed since last evaluation (daily strategies
+            # produce the same signal all day — no point re-buying)
+            last = self._last_signal.get(symbol)
+            if last and last[0] == "BUY" and time.time() - last[1] < 86400:
+                logger.debug("Skipping BUY for %s: same signal within 24h", symbol)
+                return
+            self._last_signal[symbol] = ("BUY", time.time())
 
             # Event calendar checks (earnings proximity, FOMC day)
             if self._event_calendar:

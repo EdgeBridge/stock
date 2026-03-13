@@ -573,6 +573,7 @@ class TestProtectiveSells:
         order_mgr = OrderManager(adapter=mock_adapter, risk_manager=risk)
         position_tracker = MagicMock(spec=PositionTracker)
         position_tracker.tracked_symbols = ["AAPL", "TSLA"]
+        position_tracker._tracked = {}  # for hold-time check in sentiment sells
 
         loop = EvaluationLoop(
             adapter=mock_adapter,
@@ -798,7 +799,7 @@ class TestProtectiveSells:
             status="filled", filled_price=160.0,
         ))
 
-        loop_with_tracker.update_news_sentiment({"AAPL": -0.6})
+        loop_with_tracker.update_news_sentiment({"AAPL": -0.8})
         await loop_with_tracker._check_protective_sells({"AAPL"})
 
         loop_with_tracker._position_tracker.untrack.assert_called_with("AAPL")
