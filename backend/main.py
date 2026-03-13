@@ -244,14 +244,18 @@ async def lifespan(app: FastAPI):
         ai_agent = MarketAnalystAgent(llm_client=llm_client, context_service=agent_ctx)
         risk_agent = RiskAssessmentAgent(llm_client=llm_client, context_service=agent_ctx)
         trade_review_agent = TradeReviewAgent(llm_client=llm_client, context_service=agent_ctx)
+        # News sentiment: use Gemini (free tier) to save Anthropic credits
+        news_model = None
+        if config.llm.news_use_gemini and config.llm.gemini_fallback_model:
+            news_model = config.llm.gemini_fallback_model
         news_sentiment_agent = NewsSentimentAgent(
             llm_client=llm_client, context_service=agent_ctx,
-            model_override=config.llm.gemini_fallback_model or None,
+            model_override=news_model,
         )
-        # KR agent: no Gemini override (struggles with Korean), no shared context
-        # (US agent memory leaks irrelevant context into KR analysis)
+        # KR agent: also use Gemini to save costs (Korean supported by Gemini)
         kr_news_sentiment_agent = NewsSentimentAgent(
             llm_client=llm_client,
+            model_override=news_model,
         )
         logger.info("AI agents enabled (analyst, risk, trade_review, news_sentiment)")
     app.state.risk_agent = risk_agent
@@ -304,6 +308,8 @@ async def lifespan(app: FastAPI):
     app.state.exchange_resolver = exchange_resolver
 
     # Evaluation loop (after agents — risk_agent used for pre-trade check)
+    # Pre-trade AI risk check disabled by default (biggest LLM cost driver)
+    pre_trade_agent = risk_agent if config.llm.pre_trade_risk_enabled else None
     evaluation_loop = EvaluationLoop(
         adapter=adapter,
         market_data=market_data,
@@ -313,7 +319,7 @@ async def lifespan(app: FastAPI):
         order_manager=order_manager,
         risk_manager=risk_manager,
         adaptive_weights=adaptive_weights,
-        risk_agent=risk_agent,
+        risk_agent=pre_trade_agent,
         exchange_resolver=exchange_resolver,
         position_tracker=position_tracker,
         market="US",
@@ -1043,7 +1049,7 @@ async def lifespan(app: FastAPI):
                 symbols = [
                     w.symbol for w in wl
                     if w.source != "etf_universe"
-                ][:30]  # Limit to avoid rate limits
+                ][:15]  # Limit to save LLM costs + avoid rate limits
 
             if not symbols:
                 return
@@ -1099,7 +1105,7 @@ async def lifespan(app: FastAPI):
 
     scheduler.add_task(
         "news_analysis", task_news_analysis,
-        interval_sec=14400, phases=[MarketPhase.PRE_MARKET, MarketPhase.REGULAR],
+        interval_sec=28800, phases=[MarketPhase.PRE_MARKET, MarketPhase.REGULAR],
     )
 
     # Event calendar refresh (earnings, insider transactions)
@@ -1163,7 +1169,7 @@ async def lifespan(app: FastAPI):
                 symbols = [
                     w.symbol for w in wl
                     if w.source != "etf_universe"
-                ][:30]
+                ][:15]  # Limit to save LLM costs
 
             if not symbols:
                 return
@@ -1225,7 +1231,7 @@ async def lifespan(app: FastAPI):
 
     scheduler.add_task(
         "kr_news_analysis", task_kr_news_analysis,
-        interval_sec=14400, phases=[MarketPhase.PRE_MARKET, MarketPhase.REGULAR],
+        interval_sec=28800, phases=[MarketPhase.PRE_MARKET, MarketPhase.REGULAR],
         market="KR",
     )
 

@@ -79,6 +79,10 @@ class LLMConfig(BaseSettings):
     gemini_api_key: str = ""
     gemini_fallback_model: str = "gemini-3-flash-preview"
     max_tokens: int = 4096
+    # Cost control
+    max_daily_calls: int = 100  # Daily LLM call budget (0=unlimited)
+    pre_trade_risk_enabled: bool = False  # AI pre-trade risk check (expensive)
+    news_use_gemini: bool = True  # Use Gemini (free tier) for news sentiment
 
     model_config = {"env_prefix": "LLM_"}
 

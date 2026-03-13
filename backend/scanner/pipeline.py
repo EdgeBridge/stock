@@ -170,7 +170,7 @@ class ScannerPipeline:
             except Exception:
                 pass
 
-            top_n = min(5, len(results))
+            top_n = min(3, len(results))
             logger.info("Layer 3: AI analysis on top %d candidates", top_n)
             for result in results[:top_n]:
                 try:

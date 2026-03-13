@@ -1,7 +1,8 @@
-"""Multi-provider LLM client with fallback chain and retry logic."""
+"""Multi-provider LLM client with fallback chain, retry logic, and daily budget."""
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
 import structlog
@@ -25,6 +26,7 @@ class LLMClient:
 
     Fallback chain: primary model -> fallback model -> gemini model.
     Each model gets multiple retry attempts before moving to the next.
+    Includes daily call budget to prevent runaway costs.
     """
 
     def __init__(self, config):
@@ -40,6 +42,11 @@ class LLMClient:
         self._anthropic: AnthropicProvider | None = None
         self._gemini: GeminiProvider | None = None
 
+        # Daily call budget tracking
+        self._daily_calls = 0
+        self._daily_reset_date = ""
+        self._max_daily_calls = getattr(config, "max_daily_calls", 0)
+
         # Lazy-init providers
         if config.api_key:
             try:
@@ -54,13 +61,47 @@ class LLMClient:
             except Exception as e:
                 logger.warning("gemini_provider_init_failed", error=str(e))
 
+    def _check_budget(self) -> bool:
+        """Check if we're within daily call budget. Returns True if allowed."""
+        if self._max_daily_calls <= 0:
+            return True  # unlimited
+
+        today = time.strftime("%Y-%m-%d")
+        if today != self._daily_reset_date:
+            self._daily_calls = 0
+            self._daily_reset_date = today
+
+        return self._daily_calls < self._max_daily_calls
+
+    def _increment_calls(self) -> None:
+        """Increment daily call counter."""
+        today = time.strftime("%Y-%m-%d")
+        if today != self._daily_reset_date:
+            self._daily_calls = 0
+            self._daily_reset_date = today
+        self._daily_calls += 1
+
+    @property
+    def daily_calls_remaining(self) -> int:
+        """Number of calls remaining today (-1 if unlimited)."""
+        if self._max_daily_calls <= 0:
+            return -1
+        today = time.strftime("%Y-%m-%d")
+        if today != self._daily_reset_date:
+            return self._max_daily_calls
+        return max(0, self._max_daily_calls - self._daily_calls)
+
     def _resolve_provider(self, model: str) -> LLMProvider | None:
         if model.startswith("gemini"):
             return self._gemini
         return self._anthropic
 
     def _build_fallback_chain(self, model_override: str | None = None) -> list[tuple[str, LLMProvider]]:
-        """Build [(model_name, provider), ...] in fallback order."""
+        """Build [(model_name, provider), ...] in fallback order.
+
+        Cost-aware: Haiku -> Gemini (free) -> Sonnet (expensive, last resort).
+        When model_override is set, only use that model + Gemini fallback.
+        """
         chain = []
 
         primary = model_override or self._config.model
@@ -68,14 +109,16 @@ class LLMClient:
         if provider:
             chain.append((primary, provider))
 
-        if self._config.fallback_model:
-            p = self._resolve_provider(self._config.fallback_model)
-            if p:
-                chain.append((self._config.fallback_model, p))
-
+        # Gemini before Sonnet (free tier vs expensive)
         gemini_model = getattr(self._config, "gemini_fallback_model", "")
         if gemini_model and self._gemini:
             chain.append((gemini_model, self._gemini))
+
+        # Sonnet as last resort only (13x more expensive than Haiku)
+        if not model_override and self._config.fallback_model:
+            p = self._resolve_provider(self._config.fallback_model)
+            if p:
+                chain.append((self._config.fallback_model, p))
 
         return chain
 
@@ -90,7 +133,7 @@ class LLMClient:
     ) -> LLMResponse:
         """Text generation with retry + fallback.
 
-        Raises RuntimeError if all providers fail.
+        Raises RuntimeError if all providers fail or budget exhausted.
         """
         return await self._call_with_fallback(
             messages=messages,
@@ -113,7 +156,7 @@ class LLMClient:
     ) -> LLMResponse:
         """Tool-use generation with retry + fallback.
 
-        Raises RuntimeError if all providers fail.
+        Raises RuntimeError if all providers fail or budget exhausted.
         """
         return await self._call_with_fallback(
             messages=messages,
@@ -147,6 +190,17 @@ class LLMClient:
         model_override: str | None,
         retries: int,
     ) -> LLMResponse:
+        # Budget check
+        if not self._check_budget():
+            logger.warning(
+                "llm_daily_budget_exhausted",
+                daily_calls=self._daily_calls,
+                max_daily=self._max_daily_calls,
+            )
+            raise RuntimeError(
+                f"Daily LLM call budget exhausted ({self._daily_calls}/{self._max_daily_calls})"
+            )
+
         chain = self._build_fallback_chain(model_override)
         if not chain:
             raise RuntimeError("No LLM providers configured")
@@ -163,11 +217,13 @@ class LLMClient:
                         system=system,
                         tools=tools,
                     )
+                    self._increment_calls()
                     logger.debug(
                         "llm_call_success",
                         model=model,
                         attempt=attempt + 1,
                         has_tools=bool(tools),
+                        daily_calls=self._daily_calls,
                     )
                     return response
                 except Exception as e:

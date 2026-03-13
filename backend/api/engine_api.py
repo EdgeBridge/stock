@@ -343,6 +343,21 @@ async def factor_scores(request: Request):
     }
 
 
+@router.get("/llm-status")
+async def llm_status(request: Request):
+    """Get LLM usage stats: daily calls, budget, provider status."""
+    llm_client = getattr(request.app.state, "llm_client", None)
+    if not llm_client:
+        return {"status": "not_configured"}
+    return {
+        "daily_calls": llm_client._daily_calls,
+        "daily_budget": llm_client._max_daily_calls,
+        "remaining": llm_client.daily_calls_remaining,
+        "anthropic_available": llm_client._anthropic is not None,
+        "gemini_available": llm_client._gemini is not None,
+    }
+
+
 @router.get("/analytics/signal-quality")
 async def signal_quality(request: Request):
     """Get strategy signal quality metrics."""
