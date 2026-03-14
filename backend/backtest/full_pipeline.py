@@ -133,6 +133,10 @@ class PipelineConfig:
     extended_hours_fill_probability: float = 0.90  # 10% miss rate
     extended_hours_min_confidence: float = 0.55  # Lower bar OK: dip/spillover only
 
+    # Daily buy limit + confidence escalation
+    daily_buy_limit: int = 0  # 0 = unlimited
+    enable_confidence_escalation: bool = False  # Dynamic confidence escalation
+
     # Strategy selection
     disabled_strategies: list[str] = field(default_factory=list)  # Strategies to skip
 
@@ -283,6 +287,10 @@ class FullPipelineBacktest:
         self._recovery_watch: dict[str, int] = {}
         self._day_count: int = 0
 
+        # Daily buy limit tracking
+        self._daily_buy_count: int = 0
+        self._daily_buy_date: str = ""
+
     async def run(
         self,
         period: str = "3y",
@@ -351,6 +359,8 @@ class FullPipelineBacktest:
         self._last_factor_update = -9999
         self._gated_strategies.clear()
         self._recovery_watch.clear()
+        self._daily_buy_count = 0
+        self._daily_buy_date = ""
 
         # Pre-classify all stocks once
         for symbol, data in stock_data.items():
@@ -518,11 +528,24 @@ class FullPipelineBacktest:
                         self._close_position(
                             parking_sym, price, date, "cash_unpark",
                         )
+
+                # Reset daily buy count on new day
+                date_str = str(date)
+                if date_str != self._daily_buy_date:
+                    self._daily_buy_count = 0
+                    self._daily_buy_date = date_str
+
                 for _conf, symbol, combined in buy_candidates:
+                    # Apply daily buy limit + confidence escalation
+                    if not self._check_daily_buy_allowed(combined.confidence):
+                        continue
+                    held_before = symbol in self._positions
                     self._execute_buy(
                         symbol, stock_data, date_idx, date, combined,
                         market_state.regime,
                     )
+                    if not held_before and symbol in self._positions:
+                        self._daily_buy_count += 1
 
             # 4e2. Extended hours buy: high-confidence signals at open price
             if cfg.extended_hours_enabled and buy_candidates:
@@ -1152,6 +1175,40 @@ class FullPipelineBacktest:
                 symbol, quantity, exec_price,
                 "dip" if is_discount else "spillover", confidence,
             )
+
+    # ------------------------------------------------------------------
+    # Daily buy limit + confidence escalation
+    # ------------------------------------------------------------------
+
+    def _check_daily_buy_allowed(self, confidence: float) -> bool:
+        """Check if a buy is allowed under daily limit + escalation rules.
+
+        Mirrors live evaluation_loop._execute_signal() logic:
+        - 0-60% usage: no extra requirement
+        - 60-80% usage: confidence >= 0.65
+        - 80-100% usage: confidence >= 0.75
+        - Over limit: confidence >= 0.90 (override)
+        """
+        cfg = self._config
+        limit = cfg.daily_buy_limit
+        if limit <= 0:
+            return True  # No limit
+
+        if self._daily_buy_count >= limit:
+            # Over limit: only ultra-high confidence override
+            if cfg.enable_confidence_escalation and confidence >= 0.90:
+                return True
+            return False
+
+        if not cfg.enable_confidence_escalation:
+            return True  # Under limit, no escalation
+
+        usage_ratio = self._daily_buy_count / limit
+        if usage_ratio >= 0.8:
+            return confidence >= 0.75
+        elif usage_ratio >= 0.6:
+            return confidence >= 0.65
+        return True  # Under 60% usage: free
 
     # ------------------------------------------------------------------
     # Execution
