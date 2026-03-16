@@ -1,5 +1,6 @@
 """Tests for Order Manager."""
 
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -361,3 +362,114 @@ class TestReconciliation:
         assert len(om.active_orders) == 1
         await om.reconcile_all()
         assert len(om.active_orders) == 0  # Cleared after fill
+
+
+class TestStaleOrderCancel:
+    """Tests for stale (unfilled) order auto-cancellation."""
+
+    async def test_cancel_stale_order(self, mock_adapter, risk_manager):
+        """Orders older than TTL are cancelled."""
+        mock_adapter.create_buy_order = AsyncMock(return_value=OrderResult(
+            order_id="ORD001", symbol="005930", side="BUY",
+            order_type="limit", quantity=5, price=70000.0,
+            filled_quantity=0, filled_price=None, status="open",
+        ))
+        om = OrderManager(adapter=mock_adapter, risk_manager=risk_manager)
+        await om.place_buy(
+            symbol="005930", price=70000.0,
+            portfolio_value=10_000_000, cash_available=5_000_000,
+            current_positions=0, strategy_name="test",
+        )
+        # Backdate created_at to 20 minutes ago
+        om._active_orders["ORD001"].created_at = (
+            datetime.now() - timedelta(minutes=20)
+        ).isoformat()
+
+        cancelled = await om.cancel_stale_orders(ttl_minutes=15)
+        assert len(cancelled) == 1
+        assert cancelled[0]["symbol"] == "005930"
+        assert cancelled[0]["side"] == "BUY"
+        mock_adapter.cancel_order.assert_called_once_with("ORD001", "005930")
+
+    async def test_fresh_order_not_cancelled(self, mock_adapter, risk_manager):
+        """Orders within TTL are NOT cancelled."""
+        mock_adapter.create_buy_order = AsyncMock(return_value=OrderResult(
+            order_id="ORD001", symbol="005930", side="BUY",
+            order_type="limit", quantity=5, price=70000.0,
+            filled_quantity=0, filled_price=None, status="open",
+        ))
+        om = OrderManager(adapter=mock_adapter, risk_manager=risk_manager)
+        await om.place_buy(
+            symbol="005930", price=70000.0,
+            portfolio_value=10_000_000, cash_available=5_000_000,
+            current_positions=0, strategy_name="test",
+        )
+        # created_at is "now" — well within TTL
+        cancelled = await om.cancel_stale_orders(ttl_minutes=15)
+        assert len(cancelled) == 0
+        mock_adapter.cancel_order.assert_not_called()
+
+    async def test_filled_order_not_cancelled(self, order_manager, mock_adapter):
+        """Filled orders are never cancelled even if old."""
+        await order_manager.place_buy(
+            symbol="AAPL", price=150.0,
+            portfolio_value=100_000, cash_available=50_000,
+            current_positions=0, strategy_name="test",
+        )
+        # Backdate but status is "filled"
+        order_manager._active_orders["ORD001"].created_at = (
+            datetime.now() - timedelta(minutes=60)
+        ).isoformat()
+
+        cancelled = await order_manager.cancel_stale_orders(ttl_minutes=15)
+        assert len(cancelled) == 0
+
+    async def test_cancel_stale_no_active_orders(self, order_manager):
+        """No-op when no active orders."""
+        cancelled = await order_manager.cancel_stale_orders(ttl_minutes=15)
+        assert cancelled == []
+
+    async def test_cancel_stale_ttl_zero_disabled(self, mock_adapter, risk_manager):
+        """TTL=0 disables stale order cancellation."""
+        mock_adapter.create_buy_order = AsyncMock(return_value=OrderResult(
+            order_id="ORD001", symbol="AAPL", side="BUY",
+            order_type="limit", quantity=10, price=150.0,
+            filled_quantity=0, filled_price=None, status="open",
+        ))
+        om = OrderManager(adapter=mock_adapter, risk_manager=risk_manager)
+        await om.place_buy(
+            symbol="AAPL", price=150.0,
+            portfolio_value=100_000, cash_available=50_000,
+            current_positions=0, strategy_name="test",
+        )
+        om._active_orders["ORD001"].created_at = (
+            datetime.now() - timedelta(hours=2)
+        ).isoformat()
+
+        cancelled = await om.cancel_stale_orders(ttl_minutes=0)
+        assert len(cancelled) == 0
+
+    async def test_cancel_stale_frees_duplicate_lock(self, mock_adapter, risk_manager):
+        """After stale cancel, same symbol can be bought again."""
+        mock_adapter.create_buy_order = AsyncMock(return_value=OrderResult(
+            order_id="ORD001", symbol="005930", side="BUY",
+            order_type="limit", quantity=5, price=70000.0,
+            filled_quantity=0, filled_price=None, status="open",
+        ))
+        om = OrderManager(adapter=mock_adapter, risk_manager=risk_manager)
+        await om.place_buy(
+            symbol="005930", price=70000.0,
+            portfolio_value=10_000_000, cash_available=5_000_000,
+            current_positions=0, strategy_name="test",
+        )
+        # Duplicate blocked while open
+        assert om.has_pending_order("005930", "BUY") is True
+
+        # Backdate and cancel
+        om._active_orders["ORD001"].created_at = (
+            datetime.now() - timedelta(minutes=20)
+        ).isoformat()
+        await om.cancel_stale_orders(ttl_minutes=15)
+
+        # Now the duplicate lock is released
+        assert om.has_pending_order("005930", "BUY") is False

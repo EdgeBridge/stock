@@ -21,6 +21,7 @@ class TradingConfig(BaseSettings):
     max_positions: int = 10
     cooldown_after_sell_sec: int = 14400  # 4 hours
     daily_buy_limit: int = 5  # Max buys per day per market
+    pending_order_ttl_min: int = 15  # Auto-cancel unfilled orders after N minutes
 
     model_config = {"env_prefix": "TRADING_"}
 

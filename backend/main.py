@@ -575,6 +575,21 @@ async def lifespan(app: FastAPI):
                         "market": "US",
                         "created_at": "",
                     })
+        # Cancel stale unfilled orders
+        stale = await order_manager.cancel_stale_orders(config.trading.pending_order_ttl_min)
+        if stale:
+            from api.trades import update_order_in_db
+            for s in stale:
+                await update_order_in_db(
+                    kis_order_id=s["order_id"], status="cancelled",
+                )
+            if notification:
+                symbols = ", ".join(f"{s['side']} {s['symbol']}" for s in stale)
+                await notification.notify_system_event(
+                    "stale_order_cancel",
+                    f"미체결 주문 자동 취소 ({len(stale)}건, "
+                    f"TTL={config.trading.pending_order_ttl_min}분): {symbols}",
+                )
 
     async def task_market_state_update():
         """T0: Update market regime from SPY data."""
@@ -1291,6 +1306,23 @@ async def lifespan(app: FastAPI):
                         "market": "KR",
                         "created_at": "",
                     })
+        # Cancel stale unfilled orders
+        stale = await kr_order_manager.cancel_stale_orders(
+            config.trading.pending_order_ttl_min,
+        )
+        if stale:
+            from api.trades import update_order_in_db
+            for s in stale:
+                await update_order_in_db(
+                    kis_order_id=s["order_id"], status="cancelled",
+                )
+            if notification:
+                symbols = ", ".join(f"{s['side']} {s['symbol']}" for s in stale)
+                await notification.notify_system_event(
+                    "kr_stale_order_cancel",
+                    f"KR 미체결 주문 자동 취소 ({len(stale)}건, "
+                    f"TTL={config.trading.pending_order_ttl_min}분): {symbols}",
+                )
 
     async def task_kr_portfolio_snapshot():
         await kr_portfolio_manager.save_snapshot()

@@ -6,7 +6,7 @@ Includes duplicate order prevention, partial fill tracking, and slippage monitor
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from exchange.base import ExchangeAdapter, OrderResult
 from engine.risk_manager import RiskManager, PositionSizeResult
@@ -57,9 +57,9 @@ class OrderManager:
         self._active_orders: dict[str, ManagedOrder] = {}
 
     def has_pending_order(self, symbol: str, side: str | None = None) -> bool:
-        """Check if there is already a pending/submitted order for this symbol."""
+        """Check if there is already a pending/submitted/open order for this symbol."""
         for o in self._active_orders.values():
-            if o.symbol == symbol and o.status in ("pending", "submitted"):
+            if o.symbol == symbol and o.status in ("pending", "submitted", "open"):
                 if side is None or o.side == side:
                     return True
         return False
@@ -392,6 +392,57 @@ class OrderManager:
         # Clean up completed orders
         self.clear_completed()
         return changes
+
+    async def cancel_stale_orders(self, ttl_minutes: int = 15) -> list[dict]:
+        """Cancel orders that have been pending/open longer than ttl_minutes.
+
+        Returns list of cancelled order info dicts for notification.
+        """
+        if not self._active_orders or ttl_minutes <= 0:
+            return []
+
+        now = datetime.now()
+        cutoff = now - timedelta(minutes=ttl_minutes)
+        cancelled = []
+
+        for oid, order in list(self._active_orders.items()):
+            if order.status not in ("pending", "submitted", "open"):
+                continue
+            if not order.created_at:
+                continue
+            try:
+                created = datetime.fromisoformat(order.created_at)
+            except (ValueError, TypeError):
+                continue
+            if created >= cutoff:
+                continue
+
+            # Order is stale — cancel it
+            age_min = (now - created).total_seconds() / 60
+            success = await self.cancel(oid, order.symbol)
+            if success:
+                logger.info(
+                    "Stale order cancelled: %s %s %s %d shares @ %.0f "
+                    "(age=%.0fmin, ttl=%dmin)",
+                    oid, order.side, order.symbol, order.quantity,
+                    order.price or 0, age_min, ttl_minutes,
+                )
+                cancelled.append({
+                    "order_id": oid,
+                    "symbol": order.symbol,
+                    "side": order.side,
+                    "quantity": order.quantity,
+                    "price": order.price,
+                    "strategy": order.strategy_name,
+                    "age_min": round(age_min, 1),
+                })
+            else:
+                logger.warning(
+                    "Failed to cancel stale order %s (%s %s)",
+                    oid, order.side, order.symbol,
+                )
+
+        return cancelled
 
     @property
     def active_orders(self) -> dict[str, ManagedOrder]:
