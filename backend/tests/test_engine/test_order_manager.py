@@ -13,22 +13,46 @@ from exchange.base import OrderResult
 @pytest.fixture
 def mock_adapter():
     adapter = AsyncMock()
-    adapter.create_buy_order = AsyncMock(return_value=OrderResult(
-        order_id="ORD001", symbol="AAPL", side="BUY",
-        order_type="limit", quantity=10, price=150.0,
-        filled_quantity=10, filled_price=150.0, status="filled",
-    ))
-    adapter.create_sell_order = AsyncMock(return_value=OrderResult(
-        order_id="ORD002", symbol="AAPL", side="SELL",
-        order_type="limit", quantity=10, price=160.0,
-        filled_quantity=10, filled_price=160.0, status="filled",
-    ))
+    adapter.create_buy_order = AsyncMock(
+        return_value=OrderResult(
+            order_id="ORD001",
+            symbol="AAPL",
+            side="BUY",
+            order_type="limit",
+            quantity=10,
+            price=150.0,
+            filled_quantity=10,
+            filled_price=150.0,
+            status="filled",
+        )
+    )
+    adapter.create_sell_order = AsyncMock(
+        return_value=OrderResult(
+            order_id="ORD002",
+            symbol="AAPL",
+            side="SELL",
+            order_type="limit",
+            quantity=10,
+            price=160.0,
+            filled_quantity=10,
+            filled_price=160.0,
+            status="filled",
+        )
+    )
     adapter.cancel_order = AsyncMock(return_value=True)
-    adapter.fetch_order = AsyncMock(return_value=OrderResult(
-        order_id="ORD001", symbol="AAPL", side="BUY",
-        order_type="limit", quantity=10, price=150.0,
-        status="filled", filled_price=150.0, filled_quantity=10,
-    ))
+    adapter.fetch_order = AsyncMock(
+        return_value=OrderResult(
+            order_id="ORD001",
+            symbol="AAPL",
+            side="BUY",
+            order_type="limit",
+            quantity=10,
+            price=150.0,
+            status="filled",
+            filled_price=150.0,
+            filled_quantity=10,
+        )
+    )
     return adapter
 
 
@@ -45,9 +69,12 @@ def order_manager(mock_adapter, risk_manager):
 class TestOrderManager:
     async def test_place_buy_success(self, order_manager, mock_adapter):
         order = await order_manager.place_buy(
-            symbol="AAPL", price=150.0,
-            portfolio_value=100_000, cash_available=50_000,
-            current_positions=0, strategy_name="trend_following",
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=0,
+            strategy_name="trend_following",
         )
         assert order is not None
         assert order.order_id == "ORD001"
@@ -59,16 +86,21 @@ class TestOrderManager:
         rm = RiskManager(RiskParams(max_positions=0))
         om = OrderManager(adapter=mock_adapter, risk_manager=rm)
         order = await om.place_buy(
-            symbol="AAPL", price=150.0,
-            portfolio_value=100_000, cash_available=50_000,
-            current_positions=0, strategy_name="test",
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=0,
+            strategy_name="test",
         )
         assert order is None
         mock_adapter.create_buy_order.assert_not_called()
 
     async def test_place_sell_success(self, order_manager, mock_adapter):
         order = await order_manager.place_sell(
-            symbol="AAPL", quantity=10, price=160.0,
+            symbol="AAPL",
+            quantity=10,
+            price=160.0,
             strategy_name="trend_following",
         )
         assert order is not None
@@ -78,18 +110,24 @@ class TestOrderManager:
     async def test_cancel_order(self, order_manager, mock_adapter):
         # Place then cancel
         await order_manager.place_buy(
-            symbol="AAPL", price=150.0,
-            portfolio_value=100_000, cash_available=50_000,
-            current_positions=0, strategy_name="test",
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=0,
+            strategy_name="test",
         )
         success = await order_manager.cancel("ORD001", "AAPL")
         assert success is True
 
     async def test_sync_order_status(self, order_manager):
         await order_manager.place_buy(
-            symbol="AAPL", price=150.0,
-            portfolio_value=100_000, cash_available=50_000,
-            current_positions=0, strategy_name="test",
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=0,
+            strategy_name="test",
         )
         managed = await order_manager.sync_order_status("ORD001", "AAPL")
         assert managed is not None
@@ -97,17 +135,23 @@ class TestOrderManager:
 
     async def test_active_orders_tracked(self, order_manager):
         await order_manager.place_buy(
-            symbol="AAPL", price=150.0,
-            portfolio_value=100_000, cash_available=50_000,
-            current_positions=0, strategy_name="test",
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=0,
+            strategy_name="test",
         )
         assert "ORD001" in order_manager.active_orders
 
     async def test_clear_completed(self, order_manager):
         await order_manager.place_buy(
-            symbol="AAPL", price=150.0,
-            portfolio_value=100_000, cash_available=50_000,
-            current_positions=0, strategy_name="test",
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=0,
+            strategy_name="test",
         )
         order_manager.clear_completed()
         assert len(order_manager.active_orders) == 0  # Status was "filled"
@@ -115,16 +159,21 @@ class TestOrderManager:
     async def test_place_buy_adapter_error(self, order_manager, mock_adapter):
         mock_adapter.create_buy_order.side_effect = Exception("Network error")
         order = await order_manager.place_buy(
-            symbol="AAPL", price=150.0,
-            portfolio_value=100_000, cash_available=50_000,
-            current_positions=0, strategy_name="test",
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=0,
+            strategy_name="test",
         )
         assert order is None
 
     async def test_place_sell_adapter_error(self, order_manager, mock_adapter):
         mock_adapter.create_sell_order.side_effect = Exception("Network error")
         order = await order_manager.place_sell(
-            symbol="AAPL", quantity=10, price=160.0,
+            symbol="AAPL",
+            quantity=10,
+            price=160.0,
         )
         assert order is None
 
@@ -136,16 +185,27 @@ class TestDuplicateOrderPrevention:
         assert order_manager.has_pending_order("AAPL") is False
 
     async def test_has_pending_order_true_for_pending(self, mock_adapter, risk_manager):
-        mock_adapter.create_buy_order = AsyncMock(return_value=OrderResult(
-            order_id="ORD001", symbol="AAPL", side="BUY",
-            order_type="limit", quantity=10, price=150.0,
-            filled_quantity=0, filled_price=None, status="pending",
-        ))
+        mock_adapter.create_buy_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="ORD001",
+                symbol="AAPL",
+                side="BUY",
+                order_type="limit",
+                quantity=10,
+                price=150.0,
+                filled_quantity=0,
+                filled_price=None,
+                status="pending",
+            )
+        )
         om = OrderManager(adapter=mock_adapter, risk_manager=risk_manager)
         await om.place_buy(
-            symbol="AAPL", price=150.0,
-            portfolio_value=100_000, cash_available=50_000,
-            current_positions=0, strategy_name="test",
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=0,
+            strategy_name="test",
         )
         assert om.has_pending_order("AAPL") is True
         assert om.has_pending_order("AAPL", "BUY") is True
@@ -153,26 +213,40 @@ class TestDuplicateOrderPrevention:
 
     async def test_duplicate_buy_blocked(self, mock_adapter, risk_manager):
         """Second buy for same symbol is blocked when first is pending."""
-        mock_adapter.create_buy_order = AsyncMock(return_value=OrderResult(
-            order_id="ORD001", symbol="AAPL", side="BUY",
-            order_type="limit", quantity=10, price=150.0,
-            filled_quantity=0, filled_price=None, status="pending",
-        ))
+        mock_adapter.create_buy_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="ORD001",
+                symbol="AAPL",
+                side="BUY",
+                order_type="limit",
+                quantity=10,
+                price=150.0,
+                filled_quantity=0,
+                filled_price=None,
+                status="pending",
+            )
+        )
         om = OrderManager(adapter=mock_adapter, risk_manager=risk_manager)
 
         # First buy succeeds
         first = await om.place_buy(
-            symbol="AAPL", price=150.0,
-            portfolio_value=100_000, cash_available=50_000,
-            current_positions=0, strategy_name="test",
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=0,
+            strategy_name="test",
         )
         assert first is not None
 
         # Second buy for same symbol is blocked
         second = await om.place_buy(
-            symbol="AAPL", price=155.0,
-            portfolio_value=100_000, cash_available=50_000,
-            current_positions=1, strategy_name="test2",
+            symbol="AAPL",
+            price=155.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=1,
+            strategy_name="test2",
         )
         assert second is None
         assert mock_adapter.create_buy_order.call_count == 1
@@ -185,23 +259,34 @@ class TestDuplicateOrderPrevention:
             nonlocal call_count
             call_count += 1
             return OrderResult(
-                order_id=f"ORD{call_count:03d}", symbol=kwargs["symbol"],
-                side="BUY", order_type="limit", quantity=10,
-                price=150.0, filled_quantity=0, status="pending",
+                order_id=f"ORD{call_count:03d}",
+                symbol=kwargs["symbol"],
+                side="BUY",
+                order_type="limit",
+                quantity=10,
+                price=150.0,
+                filled_quantity=0,
+                status="pending",
             )
 
         mock_adapter.create_buy_order = create_buy
         om = OrderManager(adapter=mock_adapter, risk_manager=risk_manager)
 
         first = await om.place_buy(
-            symbol="AAPL", price=150.0,
-            portfolio_value=100_000, cash_available=50_000,
-            current_positions=0, strategy_name="test",
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=0,
+            strategy_name="test",
         )
         second = await om.place_buy(
-            symbol="NVDA", price=800.0,
-            portfolio_value=100_000, cash_available=40_000,
-            current_positions=1, strategy_name="test",
+            symbol="NVDA",
+            price=800.0,
+            portfolio_value=100_000,
+            cash_available=40_000,
+            current_positions=1,
+            strategy_name="test",
         )
         assert first is not None
         assert second is not None
@@ -210,9 +295,12 @@ class TestDuplicateOrderPrevention:
         """After order fills, new buy for same symbol is allowed."""
         # First buy fills immediately (fixture default)
         await order_manager.place_buy(
-            symbol="AAPL", price=150.0,
-            portfolio_value=100_000, cash_available=50_000,
-            current_positions=0, strategy_name="test",
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=0,
+            strategy_name="test",
         )
         # Status is "filled", so has_pending_order should return False
         assert order_manager.has_pending_order("AAPL") is False
@@ -223,30 +311,52 @@ class TestSlippageTracking:
 
     async def test_buy_slippage_positive(self, mock_adapter, risk_manager):
         """Track positive slippage (filled higher than intended)."""
-        mock_adapter.create_buy_order = AsyncMock(return_value=OrderResult(
-            order_id="ORD001", symbol="AAPL", side="BUY",
-            order_type="limit", quantity=10, price=150.0,
-            filled_quantity=10, filled_price=150.05, status="filled",
-        ))
+        mock_adapter.create_buy_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="ORD001",
+                symbol="AAPL",
+                side="BUY",
+                order_type="limit",
+                quantity=10,
+                price=150.0,
+                filled_quantity=10,
+                filled_price=150.05,
+                status="filled",
+            )
+        )
         om = OrderManager(adapter=mock_adapter, risk_manager=risk_manager)
         order = await om.place_buy(
-            symbol="AAPL", price=150.0,
-            portfolio_value=100_000, cash_available=50_000,
-            current_positions=0, strategy_name="test",
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=0,
+            strategy_name="test",
         )
         assert order is not None
         assert abs(order.slippage - 0.05) < 0.001
 
     async def test_sell_slippage_negative(self, mock_adapter, risk_manager):
         """Track negative slippage (filled lower than intended)."""
-        mock_adapter.create_sell_order = AsyncMock(return_value=OrderResult(
-            order_id="ORD002", symbol="AAPL", side="SELL",
-            order_type="limit", quantity=10, price=160.0,
-            filled_quantity=10, filled_price=159.95, status="filled",
-        ))
+        mock_adapter.create_sell_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="ORD002",
+                symbol="AAPL",
+                side="SELL",
+                order_type="limit",
+                quantity=10,
+                price=160.0,
+                filled_quantity=10,
+                filled_price=159.95,
+                status="filled",
+            )
+        )
         om = OrderManager(adapter=mock_adapter, risk_manager=risk_manager)
         order = await om.place_sell(
-            symbol="AAPL", quantity=10, price=160.0, strategy_name="test",
+            symbol="AAPL",
+            quantity=10,
+            price=160.0,
+            strategy_name="test",
         )
         assert order is not None
         assert abs(order.slippage - (-0.05)) < 0.001
@@ -254,9 +364,12 @@ class TestSlippageTracking:
     async def test_zero_slippage_on_exact_fill(self, order_manager):
         """No slippage when filled at intended price."""
         order = await order_manager.place_buy(
-            symbol="AAPL", price=150.0,
-            portfolio_value=100_000, cash_available=50_000,
-            current_positions=0, strategy_name="test",
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=0,
+            strategy_name="test",
         )
         assert order is not None
         assert order.slippage == 0.0
@@ -266,32 +379,54 @@ class TestPartialFill:
     """Tests for partial fill tracking."""
 
     async def test_partial_fill_tracked(self, mock_adapter, risk_manager):
-        mock_adapter.create_buy_order = AsyncMock(return_value=OrderResult(
-            order_id="ORD001", symbol="AAPL", side="BUY",
-            order_type="limit", quantity=100, price=150.0,
-            filled_quantity=60, filled_price=150.0, status="partial",
-        ))
+        mock_adapter.create_buy_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="ORD001",
+                symbol="AAPL",
+                side="BUY",
+                order_type="limit",
+                quantity=100,
+                price=150.0,
+                filled_quantity=60,
+                filled_price=150.0,
+                status="partial",
+            )
+        )
         om = OrderManager(adapter=mock_adapter, risk_manager=risk_manager)
         order = await om.place_buy(
-            symbol="AAPL", price=150.0,
-            portfolio_value=100_000, cash_available=50_000,
-            current_positions=0, strategy_name="test",
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=0,
+            strategy_name="test",
         )
         assert order is not None
         assert order.filled_quantity == 60
         assert order.quantity == 46  # risk-sized quantity (7% regime cap at uptrend)
 
     async def test_zero_fill_tracked(self, mock_adapter, risk_manager):
-        mock_adapter.create_buy_order = AsyncMock(return_value=OrderResult(
-            order_id="ORD001", symbol="AAPL", side="BUY",
-            order_type="limit", quantity=10, price=150.0,
-            filled_quantity=0, filled_price=None, status="pending",
-        ))
+        mock_adapter.create_buy_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="ORD001",
+                symbol="AAPL",
+                side="BUY",
+                order_type="limit",
+                quantity=10,
+                price=150.0,
+                filled_quantity=0,
+                filled_price=None,
+                status="pending",
+            )
+        )
         om = OrderManager(adapter=mock_adapter, risk_manager=risk_manager)
         order = await om.place_buy(
-            symbol="AAPL", price=150.0,
-            portfolio_value=100_000, cash_available=50_000,
-            current_positions=0, strategy_name="test",
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=0,
+            strategy_name="test",
         )
         assert order is not None
         assert order.filled_quantity == 0
@@ -302,21 +437,40 @@ class TestReconciliation:
 
     async def test_reconcile_detects_status_change(self, mock_adapter, risk_manager):
         """Reconciliation detects when order status changes."""
-        mock_adapter.create_buy_order = AsyncMock(return_value=OrderResult(
-            order_id="ORD001", symbol="AAPL", side="BUY",
-            order_type="limit", quantity=10, price=150.0,
-            filled_quantity=0, filled_price=None, status="pending",
-        ))
-        mock_adapter.fetch_order = AsyncMock(return_value=OrderResult(
-            order_id="ORD001", symbol="AAPL", side="BUY",
-            order_type="limit", quantity=10, price=150.0,
-            filled_quantity=10, filled_price=150.0, status="filled",
-        ))
+        mock_adapter.create_buy_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="ORD001",
+                symbol="AAPL",
+                side="BUY",
+                order_type="limit",
+                quantity=10,
+                price=150.0,
+                filled_quantity=0,
+                filled_price=None,
+                status="pending",
+            )
+        )
+        mock_adapter.fetch_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="ORD001",
+                symbol="AAPL",
+                side="BUY",
+                order_type="limit",
+                quantity=10,
+                price=150.0,
+                filled_quantity=10,
+                filled_price=150.0,
+                status="filled",
+            )
+        )
         om = OrderManager(adapter=mock_adapter, risk_manager=risk_manager)
         await om.place_buy(
-            symbol="AAPL", price=150.0,
-            portfolio_value=100_000, cash_available=50_000,
-            current_positions=0, strategy_name="test",
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=0,
+            strategy_name="test",
         )
 
         changes = await om.reconcile_all()
@@ -328,9 +482,12 @@ class TestReconciliation:
         """No changes when order status hasn't changed."""
         # Default fixture creates orders with "filled" status
         await order_manager.place_buy(
-            symbol="AAPL", price=150.0,
-            portfolio_value=100_000, cash_available=50_000,
-            current_positions=0, strategy_name="test",
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=0,
+            strategy_name="test",
         )
         changes = await order_manager.reconcile_all()
         # Order was already "filled", so no status change detected
@@ -343,21 +500,40 @@ class TestReconciliation:
 
     async def test_reconcile_clears_completed(self, mock_adapter, risk_manager):
         """Reconcile clears filled orders from tracking."""
-        mock_adapter.create_buy_order = AsyncMock(return_value=OrderResult(
-            order_id="ORD001", symbol="AAPL", side="BUY",
-            order_type="limit", quantity=10, price=150.0,
-            filled_quantity=0, filled_price=None, status="pending",
-        ))
-        mock_adapter.fetch_order = AsyncMock(return_value=OrderResult(
-            order_id="ORD001", symbol="AAPL", side="BUY",
-            order_type="limit", quantity=10, price=150.0,
-            filled_quantity=10, filled_price=150.0, status="filled",
-        ))
+        mock_adapter.create_buy_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="ORD001",
+                symbol="AAPL",
+                side="BUY",
+                order_type="limit",
+                quantity=10,
+                price=150.0,
+                filled_quantity=0,
+                filled_price=None,
+                status="pending",
+            )
+        )
+        mock_adapter.fetch_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="ORD001",
+                symbol="AAPL",
+                side="BUY",
+                order_type="limit",
+                quantity=10,
+                price=150.0,
+                filled_quantity=10,
+                filled_price=150.0,
+                status="filled",
+            )
+        )
         om = OrderManager(adapter=mock_adapter, risk_manager=risk_manager)
         await om.place_buy(
-            symbol="AAPL", price=150.0,
-            portfolio_value=100_000, cash_available=50_000,
-            current_positions=0, strategy_name="test",
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=0,
+            strategy_name="test",
         )
         assert len(om.active_orders) == 1
         await om.reconcile_all()
@@ -369,16 +545,27 @@ class TestStaleOrderCancel:
 
     async def test_cancel_stale_order(self, mock_adapter, risk_manager):
         """Orders older than TTL are cancelled."""
-        mock_adapter.create_buy_order = AsyncMock(return_value=OrderResult(
-            order_id="ORD001", symbol="005930", side="BUY",
-            order_type="limit", quantity=5, price=70000.0,
-            filled_quantity=0, filled_price=None, status="open",
-        ))
+        mock_adapter.create_buy_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="ORD001",
+                symbol="005930",
+                side="BUY",
+                order_type="limit",
+                quantity=5,
+                price=70000.0,
+                filled_quantity=0,
+                filled_price=None,
+                status="open",
+            )
+        )
         om = OrderManager(adapter=mock_adapter, risk_manager=risk_manager)
         await om.place_buy(
-            symbol="005930", price=70000.0,
-            portfolio_value=10_000_000, cash_available=5_000_000,
-            current_positions=0, strategy_name="test",
+            symbol="005930",
+            price=70000.0,
+            portfolio_value=10_000_000,
+            cash_available=5_000_000,
+            current_positions=0,
+            strategy_name="test",
         )
         # Backdate created_at to 20 minutes ago
         om._active_orders["ORD001"].created_at = (
@@ -393,16 +580,27 @@ class TestStaleOrderCancel:
 
     async def test_fresh_order_not_cancelled(self, mock_adapter, risk_manager):
         """Orders within TTL are NOT cancelled."""
-        mock_adapter.create_buy_order = AsyncMock(return_value=OrderResult(
-            order_id="ORD001", symbol="005930", side="BUY",
-            order_type="limit", quantity=5, price=70000.0,
-            filled_quantity=0, filled_price=None, status="open",
-        ))
+        mock_adapter.create_buy_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="ORD001",
+                symbol="005930",
+                side="BUY",
+                order_type="limit",
+                quantity=5,
+                price=70000.0,
+                filled_quantity=0,
+                filled_price=None,
+                status="open",
+            )
+        )
         om = OrderManager(adapter=mock_adapter, risk_manager=risk_manager)
         await om.place_buy(
-            symbol="005930", price=70000.0,
-            portfolio_value=10_000_000, cash_available=5_000_000,
-            current_positions=0, strategy_name="test",
+            symbol="005930",
+            price=70000.0,
+            portfolio_value=10_000_000,
+            cash_available=5_000_000,
+            current_positions=0,
+            strategy_name="test",
         )
         # created_at is "now" — well within TTL
         cancelled = await om.cancel_stale_orders(ttl_minutes=15)
@@ -412,9 +610,12 @@ class TestStaleOrderCancel:
     async def test_filled_order_not_cancelled(self, order_manager, mock_adapter):
         """Filled orders are never cancelled even if old."""
         await order_manager.place_buy(
-            symbol="AAPL", price=150.0,
-            portfolio_value=100_000, cash_available=50_000,
-            current_positions=0, strategy_name="test",
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=0,
+            strategy_name="test",
         )
         # Backdate but status is "filled"
         order_manager._active_orders["ORD001"].created_at = (
@@ -431,36 +632,56 @@ class TestStaleOrderCancel:
 
     async def test_cancel_stale_ttl_zero_disabled(self, mock_adapter, risk_manager):
         """TTL=0 disables stale order cancellation."""
-        mock_adapter.create_buy_order = AsyncMock(return_value=OrderResult(
-            order_id="ORD001", symbol="AAPL", side="BUY",
-            order_type="limit", quantity=10, price=150.0,
-            filled_quantity=0, filled_price=None, status="open",
-        ))
+        mock_adapter.create_buy_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="ORD001",
+                symbol="AAPL",
+                side="BUY",
+                order_type="limit",
+                quantity=10,
+                price=150.0,
+                filled_quantity=0,
+                filled_price=None,
+                status="open",
+            )
+        )
         om = OrderManager(adapter=mock_adapter, risk_manager=risk_manager)
         await om.place_buy(
-            symbol="AAPL", price=150.0,
-            portfolio_value=100_000, cash_available=50_000,
-            current_positions=0, strategy_name="test",
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=0,
+            strategy_name="test",
         )
-        om._active_orders["ORD001"].created_at = (
-            datetime.now() - timedelta(hours=2)
-        ).isoformat()
+        om._active_orders["ORD001"].created_at = (datetime.now() - timedelta(hours=2)).isoformat()
 
         cancelled = await om.cancel_stale_orders(ttl_minutes=0)
         assert len(cancelled) == 0
 
     async def test_cancel_stale_frees_duplicate_lock(self, mock_adapter, risk_manager):
         """After stale cancel, same symbol can be bought again."""
-        mock_adapter.create_buy_order = AsyncMock(return_value=OrderResult(
-            order_id="ORD001", symbol="005930", side="BUY",
-            order_type="limit", quantity=5, price=70000.0,
-            filled_quantity=0, filled_price=None, status="open",
-        ))
+        mock_adapter.create_buy_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="ORD001",
+                symbol="005930",
+                side="BUY",
+                order_type="limit",
+                quantity=5,
+                price=70000.0,
+                filled_quantity=0,
+                filled_price=None,
+                status="open",
+            )
+        )
         om = OrderManager(adapter=mock_adapter, risk_manager=risk_manager)
         await om.place_buy(
-            symbol="005930", price=70000.0,
-            portfolio_value=10_000_000, cash_available=5_000_000,
-            current_positions=0, strategy_name="test",
+            symbol="005930",
+            price=70000.0,
+            portfolio_value=10_000_000,
+            cash_available=5_000_000,
+            current_positions=0,
+            strategy_name="test",
         )
         # Duplicate blocked while open
         assert om.has_pending_order("005930", "BUY") is True
@@ -473,3 +694,103 @@ class TestStaleOrderCancel:
 
         # Now the duplicate lock is released
         assert om.has_pending_order("005930", "BUY") is False
+
+
+# --- Paper/Live flag propagation (STOCK-6) ---
+
+
+class TestPaperFlag:
+    """Tests for is_paper flag in OrderManager."""
+
+    async def test_default_is_paper_false(self, mock_adapter, risk_manager):
+        """OrderManager defaults to is_paper=False (live mode)."""
+        om = OrderManager(adapter=mock_adapter, risk_manager=risk_manager)
+        assert om._is_paper is False
+
+    async def test_is_paper_true(self, mock_adapter, risk_manager):
+        """OrderManager accepts is_paper=True (paper mode)."""
+        om = OrderManager(
+            adapter=mock_adapter,
+            risk_manager=risk_manager,
+            is_paper=True,
+        )
+        assert om._is_paper is True
+
+    async def test_buy_trade_record_includes_is_paper(self, mock_adapter, risk_manager):
+        """Trade recorder dict includes is_paper flag on BUY."""
+        recorded = []
+        from engine.order_manager import set_trade_recorder, _trade_recorder
+
+        old_recorder = _trade_recorder
+        set_trade_recorder(lambda t: recorded.append(t))
+
+        try:
+            om = OrderManager(
+                adapter=mock_adapter,
+                risk_manager=risk_manager,
+                is_paper=True,
+            )
+            await om.place_buy(
+                symbol="AAPL",
+                price=150.0,
+                portfolio_value=100_000,
+                cash_available=50_000,
+                current_positions=0,
+                strategy_name="test",
+            )
+            assert len(recorded) == 1
+            assert recorded[0]["is_paper"] is True
+        finally:
+            set_trade_recorder(old_recorder)
+
+    async def test_sell_trade_record_includes_is_paper(self, mock_adapter, risk_manager):
+        """Trade recorder dict includes is_paper flag on SELL."""
+        recorded = []
+        from engine.order_manager import set_trade_recorder, _trade_recorder
+
+        old_recorder = _trade_recorder
+        set_trade_recorder(lambda t: recorded.append(t))
+
+        try:
+            om = OrderManager(
+                adapter=mock_adapter,
+                risk_manager=risk_manager,
+                is_paper=True,
+            )
+            await om.place_sell(
+                symbol="AAPL",
+                quantity=10,
+                price=160.0,
+                strategy_name="test",
+            )
+            assert len(recorded) == 1
+            assert recorded[0]["is_paper"] is True
+        finally:
+            set_trade_recorder(old_recorder)
+
+    async def test_live_mode_is_paper_false_in_record(self, mock_adapter, risk_manager):
+        """Live mode OrderManager records is_paper=False."""
+        recorded = []
+        from engine.order_manager import set_trade_recorder, _trade_recorder
+
+        old_recorder = _trade_recorder
+        set_trade_recorder(lambda t: recorded.append(t))
+
+        try:
+            om = OrderManager(
+                adapter=mock_adapter,
+                risk_manager=risk_manager,
+                is_paper=False,
+            )
+            await om.place_buy(
+                symbol="AAPL",
+                price=150.0,
+                portfolio_value=100_000,
+                cash_available=50_000,
+                current_positions=0,
+                strategy_name="test",
+            )
+            assert len(recorded) == 1
+            assert recorded[0]["is_paper"] is False
+        finally:
+            set_trade_recorder(old_recorder)
