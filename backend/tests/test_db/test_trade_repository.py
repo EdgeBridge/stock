@@ -733,6 +733,72 @@ async def test_cleanup_no_duplicates(repo):
     assert deleted == 0
 
 
+# --- Exchange field propagation (STOCK-5) ---
+
+
+@pytest.mark.asyncio
+async def test_save_order_kr_exchange_krx(repo):
+    """KR orders are saved with exchange='KRX', not default 'NASD'."""
+    order = await repo.save_order(
+        symbol="005930",
+        side="buy",
+        order_type="limit",
+        quantity=10,
+        price=70000.0,
+        status="filled",
+        strategy_name="supertrend",
+        exchange="KRX",
+        market="KR",
+    )
+    assert order.exchange == "KRX"
+    assert order.market == "KR"
+
+
+@pytest.mark.asyncio
+async def test_save_order_us_exchange_nyse(repo):
+    """US NYSE orders are saved with exchange='NYSE'."""
+    order = await repo.save_order(
+        symbol="BAC",
+        side="buy",
+        order_type="limit",
+        quantity=50,
+        price=40.0,
+        status="filled",
+        exchange="NYSE",
+        market="US",
+    )
+    assert order.exchange == "NYSE"
+
+
+@pytest.mark.asyncio
+async def test_save_order_us_exchange_amex(repo):
+    """US AMEX orders are saved with exchange='AMEX'."""
+    order = await repo.save_order(
+        symbol="SOXL",
+        side="buy",
+        order_type="limit",
+        quantity=20,
+        price=30.0,
+        status="filled",
+        exchange="AMEX",
+        market="US",
+    )
+    assert order.exchange == "AMEX"
+
+
+@pytest.mark.asyncio
+async def test_save_order_default_exchange_nasd(repo):
+    """Orders without explicit exchange default to 'NASD'."""
+    order = await repo.save_order(
+        symbol="AAPL",
+        side="buy",
+        order_type="market",
+        quantity=10,
+        price=150.0,
+    )
+    assert order.exchange == "NASD"
+
+
 @pytest.mark.asyncio
 async def test_cleanup_ignores_empty_kis_order_id(session):
     """cleanup_duplicate_orders ignores orders with empty kis_order_id."""

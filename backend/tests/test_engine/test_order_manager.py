@@ -955,3 +955,181 @@ class TestExchangePositionDuplicateBlock:
             strategy_name="test",
         )
         assert order is not None
+
+
+# --- Exchange field propagation (STOCK-5) ---
+
+
+class TestExchangeFieldPropagation:
+    """Tests for correct exchange field in ManagedOrder and trade recorder.
+
+    STOCK-5: KR orders were stored with exchange='NASD' because:
+    1. trade_recorder dict didn't include exchange
+    2. _persist_trade didn't pass exchange to save_order
+    3. position_tracker._execute_sell didn't pass exchange to place_sell
+    """
+
+    async def test_buy_managed_order_has_exchange(self, mock_adapter, risk_manager):
+        """ManagedOrder.exchange reflects the passed exchange value."""
+        om = OrderManager(adapter=mock_adapter, risk_manager=risk_manager)
+        order = await om.place_buy(
+            symbol="005930",
+            price=70000.0,
+            portfolio_value=10_000_000,
+            cash_available=5_000_000,
+            current_positions=0,
+            strategy_name="test",
+            exchange="KRX",
+        )
+        assert order is not None
+        assert order.exchange == "KRX"
+
+    async def test_sell_managed_order_has_exchange(self, mock_adapter, risk_manager):
+        """ManagedOrder.exchange reflects the passed exchange value on sell."""
+        om = OrderManager(adapter=mock_adapter, risk_manager=risk_manager)
+        order = await om.place_sell(
+            symbol="005930",
+            quantity=10,
+            price=72000.0,
+            strategy_name="test",
+            exchange="KRX",
+        )
+        assert order is not None
+        assert order.exchange == "KRX"
+
+    async def test_buy_trade_record_includes_exchange_kr(self, mock_adapter, risk_manager):
+        """Trade recorder dict includes exchange='KRX' for KR buy orders."""
+        recorded = []
+        from engine.order_manager import set_trade_recorder, _trade_recorder
+
+        old_recorder = _trade_recorder
+        set_trade_recorder(lambda t: recorded.append(t))
+
+        try:
+            om = OrderManager(
+                adapter=mock_adapter,
+                risk_manager=risk_manager,
+                market="KR",
+            )
+            await om.place_buy(
+                symbol="005930",
+                price=70000.0,
+                portfolio_value=10_000_000,
+                cash_available=5_000_000,
+                current_positions=0,
+                strategy_name="supertrend",
+                exchange="KRX",
+            )
+            assert len(recorded) == 1
+            assert recorded[0]["exchange"] == "KRX"
+            assert recorded[0]["market"] == "KR"
+        finally:
+            set_trade_recorder(old_recorder)
+
+    async def test_sell_trade_record_includes_exchange_kr(self, mock_adapter, risk_manager):
+        """Trade recorder dict includes exchange='KRX' for KR sell orders."""
+        recorded = []
+        from engine.order_manager import set_trade_recorder, _trade_recorder
+
+        old_recorder = _trade_recorder
+        set_trade_recorder(lambda t: recorded.append(t))
+
+        try:
+            om = OrderManager(
+                adapter=mock_adapter,
+                risk_manager=risk_manager,
+                market="KR",
+            )
+            await om.place_sell(
+                symbol="005930",
+                quantity=10,
+                price=72000.0,
+                strategy_name="supertrend",
+                exchange="KRX",
+            )
+            assert len(recorded) == 1
+            assert recorded[0]["exchange"] == "KRX"
+            assert recorded[0]["market"] == "KR"
+        finally:
+            set_trade_recorder(old_recorder)
+
+    async def test_buy_trade_record_includes_exchange_us(self, mock_adapter, risk_manager):
+        """Trade recorder dict includes exchange for US buy orders (NASD/NYSE/AMEX)."""
+        recorded = []
+        from engine.order_manager import set_trade_recorder, _trade_recorder
+
+        old_recorder = _trade_recorder
+        set_trade_recorder(lambda t: recorded.append(t))
+
+        try:
+            om = OrderManager(
+                adapter=mock_adapter,
+                risk_manager=risk_manager,
+                market="US",
+            )
+            await om.place_buy(
+                symbol="AAPL",
+                price=150.0,
+                portfolio_value=100_000,
+                cash_available=50_000,
+                current_positions=0,
+                strategy_name="trend_following",
+                exchange="NASD",
+            )
+            assert len(recorded) == 1
+            assert recorded[0]["exchange"] == "NASD"
+
+            # NYSE stock
+            await om.place_buy(
+                symbol="BAC",
+                price=40.0,
+                portfolio_value=100_000,
+                cash_available=45_000,
+                current_positions=1,
+                strategy_name="trend_following",
+                exchange="NYSE",
+            )
+            assert len(recorded) == 2
+            assert recorded[1]["exchange"] == "NYSE"
+        finally:
+            set_trade_recorder(old_recorder)
+
+    async def test_sell_trade_record_includes_exchange_us(self, mock_adapter, risk_manager):
+        """Trade recorder dict includes exchange for US sell orders."""
+        recorded = []
+        from engine.order_manager import set_trade_recorder, _trade_recorder
+
+        old_recorder = _trade_recorder
+        set_trade_recorder(lambda t: recorded.append(t))
+
+        try:
+            om = OrderManager(
+                adapter=mock_adapter,
+                risk_manager=risk_manager,
+                market="US",
+            )
+            await om.place_sell(
+                symbol="AAPL",
+                quantity=10,
+                price=160.0,
+                strategy_name="trend_following",
+                exchange="NASD",
+            )
+            assert len(recorded) == 1
+            assert recorded[0]["exchange"] == "NASD"
+        finally:
+            set_trade_recorder(old_recorder)
+
+    async def test_default_exchange_is_nasd(self, mock_adapter, risk_manager):
+        """Default exchange parameter is 'NASD' for backward compatibility."""
+        om = OrderManager(adapter=mock_adapter, risk_manager=risk_manager)
+        order = await om.place_buy(
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=0,
+            strategy_name="test",
+        )
+        assert order is not None
+        assert order.exchange == "NASD"

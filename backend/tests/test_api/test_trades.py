@@ -369,3 +369,149 @@ class TestPaperOrderSeparation:
             limit=200,
             exclude_paper=True,
         )
+
+
+# --- Exchange field propagation tests (STOCK-5) ---
+
+
+class TestExchangeFieldPersistence:
+    """Tests for correct exchange field propagation from trade recorder to DB.
+
+    STOCK-5: exchange field was dropped in _persist_trade, causing all orders
+    (including KR) to be stored with default exchange='NASD'.
+    """
+
+    @pytest.mark.asyncio
+    async def test_persist_trade_passes_exchange_kr(self):
+        """_persist_trade passes exchange='KRX' for KR trades to save_order."""
+        from api.trades import _persist_trade
+
+        mock_repo = AsyncMock()
+        mock_repo.save_order = AsyncMock()
+
+        mock_session = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_session)
+
+        trade = {
+            "order_id": "KR001",
+            "symbol": "005930",
+            "side": "BUY",
+            "quantity": 10,
+            "price": 70000.0,
+            "filled_quantity": 10,
+            "filled_price": 70000.0,
+            "status": "filled",
+            "strategy": "supertrend",
+            "exchange": "KRX",
+            "market": "KR",
+            "session": "regular",
+            "is_paper": False,
+        }
+
+        with patch("api.trades._session_factory", mock_factory):
+            with patch(
+                "db.trade_repository.TradeRepository", return_value=mock_repo
+            ):
+                await _persist_trade(trade)
+
+        mock_repo.save_order.assert_called_once()
+        call_kwargs = mock_repo.save_order.call_args.kwargs
+        assert call_kwargs["exchange"] == "KRX"
+        assert call_kwargs["market"] == "KR"
+
+    @pytest.mark.asyncio
+    async def test_persist_trade_passes_exchange_us(self):
+        """_persist_trade passes exchange='NASD' for US trades."""
+        from api.trades import _persist_trade
+
+        mock_repo = AsyncMock()
+        mock_repo.save_order = AsyncMock()
+
+        mock_session = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_session)
+
+        trade = {
+            "order_id": "US001",
+            "symbol": "AAPL",
+            "side": "BUY",
+            "quantity": 10,
+            "price": 150.0,
+            "exchange": "NASD",
+            "market": "US",
+        }
+
+        with patch("api.trades._session_factory", mock_factory):
+            with patch(
+                "db.trade_repository.TradeRepository", return_value=mock_repo
+            ):
+                await _persist_trade(trade)
+
+        call_kwargs = mock_repo.save_order.call_args.kwargs
+        assert call_kwargs["exchange"] == "NASD"
+
+    @pytest.mark.asyncio
+    async def test_persist_trade_passes_exchange_nyse(self):
+        """_persist_trade passes exchange='NYSE' for NYSE trades."""
+        from api.trades import _persist_trade
+
+        mock_repo = AsyncMock()
+        mock_repo.save_order = AsyncMock()
+
+        mock_session = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_session)
+
+        trade = {
+            "order_id": "US002",
+            "symbol": "BAC",
+            "side": "BUY",
+            "quantity": 50,
+            "price": 40.0,
+            "exchange": "NYSE",
+            "market": "US",
+        }
+
+        with patch("api.trades._session_factory", mock_factory):
+            with patch(
+                "db.trade_repository.TradeRepository", return_value=mock_repo
+            ):
+                await _persist_trade(trade)
+
+        call_kwargs = mock_repo.save_order.call_args.kwargs
+        assert call_kwargs["exchange"] == "NYSE"
+
+    @pytest.mark.asyncio
+    async def test_persist_trade_defaults_exchange_nasd(self):
+        """_persist_trade defaults to 'NASD' when exchange not in trade dict."""
+        from api.trades import _persist_trade
+
+        mock_repo = AsyncMock()
+        mock_repo.save_order = AsyncMock()
+
+        mock_session = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_session)
+
+        # Legacy trade dict without exchange field
+        trade = {
+            "order_id": "OLD001",
+            "symbol": "AAPL",
+            "side": "BUY",
+            "quantity": 10,
+            "price": 150.0,
+        }
+
+        with patch("api.trades._session_factory", mock_factory):
+            with patch(
+                "db.trade_repository.TradeRepository", return_value=mock_repo
+            ):
+                await _persist_trade(trade)
+
+        call_kwargs = mock_repo.save_order.call_args.kwargs
+        assert call_kwargs["exchange"] == "NASD"

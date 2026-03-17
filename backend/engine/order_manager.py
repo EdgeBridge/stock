@@ -233,6 +233,7 @@ class OrderManager:
                         "status": result.status,
                         "created_at": order.created_at,
                         "market": self._market,
+                        "exchange": exchange,
                         "session": session,
                         "is_paper": self._is_paper,
                     }
@@ -350,6 +351,7 @@ class OrderManager:
                         "pnl": pnl,
                         "created_at": order.created_at,
                         "market": self._market,
+                        "exchange": exchange,
                         "session": session,
                         "is_paper": self._is_paper,
                     }
