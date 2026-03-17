@@ -38,6 +38,37 @@ class TradeRepository:
         session: str = "regular",
         is_paper: bool = False,
     ) -> Order:
+        # UPSERT: if kis_order_id already exists, update instead of inserting
+        # Prevents duplicate rows when both order placement and reconciliation
+        # call save_order() for the same KIS order
+        if kis_order_id:
+            existing = await self.find_by_kis_order_id(kis_order_id)
+            if existing:
+                # Update with newer/more complete data
+                if filled_quantity and filled_quantity > (existing.filled_quantity or 0):
+                    existing.filled_quantity = filled_quantity
+                if filled_price is not None:
+                    existing.filled_price = filled_price
+                if status == "filled":
+                    existing.status = status
+                    if not existing.filled_at:
+                        existing.filled_at = datetime.utcnow()
+                elif status and existing.status != "filled":
+                    # Don't downgrade from filled
+                    existing.status = status
+                if pnl is not None:
+                    existing.pnl = pnl
+                if buy_strategy:
+                    existing.buy_strategy = buy_strategy
+                await self._session.commit()
+                await self._session.refresh(existing)
+                logger.debug(
+                    "Updated existing order kis_id=%s (id=%d) instead of inserting duplicate",
+                    kis_order_id,
+                    existing.id,
+                )
+                return existing
+
         order = Order(
             symbol=symbol,
             exchange=exchange,
@@ -129,6 +160,56 @@ class TradeRepository:
             stmt = stmt.where(Order.is_paper == False)  # noqa: E712
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
+
+    async def cleanup_duplicate_orders(self) -> int:
+        """Remove duplicate orders with the same kis_order_id.
+
+        Keeps the row with the most complete data (filled_at set, or highest id).
+        Returns count of deleted duplicate rows.
+        """
+        from sqlalchemy import func
+
+        # Find kis_order_ids that appear more than once
+        stmt = (
+            select(Order.kis_order_id, func.count(Order.id).label("cnt"))
+            .where(Order.kis_order_id.isnot(None), Order.kis_order_id != "")
+            .group_by(Order.kis_order_id)
+            .having(func.count(Order.id) > 1)
+        )
+        result = await self._session.execute(stmt)
+        duplicates = result.all()
+
+        deleted = 0
+        for kis_id, _count in duplicates:
+            # Get all orders with this kis_order_id, ordered to keep the best one
+            dup_stmt = (
+                select(Order)
+                .where(Order.kis_order_id == kis_id)
+                .order_by(
+                    # Prefer: filled_at set > higher filled_quantity > higher id
+                    desc(Order.filled_at.isnot(None)),
+                    desc(Order.filled_quantity),
+                    desc(Order.id),
+                )
+            )
+            dup_result = await self._session.execute(dup_stmt)
+            orders = list(dup_result.scalars().all())
+
+            # Keep first (best), delete rest
+            for dup_order in orders[1:]:
+                await self._session.delete(dup_order)
+                deleted += 1
+                logger.info(
+                    "Deleted duplicate order id=%d kis_id=%s symbol=%s",
+                    dup_order.id,
+                    kis_id,
+                    dup_order.symbol,
+                )
+
+        if deleted:
+            await self._session.commit()
+            logger.info("Cleaned up %d duplicate orders", deleted)
+        return deleted
 
     # --- Watchlist ---
 

@@ -568,27 +568,47 @@ async def lifespan(app: FastAPI):
             # Persist status changes to DB
             from api.trades import update_order_in_db, record_trade
             for change in changes:
-                await update_order_in_db(
+                updated = await update_order_in_db(
                     kis_order_id=change.get("order_id", ""),
                     status=change["new_status"],
                     filled_price=change.get("filled_price"),
                     filled_quantity=change.get("filled_quantity"),
                 )
-                # If newly filled, also record to in-memory trade log
+                # If newly filled, record to in-memory trade log.
+                # Only persist to DB (via record_trade) if update_order_in_db
+                # didn't find an existing row — prevents duplicate INSERT.
                 if change["new_status"] == "filled" and change["old_status"] != "filled":
-                    record_trade({
-                        "order_id": change.get("order_id", ""),
-                        "symbol": change["symbol"],
-                        "side": change["side"],
-                        "quantity": change.get("quantity", 0),
-                        "price": change.get("price"),
-                        "filled_price": change.get("filled_price"),
-                        "filled_quantity": change.get("filled_quantity", 0),
-                        "strategy": change.get("strategy", ""),
-                        "status": "filled",
-                        "market": "US",
-                        "created_at": "",
-                    })
+                    if updated:
+                        # Order already in DB and updated — only add to in-memory log
+                        from api.trades import _trade_log
+                        _trade_log.append({
+                            "order_id": change.get("order_id", ""),
+                            "symbol": change["symbol"],
+                            "side": change["side"],
+                            "quantity": change.get("quantity", 0),
+                            "price": change.get("price"),
+                            "filled_price": change.get("filled_price"),
+                            "filled_quantity": change.get("filled_quantity", 0),
+                            "strategy": change.get("strategy", ""),
+                            "status": "filled",
+                            "market": "US",
+                            "created_at": "",
+                        })
+                    else:
+                        # Order not in DB yet — persist via record_trade
+                        record_trade({
+                            "order_id": change.get("order_id", ""),
+                            "symbol": change["symbol"],
+                            "side": change["side"],
+                            "quantity": change.get("quantity", 0),
+                            "price": change.get("price"),
+                            "filled_price": change.get("filled_price"),
+                            "filled_quantity": change.get("filled_quantity", 0),
+                            "strategy": change.get("strategy", ""),
+                            "status": "filled",
+                            "market": "US",
+                            "created_at": "",
+                        })
         # Cancel stale unfilled orders
         stale = await order_manager.cancel_stale_orders(config.trading.pending_order_ttl_min)
         if stale:
@@ -1304,26 +1324,47 @@ async def lifespan(app: FastAPI):
             logger.info("KR order reconciliation: %d status changes", len(changes))
             from api.trades import update_order_in_db, record_trade
             for change in changes:
-                await update_order_in_db(
+                updated = await update_order_in_db(
                     kis_order_id=change.get("order_id", ""),
                     status=change["new_status"],
                     filled_price=change.get("filled_price"),
                     filled_quantity=change.get("filled_quantity"),
                 )
+                # If newly filled, record to in-memory trade log.
+                # Only persist to DB (via record_trade) if update_order_in_db
+                # didn't find an existing row — prevents duplicate INSERT.
                 if change["new_status"] == "filled" and change["old_status"] != "filled":
-                    record_trade({
-                        "order_id": change.get("order_id", ""),
-                        "symbol": change["symbol"],
-                        "side": change["side"],
-                        "quantity": change.get("quantity", 0),
-                        "price": change.get("price"),
-                        "filled_price": change.get("filled_price"),
-                        "filled_quantity": change.get("filled_quantity", 0),
-                        "strategy": change.get("strategy", ""),
-                        "status": "filled",
-                        "market": "KR",
-                        "created_at": "",
-                    })
+                    if updated:
+                        # Order already in DB and updated — only add to in-memory log
+                        from api.trades import _trade_log
+                        _trade_log.append({
+                            "order_id": change.get("order_id", ""),
+                            "symbol": change["symbol"],
+                            "side": change["side"],
+                            "quantity": change.get("quantity", 0),
+                            "price": change.get("price"),
+                            "filled_price": change.get("filled_price"),
+                            "filled_quantity": change.get("filled_quantity", 0),
+                            "strategy": change.get("strategy", ""),
+                            "status": "filled",
+                            "market": "KR",
+                            "created_at": "",
+                        })
+                    else:
+                        # Order not in DB yet — persist via record_trade
+                        record_trade({
+                            "order_id": change.get("order_id", ""),
+                            "symbol": change["symbol"],
+                            "side": change["side"],
+                            "quantity": change.get("quantity", 0),
+                            "price": change.get("price"),
+                            "filled_price": change.get("filled_price"),
+                            "filled_quantity": change.get("filled_quantity", 0),
+                            "strategy": change.get("strategy", ""),
+                            "status": "filled",
+                            "market": "KR",
+                            "created_at": "",
+                        })
         # Cancel stale unfilled orders
         stale = await kr_order_manager.cancel_stale_orders(
             config.trading.pending_order_ttl_min,
