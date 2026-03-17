@@ -52,6 +52,7 @@ class Order(Base):
         Index("idx_orders_created", "created_at"),
         Index("idx_orders_status", "status"),
         Index("idx_orders_is_paper", "is_paper"),
+        Index("idx_orders_kis_order_id", "kis_order_id"),
     )
 
 

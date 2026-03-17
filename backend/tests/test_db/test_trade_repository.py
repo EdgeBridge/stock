@@ -392,3 +392,372 @@ async def test_get_recent_trades_exclude_paper(repo):
     live_recent = await repo.get_recent_trades(hours=24, exclude_paper=True)
     assert len(live_recent) == 1
     assert live_recent[0].symbol == "MSFT"
+
+
+# --- UPSERT dedup for kis_order_id (STOCK-3) ---
+
+
+@pytest.mark.asyncio
+async def test_save_order_upsert_prevents_duplicate_kis_order_id(repo):
+    """save_order with same kis_order_id updates existing row instead of inserting."""
+    # First insert: order placed with pending status
+    order1 = await repo.save_order(
+        symbol="263750",
+        side="buy",
+        order_type="limit",
+        quantity=60,
+        price=35000.0,
+        status="pending",
+        strategy_name="trend_following",
+        kis_order_id="0013045000",
+        market="KR",
+        exchange="KRX",
+    )
+    assert order1.id is not None
+    assert order1.status == "pending"
+    original_id = order1.id
+
+    # Second insert: same kis_order_id, now filled (from reconciliation)
+    order2 = await repo.save_order(
+        symbol="263750",
+        side="buy",
+        order_type="limit",
+        quantity=60,
+        price=35000.0,
+        filled_quantity=60,
+        filled_price=35000.0,
+        status="filled",
+        strategy_name="trend_following",
+        kis_order_id="0013045000",
+        market="KR",
+        exchange="KRX",
+    )
+
+    # Should return the same row, not a new one
+    assert order2.id == original_id
+    assert order2.status == "filled"
+    assert order2.filled_quantity == 60
+    assert order2.filled_price == 35000.0
+    assert order2.filled_at is not None
+
+    # Verify only 1 row exists in DB
+    history = await repo.get_trade_history(limit=100)
+    assert len(history) == 1
+    assert history[0].kis_order_id == "0013045000"
+
+
+@pytest.mark.asyncio
+async def test_save_order_upsert_does_not_downgrade_filled_status(repo):
+    """UPSERT should not downgrade a filled order back to pending."""
+    # Insert as filled
+    order1 = await repo.save_order(
+        symbol="005930",
+        side="buy",
+        order_type="limit",
+        quantity=10,
+        price=70000.0,
+        filled_quantity=10,
+        filled_price=70000.0,
+        status="filled",
+        kis_order_id="0009999999",
+        market="KR",
+    )
+    assert order1.status == "filled"
+
+    # Try to save again with pending status
+    order2 = await repo.save_order(
+        symbol="005930",
+        side="buy",
+        order_type="limit",
+        quantity=10,
+        price=70000.0,
+        status="pending",
+        kis_order_id="0009999999",
+        market="KR",
+    )
+
+    # Should keep filled status
+    assert order2.id == order1.id
+    assert order2.status == "filled"
+
+
+@pytest.mark.asyncio
+async def test_save_order_upsert_updates_pnl(repo):
+    """UPSERT should update PnL when provided."""
+    order1 = await repo.save_order(
+        symbol="AAPL",
+        side="sell",
+        order_type="market",
+        quantity=10,
+        price=180.0,
+        status="filled",
+        kis_order_id="US12345",
+    )
+    assert order1.pnl is None
+
+    order2 = await repo.save_order(
+        symbol="AAPL",
+        side="sell",
+        order_type="market",
+        quantity=10,
+        price=180.0,
+        status="filled",
+        kis_order_id="US12345",
+        pnl=500.0,
+    )
+
+    assert order2.id == order1.id
+    assert order2.pnl == 500.0
+
+
+@pytest.mark.asyncio
+async def test_save_order_upsert_updates_buy_strategy(repo):
+    """UPSERT should update buy_strategy when provided."""
+    order1 = await repo.save_order(
+        symbol="AAPL",
+        side="sell",
+        order_type="market",
+        quantity=10,
+        price=180.0,
+        status="filled",
+        kis_order_id="US12345",
+    )
+    assert order1.buy_strategy is None
+
+    order2 = await repo.save_order(
+        symbol="AAPL",
+        side="sell",
+        order_type="market",
+        quantity=10,
+        price=180.0,
+        status="filled",
+        kis_order_id="US12345",
+        buy_strategy="momentum",
+    )
+
+    assert order2.id == order1.id
+    assert order2.buy_strategy == "momentum"
+
+
+@pytest.mark.asyncio
+async def test_save_order_no_upsert_without_kis_order_id(repo):
+    """Orders without kis_order_id should always insert (no dedup)."""
+    order1 = await repo.save_order(
+        symbol="AAPL",
+        side="buy",
+        order_type="market",
+        quantity=10,
+        price=180.0,
+    )
+    order2 = await repo.save_order(
+        symbol="AAPL",
+        side="buy",
+        order_type="market",
+        quantity=10,
+        price=180.0,
+    )
+
+    # Different rows
+    assert order1.id != order2.id
+    history = await repo.get_trade_history(limit=100)
+    assert len(history) == 2
+
+
+@pytest.mark.asyncio
+async def test_save_order_different_kis_order_ids_insert_separately(repo):
+    """Different kis_order_ids should create separate rows."""
+    order1 = await repo.save_order(
+        symbol="263750",
+        side="buy",
+        order_type="limit",
+        quantity=30,
+        price=35000.0,
+        kis_order_id="0013045000",
+        market="KR",
+    )
+    order2 = await repo.save_order(
+        symbol="263750",
+        side="buy",
+        order_type="limit",
+        quantity=30,
+        price=35000.0,
+        kis_order_id="0013045001",
+        market="KR",
+    )
+
+    assert order1.id != order2.id
+    history = await repo.get_trade_history(limit=100)
+    assert len(history) == 2
+
+
+@pytest.mark.asyncio
+async def test_save_order_upsert_higher_filled_quantity_wins(repo):
+    """UPSERT should only increase filled_quantity, not decrease."""
+    order1 = await repo.save_order(
+        symbol="005930",
+        side="buy",
+        order_type="limit",
+        quantity=100,
+        price=70000.0,
+        filled_quantity=50,
+        status="partial",
+        kis_order_id="KR_PARTIAL",
+        market="KR",
+    )
+    assert order1.filled_quantity == 50
+
+    # Update with more fills
+    order2 = await repo.save_order(
+        symbol="005930",
+        side="buy",
+        order_type="limit",
+        quantity=100,
+        price=70000.0,
+        filled_quantity=100,
+        filled_price=70000.0,
+        status="filled",
+        kis_order_id="KR_PARTIAL",
+        market="KR",
+    )
+
+    assert order2.id == order1.id
+    assert order2.filled_quantity == 100
+    assert order2.status == "filled"
+
+
+# --- Duplicate cleanup (STOCK-3) ---
+
+
+@pytest.mark.asyncio
+async def test_cleanup_duplicate_orders(session):
+    """cleanup_duplicate_orders removes duplicates, keeping the best row."""
+    repo = TradeRepository(session)
+
+    # Manually insert duplicates (bypassing UPSERT by using direct ORM)
+    from datetime import datetime
+
+    from core.models import Order
+
+    # Duplicate pair: same kis_order_id "0013045000"
+    order_a = Order(
+        symbol="263750",
+        exchange="KRX",
+        side="buy",
+        order_type="limit",
+        quantity=60,
+        price=35000.0,
+        filled_quantity=0,
+        status="pending",
+        kis_order_id="0013045000",
+        market="KR",
+    )
+    session.add(order_a)
+    await session.flush()
+
+    order_b = Order(
+        symbol="263750",
+        exchange="KRX",
+        side="buy",
+        order_type="limit",
+        quantity=60,
+        price=35000.0,
+        filled_quantity=60,
+        filled_price=35000.0,
+        status="filled",
+        kis_order_id="0013045000",
+        market="KR",
+        filled_at=datetime.utcnow(),
+    )
+    session.add(order_b)
+    await session.flush()
+
+    # Unique order (should not be affected)
+    unique = Order(
+        symbol="005930",
+        exchange="KRX",
+        side="buy",
+        order_type="limit",
+        quantity=10,
+        price=70000.0,
+        status="filled",
+        kis_order_id="UNIQUE001",
+        market="KR",
+    )
+    session.add(unique)
+    await session.commit()
+
+    # Before cleanup: 3 rows
+    history = await repo.get_trade_history(limit=100)
+    assert len(history) == 3
+
+    # Run cleanup
+    deleted = await repo.cleanup_duplicate_orders()
+    assert deleted == 1
+
+    # After cleanup: 2 rows (1 duplicate removed)
+    history = await repo.get_trade_history(limit=100)
+    assert len(history) == 2
+
+    # The kept row should be the filled one (order_b, with filled_at)
+    remaining = await repo.find_by_kis_order_id("0013045000")
+    assert remaining is not None
+    assert remaining.status == "filled"
+    assert remaining.filled_quantity == 60
+
+    # Unique order untouched
+    unique_check = await repo.find_by_kis_order_id("UNIQUE001")
+    assert unique_check is not None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_no_duplicates(repo):
+    """cleanup_duplicate_orders returns 0 when no duplicates exist."""
+    await repo.save_order(
+        symbol="AAPL",
+        side="buy",
+        order_type="market",
+        quantity=10,
+        price=180.0,
+        kis_order_id="US001",
+    )
+    await repo.save_order(
+        symbol="MSFT",
+        side="buy",
+        order_type="market",
+        quantity=5,
+        price=400.0,
+        kis_order_id="US002",
+    )
+
+    deleted = await repo.cleanup_duplicate_orders()
+    assert deleted == 0
+
+
+@pytest.mark.asyncio
+async def test_cleanup_ignores_empty_kis_order_id(session):
+    """cleanup_duplicate_orders ignores orders with empty kis_order_id."""
+    repo = TradeRepository(session)
+
+    from core.models import Order
+
+    # Multiple orders with empty kis_order_id — not duplicates
+    for _ in range(3):
+        order = Order(
+            symbol="AAPL",
+            exchange="NASD",
+            side="buy",
+            order_type="market",
+            quantity=10,
+            price=180.0,
+            status="filled",
+            kis_order_id="",
+            market="US",
+        )
+        session.add(order)
+    await session.commit()
+
+    deleted = await repo.cleanup_duplicate_orders()
+    assert deleted == 0
+
+    history = await repo.get_trade_history(limit=100)
+    assert len(history) == 3  # All preserved
