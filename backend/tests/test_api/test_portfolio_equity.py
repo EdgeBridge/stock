@@ -1,9 +1,9 @@
-"""Tests for portfolio total_equity calculation — STOCK-1.
+"""Tests for portfolio total_equity calculation — STOCK-1 / STOCK-12.
 
 Validates:
-- CTRP6504R primary path returns tot_asst_krw directly
-- Fallback path: no double-counting, USD cash included
-- available_cash with/without 통합증거금
+- total_equity = krw_total + usd_total * rate (unified path)
+- No double-counting of USD cash or positions
+- available_cash = krw_available + usd_available * rate
 - Exchange rate fallback chain
 - Frontend-aligned API response structure
 """
@@ -36,8 +36,7 @@ def _make_app(
     # US adapter mock
     us_adapter = AsyncMock()
     us_adapter.fetch_balance = AsyncMock(
-        return_value=us_balance
-        or Balance(currency="USD", total=5000, available=3000, locked=2000),
+        return_value=us_balance or Balance(currency="USD", total=5000, available=3000, locked=2000),
     )
     us_adapter.fetch_positions = AsyncMock(return_value=us_positions or [])
     us_adapter._tot_asst_krw = tot_asst_krw
@@ -66,19 +65,25 @@ def _make_app(
     return app
 
 
-class TestTotalEquityPrimary:
-    """CTRP6504R (통합증거금) is available — uses tot_asst_krw directly."""
+class TestTotalEquityWithTotAsstKrw:
+    """tot_asst_krw on adapter is ignored — unified sum is always used.
 
-    def test_uses_tot_asst_krw_when_available(self):
-        """total_equity should exactly equal _tot_asst_krw."""
+    CTRP6504R tot_asst_amt only covers overseas assets, not KR holdings,
+    so _combined_summary always computes: krw_total + usd_total * rate.
+    """
+
+    def test_ignores_tot_asst_krw_uses_sum(self):
+        """total_equity = krw_total + usd_total * rate, even when _tot_asst_krw is set."""
         app = _make_app(tot_asst_krw=50_000_000, last_exchange_rate=1400.0)
         client = TestClient(app)
         resp = client.get("/api/v1/portfolio/summary")
         data = resp.json()
-        assert data["total_equity"] == 50_000_000
+        # Default: krw_total=5_000_000, usd_total=5000, rate=1400
+        expected = 5_000_000 + 5000 * 1400
+        assert data["total_equity"] == expected
 
-    def test_available_cash_is_krw_only_with_integrated(self):
-        """통합증거금 active → available_cash = krw_available (no USD double-count)."""
+    def test_available_cash_includes_usd_with_tot_asst_krw(self):
+        """available_cash = krw_available + usd_available * rate, regardless of tot_asst_krw."""
         kr_bal = Balance(currency="KRW", total=10_000_000, available=6_000_000, locked=4_000_000)
         us_bal = Balance(currency="USD", total=8000, available=5000, locked=3000)
         app = _make_app(
@@ -88,8 +93,9 @@ class TestTotalEquityPrimary:
         )
         client = TestClient(app)
         data = client.get("/api/v1/portfolio/summary").json()
-        # Should be KR available only — 통합증거금 already includes USD
-        assert data["available_cash"] == 6_000_000
+        # available_cash = 6_000_000 + 5000 * 1400 = 13_000_000
+        expected = 6_000_000 + 5000 * 1400
+        assert data["available_cash"] == expected
 
     def test_exchange_rate_included(self):
         """Response includes exchange_rate field."""
