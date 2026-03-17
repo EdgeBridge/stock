@@ -6,16 +6,25 @@ sell orders when stop-loss, take-profit, or trailing stop conditions are met.
 On startup, `restore_from_exchange()` fetches current exchange positions
 and re-populates the in-memory tracker so SL/TP/trailing stop monitoring
 resumes immediately after a restart.
+
+All tracked positions are persisted to the `positions` DB table so the
+system can recover even if the exchange API is temporarily unavailable.
 """
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
+from typing import TYPE_CHECKING
 
-from exchange.base import ExchangeAdapter, Position
 from data.market_data_service import MarketDataService
-from engine.risk_manager import RiskManager
 from engine.order_manager import OrderManager
+from engine.risk_manager import RiskManager
+from exchange.base import ExchangeAdapter
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +54,8 @@ class PositionTracker:
         notification=None,
         market_data: MarketDataService | None = None,
         event_calendar=None,
+        session_factory: "async_sessionmaker[AsyncSession] | None" = None,
+        market: str = "US",
     ):
         self._adapter = adapter
         self._market_data = market_data
@@ -52,6 +63,8 @@ class PositionTracker:
         self._orders = order_manager
         self._notification = notification
         self._event_calendar = event_calendar
+        self._session_factory = session_factory
+        self._market = market
         self._tracked: dict[str, TrackedPosition] = {}
 
     def track(
@@ -74,10 +87,12 @@ class PositionTracker:
             take_profit_pct=take_profit_pct,
         )
         logger.info("Tracking position: %s %d @ $%.2f", symbol, quantity, entry_price)
+        self._schedule_db_upsert(symbol)
 
     def untrack(self, symbol: str) -> None:
         """Stop tracking a position."""
         self._tracked.pop(symbol, None)
+        self._schedule_db_remove(symbol)
 
     async def check_all(self, session: str = "regular") -> list[dict]:
         """Check all tracked positions. Returns list of triggered actions.
@@ -119,7 +134,10 @@ class PositionTracker:
 
             current_price = pos.current_price
             if current_price <= 0:
-                logger.warning("Position %s has invalid price (%.2f), skipping check", symbol, current_price)
+                logger.warning(
+                    "Position %s has invalid price (%.2f), skipping",
+                    symbol, current_price,
+                )
                 continue
 
             # Update highest price for trailing stop
@@ -242,15 +260,22 @@ class PositionTracker:
                             tracked.highest_price, pnl,
                         )
                 except Exception as e:
-                    logger.error("Failed to send %s notification for %s: %s", reason, tracked.symbol, e)
+                    logger.error(
+                        "Failed to send %s notification for %s: %s",
+                        reason, tracked.symbol, e,
+                    )
 
     async def restore_from_exchange(self, session_factory=None) -> list[dict]:
         """Restore position tracking from exchange state after restart.
 
         Fetches current positions from the exchange adapter and looks up
         entry info (price, strategy) from the orders DB table.
+        Persists restored positions to the positions DB table.
         Returns a list of restored position summaries.
         """
+        # Use provided session_factory or fall back to instance one
+        sf = session_factory or self._session_factory
+
         try:
             if self._market_data:
                 positions = await self._market_data.get_positions()
@@ -262,17 +287,20 @@ class PositionTracker:
 
         if not positions:
             logger.info("No open positions to restore")
+            # Clean up any stale DB positions when exchange confirms empty
+            if sf:
+                await self._clear_all_positions_db(sf)
             return []
 
         # Look up latest BUY order per symbol from DB to get entry info
         entry_info: dict[str, dict] = {}
-        if session_factory:
+        if sf:
             try:
-                from db.trade_repository import TradeRepository
-                from sqlalchemy import select, desc
+                from sqlalchemy import desc, select
+
                 from core.models import Order
 
-                async with session_factory() as session:
+                async with sf() as session:
                     for pos in positions:
                         stmt = (
                             select(Order)
@@ -352,7 +380,59 @@ class PositionTracker:
                 len(restored),
                 ", ".join(r["symbol"] for r in restored),
             )
+
+        # Persist all restored positions to DB in bulk
+        if sf and restored:
+            await self.sync_to_db(sf)
+
         return restored
+
+    async def sync_to_db(self, session_factory=None) -> int:
+        """Synchronize all in-memory tracked positions to the positions DB table.
+
+        Upserts current tracked positions and removes stale DB rows for
+        positions no longer tracked. Returns the number of positions synced.
+        """
+        sf = session_factory or self._session_factory
+        if not sf:
+            return 0
+
+        try:
+            from sqlalchemy import select
+
+            from core.models import PositionRecord
+
+            async with sf() as session:
+                tracked_symbols = set(self._tracked.keys())
+
+                # Remove DB rows for positions no longer tracked in this market
+                stmt = select(PositionRecord).where(
+                    PositionRecord.market == self._market,
+                )
+                result = await session.execute(stmt)
+                db_positions = result.scalars().all()
+
+                for db_pos in db_positions:
+                    if db_pos.symbol not in tracked_symbols:
+                        await session.delete(db_pos)
+
+                # Upsert all currently tracked positions
+                for symbol, tracked in self._tracked.items():
+                    await self._upsert_position_record(
+                        session, symbol, tracked,
+                    )
+
+                await session.commit()
+
+            synced = len(self._tracked)
+            logger.info(
+                "Synced %d %s positions to DB", synced, self._market,
+            )
+            return synced
+
+        except Exception as e:
+            logger.error("Failed to sync positions to DB: %s", e)
+            return 0
 
     def get_buy_strategy(self, symbol: str) -> str:
         """Get the original buy strategy for a tracked position."""
@@ -377,3 +457,129 @@ class PositionTracker:
             }
             for t in self._tracked.values()
         ]
+
+    # ── DB persistence helpers ──────────────────────────────────────────
+
+    def _schedule_db_upsert(self, symbol: str) -> None:
+        """Schedule a fire-and-forget DB upsert for a tracked position."""
+        if not self._session_factory:
+            return
+        tracked = self._tracked.get(symbol)
+        if not tracked:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._upsert_position_db(symbol, tracked))
+        except RuntimeError:
+            # No running event loop (e.g., sync test context) — skip
+            pass
+
+    def _schedule_db_remove(self, symbol: str) -> None:
+        """Schedule a fire-and-forget DB removal for a position."""
+        if not self._session_factory:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._remove_position_db(symbol))
+        except RuntimeError:
+            pass
+
+    async def _upsert_position_db(
+        self, symbol: str, tracked: TrackedPosition,
+    ) -> None:
+        """Upsert a single position into the positions DB table."""
+        if not self._session_factory:
+            return
+        try:
+
+            async with self._session_factory() as session:
+                await self._upsert_position_record(session, symbol, tracked)
+                await session.commit()
+        except Exception as e:
+            logger.debug("DB upsert failed for %s: %s", symbol, e)
+
+    async def _remove_position_db(self, symbol: str) -> None:
+        """Remove a position from the positions DB table."""
+        if not self._session_factory:
+            return
+        try:
+            from sqlalchemy import delete
+
+            from core.models import PositionRecord
+
+            async with self._session_factory() as session:
+                stmt = delete(PositionRecord).where(
+                    PositionRecord.market == self._market,
+                    PositionRecord.symbol == symbol,
+                )
+                await session.execute(stmt)
+                await session.commit()
+        except Exception as e:
+            logger.debug("DB remove failed for %s: %s", symbol, e)
+
+    async def _upsert_position_record(
+        self,
+        session: "AsyncSession",
+        symbol: str,
+        tracked: TrackedPosition,
+    ) -> None:
+        """Upsert a PositionRecord within an existing session (no commit)."""
+        from sqlalchemy import select
+
+        from core.models import PositionRecord
+
+        stmt = select(PositionRecord).where(
+            PositionRecord.market == self._market,
+            PositionRecord.symbol == symbol,
+        )
+        result = await session.execute(stmt)
+        record = result.scalar_one_or_none()
+
+        if record:
+            record.quantity = tracked.quantity
+            record.avg_price = tracked.entry_price
+            record.stop_loss = tracked.stop_loss_pct
+            record.take_profit = tracked.take_profit_pct
+            record.trailing_stop = tracked.trailing_stop_pct
+            record.strategy_name = tracked.strategy
+            record.updated_at = datetime.utcnow()
+        else:
+            record = PositionRecord(
+                market=self._market,
+                symbol=symbol,
+                exchange=self._resolve_exchange(symbol),
+                quantity=tracked.quantity,
+                avg_price=tracked.entry_price,
+                stop_loss=tracked.stop_loss_pct,
+                take_profit=tracked.take_profit_pct,
+                trailing_stop=tracked.trailing_stop_pct,
+                strategy_name=tracked.strategy,
+                opened_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            )
+            session.add(record)
+
+    async def _clear_all_positions_db(
+        self, session_factory: "async_sessionmaker[AsyncSession]",
+    ) -> None:
+        """Remove all positions for this market from DB."""
+        try:
+            from sqlalchemy import delete
+
+            from core.models import PositionRecord
+
+            async with session_factory() as session:
+                stmt = delete(PositionRecord).where(
+                    PositionRecord.market == self._market,
+                )
+                await session.execute(stmt)
+                await session.commit()
+        except Exception as e:
+            logger.debug("Failed to clear DB positions for %s: %s", self._market, e)
+
+    def _resolve_exchange(self, symbol: str) -> str:
+        """Resolve exchange code from symbol."""
+        if self._market == "KR":
+            return "KRX"
+        # US: default NASD, could be improved with exchange resolver
+        return "NASD"

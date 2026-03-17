@@ -173,13 +173,14 @@ async def lifespan(app: FastAPI):
     health.set_notification(notification)
     app.state.health = health
 
-    # Position tracker
+    # Position tracker (session_factory set below after DB init)
     position_tracker = PositionTracker(
         adapter=adapter,
         risk_manager=risk_manager,
         order_manager=order_manager,
         notification=notification,
         market_data=market_data,
+        market="US",
     )
     app.state.position_tracker = position_tracker
 
@@ -200,6 +201,9 @@ async def lifespan(app: FastAPI):
         market_data=market_data, session_factory=session_factory,
     )
     app.state.portfolio_manager = portfolio_manager
+
+    # Wire position trackers to DB for persistence
+    position_tracker._session_factory = session_factory
 
     # Wire trade DB persistence
     from api.trades import init_trades
@@ -384,6 +388,8 @@ async def lifespan(app: FastAPI):
         order_manager=kr_order_manager,
         notification=notification,
         market_data=kr_market_data,
+        session_factory=session_factory,
+        market="KR",
     )
     app.state.kr_market_data = kr_market_data
     app.state.kr_order_manager = kr_order_manager
@@ -462,6 +468,10 @@ async def lifespan(app: FastAPI):
     async def task_position_check():
         await position_tracker.check_all()
 
+    async def task_position_db_sync():
+        """Periodic reconciliation: sync in-memory positions to DB."""
+        await position_tracker.sync_to_db()
+
     async def task_daily_reset():
         risk_manager.reset_daily()
         logger.info("Daily risk counters reset")
@@ -498,6 +508,10 @@ async def lifespan(app: FastAPI):
     scheduler.add_task(
         "position_check", task_position_check,
         interval_sec=60, phases=[MarketPhase.REGULAR],
+    )
+    scheduler.add_task(
+        "position_db_sync", task_position_db_sync,
+        interval_sec=300, phases=[MarketPhase.REGULAR],  # sync every 5 min
     )
     scheduler.add_task(
         "daily_reset", task_daily_reset,
@@ -1280,6 +1294,10 @@ async def lifespan(app: FastAPI):
     async def task_kr_position_check():
         await kr_position_tracker.check_all()
 
+    async def task_kr_position_db_sync():
+        """Periodic reconciliation: sync KR in-memory positions to DB."""
+        await kr_position_tracker.sync_to_db()
+
     async def task_kr_order_reconciliation():
         changes = await kr_order_manager.reconcile_all()
         if changes:
@@ -1381,6 +1399,10 @@ async def lifespan(app: FastAPI):
     scheduler.add_task(
         "kr_position_check", task_kr_position_check,
         interval_sec=60, phases=[MarketPhase.REGULAR], market="KR",
+    )
+    scheduler.add_task(
+        "kr_position_db_sync", task_kr_position_db_sync,
+        interval_sec=300, phases=[MarketPhase.REGULAR], market="KR",
     )
     scheduler.add_task(
         "kr_order_reconciliation", task_kr_order_reconciliation,
