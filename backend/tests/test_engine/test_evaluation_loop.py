@@ -17,25 +17,40 @@ from core.enums import SignalType
 def _make_ohlcv_df(n=50):
     np.random.seed(42)
     close = 100 * np.cumprod(1 + np.random.normal(0.001, 0.01, n))
-    return pd.DataFrame({
-        "open": close * 0.999, "high": close * 1.01,
-        "low": close * 0.99, "close": close,
-        "volume": np.random.randint(100000, 500000, n).astype(float),
-    })
+    return pd.DataFrame(
+        {
+            "open": close * 0.999,
+            "high": close * 1.01,
+            "low": close * 0.99,
+            "close": close,
+            "volume": np.random.randint(100000, 500000, n).astype(float),
+        }
+    )
 
 
 @pytest.fixture
 def mock_adapter():
     adapter = AsyncMock()
-    adapter.fetch_balance = AsyncMock(return_value=Balance(
-        currency="USD", total=100_000, available=80_000,
-    ))
+    adapter.fetch_balance = AsyncMock(
+        return_value=Balance(
+            currency="USD",
+            total=100_000,
+            available=80_000,
+        )
+    )
     adapter.fetch_positions = AsyncMock(return_value=[])
-    adapter.create_buy_order = AsyncMock(return_value=OrderResult(
-        order_id="O1", symbol="AAPL", side="BUY",
-        order_type="limit", quantity=10, price=150.0,
-        status="filled", filled_price=150.0,
-    ))
+    adapter.create_buy_order = AsyncMock(
+        return_value=OrderResult(
+            order_id="O1",
+            symbol="AAPL",
+            side="BUY",
+            order_type="limit",
+            quantity=10,
+            price=150.0,
+            status="filled",
+            filled_price=150.0,
+        )
+    )
     return adapter
 
 
@@ -43,9 +58,13 @@ def mock_adapter():
 def mock_market_data():
     svc = AsyncMock()
     svc.get_ohlcv = AsyncMock(return_value=_make_ohlcv_df())
-    svc.get_balance = AsyncMock(return_value=Balance(
-        currency="USD", total=100_000, available=80_000,
-    ))
+    svc.get_balance = AsyncMock(
+        return_value=Balance(
+            currency="USD",
+            total=100_000,
+            available=80_000,
+        )
+    )
     svc.get_positions = AsyncMock(return_value=[])
     svc.get_price = AsyncMock(return_value=150.0)
     return svc
@@ -56,10 +75,14 @@ def mock_registry():
     registry = MagicMock()
     mock_strategy = AsyncMock()
     mock_strategy.name = "trend_following"
-    mock_strategy.analyze = AsyncMock(return_value=Signal(
-        signal_type=SignalType.BUY, confidence=0.8,
-        strategy_name="trend_following", reason="test",
-    ))
+    mock_strategy.analyze = AsyncMock(
+        return_value=Signal(
+            signal_type=SignalType.BUY,
+            confidence=0.8,
+            strategy_name="trend_following",
+            reason="test",
+        )
+    )
     registry.get_enabled.return_value = [mock_strategy]
     registry.get_profile_weights.return_value = {"trend_following": 1.0}
     return registry
@@ -96,27 +119,40 @@ class TestEvaluationLoop:
         # Change strategy to return HOLD
         strategy = mock_registry.get_enabled.return_value[0]
         strategy.analyze.return_value = Signal(
-            signal_type=SignalType.HOLD, confidence=0.3,
-            strategy_name="trend_following", reason="hold",
+            signal_type=SignalType.HOLD,
+            confidence=0.3,
+            strategy_name="trend_following",
+            reason="hold",
         )
         await eval_loop.evaluate_symbol("AAPL")
         mock_adapter.create_buy_order.assert_not_called()
 
-    async def test_evaluate_symbol_sell(self, eval_loop, mock_adapter, mock_registry, mock_market_data):
+    async def test_evaluate_symbol_sell(
+        self, eval_loop, mock_adapter, mock_registry, mock_market_data
+    ):
         # Strategy says SELL
         strategy = mock_registry.get_enabled.return_value[0]
         strategy.analyze.return_value = Signal(
-            signal_type=SignalType.SELL, confidence=0.8,
-            strategy_name="trend_following", reason="sell",
+            signal_type=SignalType.SELL,
+            confidence=0.8,
+            strategy_name="trend_following",
+            reason="sell",
         )
         mock_market_data.get_positions.return_value = [
             Position(symbol="AAPL", exchange="NASD", quantity=10, avg_price=140.0),
         ]
-        mock_adapter.create_sell_order = AsyncMock(return_value=OrderResult(
-            order_id="O2", symbol="AAPL", side="SELL",
-            order_type="limit", quantity=10, price=150.0,
-            status="filled", filled_price=150.0,
-        ))
+        mock_adapter.create_sell_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="O2",
+                symbol="AAPL",
+                side="SELL",
+                order_type="limit",
+                quantity=10,
+                price=150.0,
+                status="filled",
+                filled_price=150.0,
+            )
+        )
         await eval_loop.evaluate_symbol("AAPL")
         mock_adapter.create_sell_order.assert_called_once()
 
@@ -137,6 +173,7 @@ class TestEvaluationLoop:
         assert eval_loop.running is False
         # Start in background, stop immediately
         import asyncio
+
         task = asyncio.create_task(eval_loop.start())
         await asyncio.sleep(0.1)
         assert eval_loop.running is True
@@ -153,45 +190,58 @@ class TestEvaluationLoop:
 class TestDailyBuyLimit:
     """Test daily buy limit with dynamic confidence escalation."""
 
-    async def test_daily_limit_blocks_low_conf_at_hard_cap(self, eval_loop, mock_adapter, mock_registry):
+    async def test_daily_limit_blocks_low_conf_at_hard_cap(
+        self, eval_loop, mock_adapter, mock_registry
+    ):
         """After limit reached, low-confidence buys blocked."""
         eval_loop._daily_buy_limit = 1
         eval_loop._daily_buy_count = 1  # already at limit
         from datetime import date as _date
+
         eval_loop._daily_buy_date = _date.today().isoformat()
 
         # confidence=0.8 signal (below 0.90 override threshold)
         await eval_loop.evaluate_symbol("AAPL")
         mock_adapter.create_buy_order.assert_not_called()
 
-    async def test_daily_limit_allows_ultra_high_conf_override(self, eval_loop, mock_adapter, mock_registry):
+    async def test_daily_limit_allows_ultra_high_conf_override(
+        self, eval_loop, mock_adapter, mock_registry
+    ):
         """Ultra-high confidence (0.90+) bypasses hard cap."""
         eval_loop._daily_buy_limit = 1
         eval_loop._daily_buy_count = 1
         from datetime import date as _date
+
         eval_loop._daily_buy_date = _date.today().isoformat()
 
         # Set strategy to return 0.95 confidence
         strategy = mock_registry.get_enabled.return_value[0]
         strategy.analyze.return_value = Signal(
-            signal_type=SignalType.BUY, confidence=0.95,
-            strategy_name="trend_following", reason="strong signal",
+            signal_type=SignalType.BUY,
+            confidence=0.95,
+            strategy_name="trend_following",
+            reason="strong signal",
         )
         await eval_loop.evaluate_symbol("AAPL")
         mock_adapter.create_buy_order.assert_called_once()
 
-    async def test_escalating_confidence_at_80pct_usage(self, eval_loop, mock_adapter, mock_registry):
+    async def test_escalating_confidence_at_80pct_usage(
+        self, eval_loop, mock_adapter, mock_registry
+    ):
         """At 80%+ usage, need confidence >= 0.75."""
         eval_loop._daily_buy_limit = 5
         eval_loop._daily_buy_count = 4  # 80% used
         from datetime import date as _date
+
         eval_loop._daily_buy_date = _date.today().isoformat()
 
         # Signal with 0.60 confidence — should be blocked (need 0.75)
         strategy = mock_registry.get_enabled.return_value[0]
         strategy.analyze.return_value = Signal(
-            signal_type=SignalType.BUY, confidence=0.60,
-            strategy_name="trend_following", reason="moderate",
+            signal_type=SignalType.BUY,
+            confidence=0.60,
+            strategy_name="trend_following",
+            reason="moderate",
         )
         await eval_loop.evaluate_symbol("AAPL")
         mock_adapter.create_buy_order.assert_not_called()
@@ -222,25 +272,29 @@ class TestRiskAgentIntegration:
     @pytest.fixture
     def risk_agent_approved(self):
         agent = AsyncMock()
-        agent.assess_pre_trade = AsyncMock(return_value={
-            "approved": True,
-            "risk_level": "LOW",
-            "reason": "Acceptable risk",
-            "suggested_size": 5000,
-            "warnings": [],
-        })
+        agent.assess_pre_trade = AsyncMock(
+            return_value={
+                "approved": True,
+                "risk_level": "LOW",
+                "reason": "Acceptable risk",
+                "suggested_size": 5000,
+                "warnings": [],
+            }
+        )
         return agent
 
     @pytest.fixture
     def risk_agent_rejected(self):
         agent = AsyncMock()
-        agent.assess_pre_trade = AsyncMock(return_value={
-            "approved": False,
-            "risk_level": "CRITICAL",
-            "reason": "Over-concentrated in tech sector",
-            "suggested_size": 0,
-            "warnings": ["Sector concentration too high"],
-        })
+        agent.assess_pre_trade = AsyncMock(
+            return_value={
+                "approved": False,
+                "risk_level": "CRITICAL",
+                "reason": "Over-concentrated in tech sector",
+                "suggested_size": 0,
+                "warnings": ["Sector concentration too high"],
+            }
+        )
         return agent
 
     @pytest.fixture
@@ -264,7 +318,10 @@ class TestRiskAgentIntegration:
         )
 
     async def test_buy_proceeds_when_risk_approved(
-        self, loop_with_risk, mock_adapter, risk_agent_approved,
+        self,
+        loop_with_risk,
+        mock_adapter,
+        risk_agent_approved,
     ):
         await loop_with_risk.evaluate_symbol("AAPL")
         # Risk agent was called
@@ -273,7 +330,11 @@ class TestRiskAgentIntegration:
         mock_adapter.create_buy_order.assert_called_once()
 
     async def test_buy_blocked_when_risk_rejected(
-        self, mock_adapter, mock_market_data, mock_registry, risk_agent_rejected,
+        self,
+        mock_adapter,
+        mock_market_data,
+        mock_registry,
+        risk_agent_rejected,
     ):
         from data.indicator_service import IndicatorService
         from strategies.combiner import SignalCombiner
@@ -298,7 +359,10 @@ class TestRiskAgentIntegration:
         mock_adapter.create_buy_order.assert_not_called()
 
     async def test_buy_proceeds_when_risk_agent_errors(
-        self, mock_adapter, mock_market_data, mock_registry,
+        self,
+        mock_adapter,
+        mock_market_data,
+        mock_registry,
     ):
         """If risk agent throws an exception, the trade should still proceed."""
         from data.indicator_service import IndicatorService
@@ -335,7 +399,10 @@ class TestHeldPositionEvaluation:
     """Test that held positions are always evaluated even if not in watchlist."""
 
     async def test_held_position_evaluated_when_not_in_watchlist(
-        self, mock_adapter, mock_market_data, mock_registry,
+        self,
+        mock_adapter,
+        mock_market_data,
+        mock_registry,
     ):
         """A held position not in watchlist should still get strategy SELL signals."""
         from data.indicator_service import IndicatorService
@@ -363,10 +430,18 @@ class TestHeldPositionEvaluation:
         # Strategy returns SELL for HELD_STOCK
         strategy = mock_registry.get_enabled.return_value[0]
         signal_map = {
-            "AAPL": Signal(signal_type=SignalType.HOLD, confidence=0.3,
-                           strategy_name="trend_following", reason="hold"),
-            "HELD_STOCK": Signal(signal_type=SignalType.SELL, confidence=0.8,
-                                 strategy_name="trend_following", reason="sell"),
+            "AAPL": Signal(
+                signal_type=SignalType.HOLD,
+                confidence=0.3,
+                strategy_name="trend_following",
+                reason="hold",
+            ),
+            "HELD_STOCK": Signal(
+                signal_type=SignalType.SELL,
+                confidence=0.8,
+                strategy_name="trend_following",
+                reason="sell",
+            ),
         }
 
         async def dynamic_analyze(df, symbol):
@@ -377,21 +452,33 @@ class TestHeldPositionEvaluation:
         mock_market_data.get_positions.return_value = [
             Position(symbol="HELD_STOCK", exchange="NASD", quantity=10, avg_price=100.0),
         ]
-        mock_adapter.create_sell_order = AsyncMock(return_value=OrderResult(
-            order_id="O2", symbol="HELD_STOCK", side="SELL",
-            order_type="limit", quantity=10, price=105.0,
-            status="filled", filled_price=105.0,
-        ))
+        mock_adapter.create_sell_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="O2",
+                symbol="HELD_STOCK",
+                side="SELL",
+                order_type="limit",
+                quantity=10,
+                price=105.0,
+                status="filled",
+                filled_price=105.0,
+            )
+        )
 
         await loop._evaluate_all()
 
         # HELD_STOCK should get a sell order even though not in watchlist
         mock_adapter.create_sell_order.assert_called_once()
         call_kwargs = mock_adapter.create_sell_order.call_args
-        assert call_kwargs.kwargs.get("symbol") == "HELD_STOCK" or call_kwargs.args[0] == "HELD_STOCK"
+        assert (
+            call_kwargs.kwargs.get("symbol") == "HELD_STOCK" or call_kwargs.args[0] == "HELD_STOCK"
+        )
 
     async def test_no_duplicate_evaluation_when_in_both(
-        self, mock_adapter, mock_market_data, mock_registry,
+        self,
+        mock_adapter,
+        mock_market_data,
+        mock_registry,
     ):
         """Symbol in both watchlist and held positions should be evaluated only once."""
         from data.indicator_service import IndicatorService
@@ -448,7 +535,9 @@ class TestConfidenceRankedBuy:
         ), registry
 
     async def test_buys_execute_highest_confidence_first(
-        self, multi_signal_loop, mock_adapter,
+        self,
+        multi_signal_loop,
+        mock_adapter,
     ):
         """BUY signals should execute in descending confidence order."""
         loop, registry = multi_signal_loop
@@ -467,12 +556,14 @@ class TestConfidenceRankedBuy:
         def make_strategy(symbol):
             s = AsyncMock()
             s.name = "trend_following"
-            s.analyze = AsyncMock(return_value=Signal(
-                signal_type=SignalType.BUY,
-                confidence=confidence_map[symbol],
-                strategy_name="trend_following",
-                reason="test",
-            ))
+            s.analyze = AsyncMock(
+                return_value=Signal(
+                    signal_type=SignalType.BUY,
+                    confidence=confidence_map[symbol],
+                    strategy_name="trend_following",
+                    reason="test",
+                )
+            )
             return s
 
         # Registry returns strategy per symbol
@@ -502,7 +593,9 @@ class TestConfidenceRankedBuy:
         assert call_order[2] == "LOW_CONF"
 
     async def test_sells_execute_before_buys(
-        self, mock_adapter, mock_market_data,
+        self,
+        mock_adapter,
+        mock_market_data,
     ):
         """SELL signals should execute immediately, not wait for ranking."""
         from data.indicator_service import IndicatorService
@@ -528,20 +621,31 @@ class TestConfidenceRankedBuy:
         mock_market_data.get_positions.return_value = [
             Position(symbol="SELL_STOCK", exchange="NASD", quantity=10, avg_price=100.0),
         ]
-        mock_adapter.create_sell_order = AsyncMock(return_value=OrderResult(
-            order_id="O2", symbol="SELL_STOCK", side="SELL",
-            order_type="limit", quantity=10, price=105.0,
-            status="filled", filled_price=105.0,
-        ))
+        mock_adapter.create_sell_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="O2",
+                symbol="SELL_STOCK",
+                side="SELL",
+                order_type="limit",
+                quantity=10,
+                price=105.0,
+                status="filled",
+                filled_price=105.0,
+            )
+        )
 
         signal_map = {
             "BUY_STOCK": Signal(
-                signal_type=SignalType.BUY, confidence=0.8,
-                strategy_name="trend_following", reason="buy",
+                signal_type=SignalType.BUY,
+                confidence=0.8,
+                strategy_name="trend_following",
+                reason="buy",
             ),
             "SELL_STOCK": Signal(
-                signal_type=SignalType.SELL, confidence=0.7,
-                strategy_name="trend_following", reason="sell",
+                signal_type=SignalType.SELL,
+                confidence=0.7,
+                strategy_name="trend_following",
+                reason="sell",
             ),
         }
 
@@ -592,21 +696,32 @@ class TestKRMarketExchange:
         call_kwargs = mock_adapter.create_buy_order.call_args
         assert call_kwargs.kwargs.get("exchange") == "KRX"
 
-    async def test_kr_sell_uses_krx_exchange(self, kr_eval_loop, mock_adapter, mock_market_data, mock_registry):
+    async def test_kr_sell_uses_krx_exchange(
+        self, kr_eval_loop, mock_adapter, mock_market_data, mock_registry
+    ):
         """KR sell should also use KRX exchange."""
         strategy = mock_registry.get_enabled.return_value[0]
         strategy.analyze.return_value = Signal(
-            signal_type=SignalType.SELL, confidence=0.8,
-            strategy_name="trend_following", reason="sell",
+            signal_type=SignalType.SELL,
+            confidence=0.8,
+            strategy_name="trend_following",
+            reason="sell",
         )
         mock_market_data.get_positions.return_value = [
             Position(symbol="005930", exchange="KRX", quantity=10, avg_price=70000.0),
         ]
-        mock_adapter.create_sell_order = AsyncMock(return_value=OrderResult(
-            order_id="O2", symbol="005930", side="SELL",
-            order_type="limit", quantity=10, price=72000.0,
-            status="filled", filled_price=72000.0,
-        ))
+        mock_adapter.create_sell_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="O2",
+                symbol="005930",
+                side="SELL",
+                order_type="limit",
+                quantity=10,
+                price=72000.0,
+                status="filled",
+                filled_price=72000.0,
+            )
+        )
         await kr_eval_loop.evaluate_symbol("005930")
         mock_adapter.create_sell_order.assert_called_once()
         call_kwargs = mock_adapter.create_sell_order.call_args
@@ -675,21 +790,33 @@ class TestProtectiveSells:
         assert loop_with_tracker._news_sentiment["TSLA"] == 0.5
 
     async def test_regime_sell_losing_positions(
-        self, loop_with_tracker, mock_market_data, mock_adapter,
+        self,
+        loop_with_tracker,
+        mock_market_data,
+        mock_adapter,
     ):
         """Regime downtrend should sell losing positions."""
         # AAPL is losing, TSLA is winning
         mock_market_data.get_positions.return_value = [
-            Position(symbol="AAPL", exchange="NASD", quantity=10,
-                     avg_price=150.0, current_price=140.0),
-            Position(symbol="TSLA", exchange="NASD", quantity=5,
-                     avg_price=200.0, current_price=220.0),
+            Position(
+                symbol="AAPL", exchange="NASD", quantity=10, avg_price=150.0, current_price=140.0
+            ),
+            Position(
+                symbol="TSLA", exchange="NASD", quantity=5, avg_price=200.0, current_price=220.0
+            ),
         ]
-        mock_adapter.create_sell_order = AsyncMock(return_value=OrderResult(
-            order_id="O1", symbol="AAPL", side="SELL",
-            order_type="limit", quantity=10, price=140.0,
-            status="filled", filled_price=140.0,
-        ))
+        mock_adapter.create_sell_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="O1",
+                symbol="AAPL",
+                side="SELL",
+                order_type="limit",
+                quantity=10,
+                price=140.0,
+                status="filled",
+                filled_price=140.0,
+            )
+        )
 
         # Transition uptrend -> downtrend
         loop_with_tracker.set_market_state("downtrend")
@@ -702,12 +829,16 @@ class TestProtectiveSells:
         assert call_kwargs["quantity"] == 10
 
     async def test_regime_sell_skips_winning_positions(
-        self, loop_with_tracker, mock_market_data, mock_adapter,
+        self,
+        loop_with_tracker,
+        mock_market_data,
+        mock_adapter,
     ):
         """Regime sell should keep winning positions."""
         mock_market_data.get_positions.return_value = [
-            Position(symbol="AAPL", exchange="NASD", quantity=10,
-                     avg_price=150.0, current_price=170.0),
+            Position(
+                symbol="AAPL", exchange="NASD", quantity=10, avg_price=150.0, current_price=170.0
+            ),
         ]
 
         loop_with_tracker.set_market_state("downtrend")
@@ -717,12 +848,16 @@ class TestProtectiveSells:
         mock_adapter.create_sell_order.assert_not_called()
 
     async def test_no_regime_sell_in_same_state(
-        self, loop_with_tracker, mock_market_data, mock_adapter,
+        self,
+        loop_with_tracker,
+        mock_market_data,
+        mock_adapter,
     ):
         """No regime sell when market hasn't worsened."""
         mock_market_data.get_positions.return_value = [
-            Position(symbol="AAPL", exchange="NASD", quantity=10,
-                     avg_price=150.0, current_price=140.0),
+            Position(
+                symbol="AAPL", exchange="NASD", quantity=10, avg_price=150.0, current_price=140.0
+            ),
         ]
 
         # Already in downtrend, no transition
@@ -733,18 +868,29 @@ class TestProtectiveSells:
         mock_adapter.create_sell_order.assert_not_called()
 
     async def test_regime_sell_on_sideways_to_downtrend(
-        self, loop_with_tracker, mock_market_data, mock_adapter,
+        self,
+        loop_with_tracker,
+        mock_market_data,
+        mock_adapter,
     ):
         """Sideways→downtrend transition should also trigger regime sell."""
         mock_market_data.get_positions.return_value = [
-            Position(symbol="AAPL", exchange="NASD", quantity=10,
-                     avg_price=150.0, current_price=140.0),
+            Position(
+                symbol="AAPL", exchange="NASD", quantity=10, avg_price=150.0, current_price=140.0
+            ),
         ]
-        mock_adapter.create_sell_order = AsyncMock(return_value=OrderResult(
-            order_id="O1", symbol="AAPL", side="SELL",
-            order_type="limit", quantity=10, price=140.0,
-            status="filled", filled_price=140.0,
-        ))
+        mock_adapter.create_sell_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="O1",
+                symbol="AAPL",
+                side="SELL",
+                order_type="limit",
+                quantity=10,
+                price=140.0,
+                status="filled",
+                filled_price=140.0,
+            )
+        )
 
         # Transition sideways -> downtrend
         loop_with_tracker._prev_market_state = "sideways"
@@ -754,18 +900,29 @@ class TestProtectiveSells:
         mock_adapter.create_sell_order.assert_called_once()
 
     async def test_sentiment_sell_on_negative(
-        self, loop_with_tracker, mock_market_data, mock_adapter,
+        self,
+        loop_with_tracker,
+        mock_market_data,
+        mock_adapter,
     ):
         """Strongly negative sentiment should trigger sell."""
         mock_market_data.get_positions.return_value = [
-            Position(symbol="AAPL", exchange="NASD", quantity=10,
-                     avg_price=150.0, current_price=160.0),
+            Position(
+                symbol="AAPL", exchange="NASD", quantity=10, avg_price=150.0, current_price=160.0
+            ),
         ]
-        mock_adapter.create_sell_order = AsyncMock(return_value=OrderResult(
-            order_id="O1", symbol="AAPL", side="SELL",
-            order_type="limit", quantity=10, price=160.0,
-            status="filled", filled_price=160.0,
-        ))
+        mock_adapter.create_sell_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="O1",
+                symbol="AAPL",
+                side="SELL",
+                order_type="limit",
+                quantity=10,
+                price=160.0,
+                status="filled",
+                filled_price=160.0,
+            )
+        )
 
         loop_with_tracker.update_news_sentiment({"AAPL": -0.7})
         await loop_with_tracker._check_protective_sells({"AAPL"})
@@ -775,12 +932,16 @@ class TestProtectiveSells:
         assert call_kwargs["symbol"] == "AAPL"
 
     async def test_sentiment_no_sell_on_mild_negative(
-        self, loop_with_tracker, mock_market_data, mock_adapter,
+        self,
+        loop_with_tracker,
+        mock_market_data,
+        mock_adapter,
     ):
         """Mildly negative sentiment (-0.3) should NOT trigger sell."""
         mock_market_data.get_positions.return_value = [
-            Position(symbol="AAPL", exchange="NASD", quantity=10,
-                     avg_price=150.0, current_price=160.0),
+            Position(
+                symbol="AAPL", exchange="NASD", quantity=10, avg_price=150.0, current_price=160.0
+            ),
         ]
 
         loop_with_tracker.update_news_sentiment({"AAPL": -0.3})
@@ -789,18 +950,29 @@ class TestProtectiveSells:
         mock_adapter.create_sell_order.assert_not_called()
 
     async def test_sentiment_cleared_after_check(
-        self, loop_with_tracker, mock_market_data, mock_adapter,
+        self,
+        loop_with_tracker,
+        mock_market_data,
+        mock_adapter,
     ):
         """Processed sentiments should be cleared to avoid re-selling."""
         mock_market_data.get_positions.return_value = [
-            Position(symbol="AAPL", exchange="NASD", quantity=10,
-                     avg_price=150.0, current_price=160.0),
+            Position(
+                symbol="AAPL", exchange="NASD", quantity=10, avg_price=150.0, current_price=160.0
+            ),
         ]
-        mock_adapter.create_sell_order = AsyncMock(return_value=OrderResult(
-            order_id="O1", symbol="AAPL", side="SELL",
-            order_type="limit", quantity=10, price=160.0,
-            status="filled", filled_price=160.0,
-        ))
+        mock_adapter.create_sell_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="O1",
+                symbol="AAPL",
+                side="SELL",
+                order_type="limit",
+                quantity=10,
+                price=160.0,
+                status="filled",
+                filled_price=160.0,
+            )
+        )
 
         loop_with_tracker.update_news_sentiment({"AAPL": -0.8})
         await loop_with_tracker._check_protective_sells({"AAPL"})
@@ -809,7 +981,10 @@ class TestProtectiveSells:
         assert "AAPL" not in loop_with_tracker._news_sentiment
 
     async def test_kr_market_uses_krx_for_protective_sell(
-        self, mock_adapter, mock_market_data, mock_registry,
+        self,
+        mock_adapter,
+        mock_market_data,
+        mock_registry,
     ):
         """KR market protective sell should use KRX exchange."""
         from data.indicator_service import IndicatorService
@@ -836,14 +1011,26 @@ class TestProtectiveSells:
         )
 
         mock_market_data.get_positions.return_value = [
-            Position(symbol="005930", exchange="KRX", quantity=10,
-                     avg_price=70000.0, current_price=65000.0),
+            Position(
+                symbol="005930",
+                exchange="KRX",
+                quantity=10,
+                avg_price=70000.0,
+                current_price=65000.0,
+            ),
         ]
-        mock_adapter.create_sell_order = AsyncMock(return_value=OrderResult(
-            order_id="O1", symbol="005930", side="SELL",
-            order_type="limit", quantity=10, price=65000.0,
-            status="filled", filled_price=65000.0,
-        ))
+        mock_adapter.create_sell_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="O1",
+                symbol="005930",
+                side="SELL",
+                order_type="limit",
+                quantity=10,
+                price=65000.0,
+                status="filled",
+                filled_price=65000.0,
+            )
+        )
 
         loop.set_market_state("downtrend")
         await loop._check_protective_sells({"005930"})
@@ -853,18 +1040,29 @@ class TestProtectiveSells:
         assert call_kwargs["exchange"] == "KRX"
 
     async def test_position_untracked_after_protective_sell(
-        self, loop_with_tracker, mock_market_data, mock_adapter,
+        self,
+        loop_with_tracker,
+        mock_market_data,
+        mock_adapter,
     ):
         """Position should be untracked after successful protective sell."""
         mock_market_data.get_positions.return_value = [
-            Position(symbol="AAPL", exchange="NASD", quantity=10,
-                     avg_price=150.0, current_price=160.0),
+            Position(
+                symbol="AAPL", exchange="NASD", quantity=10, avg_price=150.0, current_price=160.0
+            ),
         ]
-        mock_adapter.create_sell_order = AsyncMock(return_value=OrderResult(
-            order_id="O1", symbol="AAPL", side="SELL",
-            order_type="limit", quantity=10, price=160.0,
-            status="filled", filled_price=160.0,
-        ))
+        mock_adapter.create_sell_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="O1",
+                symbol="AAPL",
+                side="SELL",
+                order_type="limit",
+                quantity=10,
+                price=160.0,
+                status="filled",
+                filled_price=160.0,
+            )
+        )
 
         loop_with_tracker.update_news_sentiment({"AAPL": -0.8})
         await loop_with_tracker._check_protective_sells({"AAPL"})
@@ -872,12 +1070,16 @@ class TestProtectiveSells:
         loop_with_tracker._position_tracker.untrack.assert_called_with("AAPL")
 
     async def test_no_protective_sell_when_no_triggers(
-        self, loop_with_tracker, mock_market_data, mock_adapter,
+        self,
+        loop_with_tracker,
+        mock_market_data,
+        mock_adapter,
     ):
         """No sell when regime is stable and no negative sentiment."""
         mock_market_data.get_positions.return_value = [
-            Position(symbol="AAPL", exchange="NASD", quantity=10,
-                     avg_price=150.0, current_price=140.0),
+            Position(
+                symbol="AAPL", exchange="NASD", quantity=10, avg_price=150.0, current_price=140.0
+            ),
         ]
 
         # No regime change, no sentiment
@@ -885,3 +1087,385 @@ class TestProtectiveSells:
 
         # get_positions should not even be called (early return)
         mock_market_data.get_positions.assert_not_called()
+
+
+class TestDuplicateBuyPrevention:
+    """Test defense-in-depth: exchange position check prevents duplicate buys.
+
+    STOCK-4: supertrend 전략이 같은 종목을 17회 연속 매수한 버그 방지.
+    position_tracker가 비어있어도 exchange positions 체크로 중복 매수를 차단.
+    """
+
+    @pytest.fixture
+    def loop_no_tracker(self, mock_adapter, mock_market_data, mock_registry):
+        """Evaluation loop WITHOUT position tracker (simulates post-restart state)."""
+        from data.indicator_service import IndicatorService
+        from strategies.combiner import SignalCombiner
+
+        risk = RiskManager()
+        order_mgr = OrderManager(adapter=mock_adapter, risk_manager=risk)
+
+        return EvaluationLoop(
+            adapter=mock_adapter,
+            market_data=mock_market_data,
+            indicator_svc=IndicatorService(),
+            registry=mock_registry,
+            combiner=SignalCombiner(),
+            order_manager=order_mgr,
+            risk_manager=risk,
+            watchlist=["AAPL"],
+            position_tracker=None,  # Simulates empty/missing tracker
+        )
+
+    @pytest.fixture
+    def loop_empty_tracker(self, mock_adapter, mock_market_data, mock_registry):
+        """Evaluation loop with EMPTY position tracker (post-restart, before restore)."""
+        from data.indicator_service import IndicatorService
+        from strategies.combiner import SignalCombiner
+        from engine.position_tracker import PositionTracker
+
+        risk = RiskManager()
+        order_mgr = OrderManager(adapter=mock_adapter, risk_manager=risk)
+        tracker = MagicMock(spec=PositionTracker)
+        tracker.tracked_symbols = []  # Empty — positions not yet restored
+
+        return EvaluationLoop(
+            adapter=mock_adapter,
+            market_data=mock_market_data,
+            indicator_svc=IndicatorService(),
+            registry=mock_registry,
+            combiner=SignalCombiner(),
+            order_manager=order_mgr,
+            risk_manager=risk,
+            watchlist=["AAPL"],
+            position_tracker=tracker,
+        )
+
+    async def test_buy_blocked_when_already_held_no_tracker(
+        self,
+        loop_no_tracker,
+        mock_adapter,
+        mock_market_data,
+    ):
+        """BUY should be blocked if exchange shows existing position, even without tracker."""
+        # Exchange shows we already hold AAPL
+        mock_market_data.get_positions.return_value = [
+            Position(symbol="AAPL", exchange="NASD", quantity=10, avg_price=140.0),
+        ]
+
+        await loop_no_tracker.evaluate_symbol("AAPL")
+        mock_adapter.create_buy_order.assert_not_called()
+
+    async def test_buy_blocked_when_already_held_empty_tracker(
+        self,
+        loop_empty_tracker,
+        mock_adapter,
+        mock_market_data,
+    ):
+        """BUY should be blocked even when position tracker is empty (post-restart)."""
+        mock_market_data.get_positions.return_value = [
+            Position(symbol="AAPL", exchange="NASD", quantity=10, avg_price=140.0),
+        ]
+
+        await loop_empty_tracker.evaluate_symbol("AAPL")
+        mock_adapter.create_buy_order.assert_not_called()
+
+    async def test_buy_allowed_when_not_held(
+        self,
+        loop_no_tracker,
+        mock_adapter,
+        mock_market_data,
+    ):
+        """BUY should proceed when exchange confirms no existing position."""
+        mock_market_data.get_positions.return_value = []  # No positions
+
+        await loop_no_tracker.evaluate_symbol("AAPL")
+        mock_adapter.create_buy_order.assert_called_once()
+
+    async def test_buy_allowed_for_different_symbol(
+        self,
+        loop_no_tracker,
+        mock_adapter,
+        mock_market_data,
+    ):
+        """BUY should proceed for a symbol not in existing positions."""
+        mock_market_data.get_positions.return_value = [
+            Position(symbol="TSLA", exchange="NASD", quantity=5, avg_price=200.0),
+        ]
+
+        await loop_no_tracker.evaluate_symbol("AAPL")
+        mock_adapter.create_buy_order.assert_called_once()
+
+    async def test_repeated_buy_blocked_across_evaluations(
+        self,
+        mock_adapter,
+        mock_market_data,
+        mock_registry,
+    ):
+        """Same symbol should not be bought again on subsequent evaluation cycles.
+
+        Simulates the STOCK-4 scenario: supertrend produces BUY signal
+        every evaluation cycle, but second buy should be blocked by
+        exchange position check.
+        """
+        from data.indicator_service import IndicatorService
+        from strategies.combiner import SignalCombiner
+        from engine.position_tracker import PositionTracker
+
+        risk = RiskManager()
+        order_mgr = OrderManager(adapter=mock_adapter, risk_manager=risk)
+        tracker = MagicMock(spec=PositionTracker)
+        tracker.tracked_symbols = []  # Empty tracker
+
+        loop = EvaluationLoop(
+            adapter=mock_adapter,
+            market_data=mock_market_data,
+            indicator_svc=IndicatorService(),
+            registry=mock_registry,
+            combiner=SignalCombiner(),
+            order_manager=order_mgr,
+            risk_manager=risk,
+            watchlist=["AAPL"],
+            position_tracker=tracker,
+        )
+
+        # First evaluation: no positions, buy goes through
+        mock_market_data.get_positions.return_value = []
+        await loop.evaluate_symbol("AAPL")
+        assert mock_adapter.create_buy_order.call_count == 1
+
+        # Second evaluation: exchange now shows position
+        mock_market_data.get_positions.return_value = [
+            Position(symbol="AAPL", exchange="NASD", quantity=10, avg_price=150.0),
+        ]
+        # Clear the _last_signal to simulate what happens if dedup is bypassed
+        loop._last_signal.clear()
+
+        await loop.evaluate_symbol("AAPL")
+        # Should still be 1 — second buy blocked by exchange position check
+        assert mock_adapter.create_buy_order.call_count == 1
+
+    async def test_kr_duplicate_buy_blocked(
+        self,
+        mock_adapter,
+        mock_market_data,
+        mock_registry,
+    ):
+        """KR market duplicate buy should also be blocked by exchange position check."""
+        from data.indicator_service import IndicatorService
+        from strategies.combiner import SignalCombiner
+
+        risk = RiskManager()
+        order_mgr = OrderManager(adapter=mock_adapter, risk_manager=risk, market="KR")
+
+        loop = EvaluationLoop(
+            adapter=mock_adapter,
+            market_data=mock_market_data,
+            indicator_svc=IndicatorService(),
+            registry=mock_registry,
+            combiner=SignalCombiner(),
+            order_manager=order_mgr,
+            risk_manager=risk,
+            watchlist=["263750"],
+            market="KR",
+            position_tracker=None,
+        )
+
+        # Exchange shows we already hold 263750 (펄어비스)
+        mock_market_data.get_positions.return_value = [
+            Position(symbol="263750", exchange="KRX", quantity=10, avg_price=61400.0),
+        ]
+
+        await loop.evaluate_symbol("263750")
+        mock_adapter.create_buy_order.assert_not_called()
+
+
+class TestExchangePositionHeldEvaluation:
+    """Test that exchange positions are included in eval_symbols for SELL evaluation.
+
+    STOCK-4: when position_tracker is empty, held positions still need
+    strategy-based SELL evaluation via exchange position fallback.
+    """
+
+    async def test_exchange_held_position_evaluated_for_sell(
+        self,
+        mock_adapter,
+        mock_market_data,
+        mock_registry,
+    ):
+        """Held position from exchange should get SELL evaluation even without tracker."""
+        from data.indicator_service import IndicatorService
+        from strategies.combiner import SignalCombiner
+
+        risk = RiskManager()
+        order_mgr = OrderManager(adapter=mock_adapter, risk_manager=risk)
+
+        loop = EvaluationLoop(
+            adapter=mock_adapter,
+            market_data=mock_market_data,
+            indicator_svc=IndicatorService(),
+            registry=mock_registry,
+            combiner=SignalCombiner(),
+            order_manager=order_mgr,
+            risk_manager=risk,
+            watchlist=["TSLA"],  # AAPL not in watchlist
+            position_tracker=None,  # No tracker
+        )
+
+        # Exchange shows we hold AAPL
+        mock_market_data.get_positions.return_value = [
+            Position(symbol="AAPL", exchange="NASD", quantity=10, avg_price=140.0),
+        ]
+
+        # Strategy returns SELL for AAPL
+        strategy = mock_registry.get_enabled.return_value[0]
+        signal_map = {
+            "AAPL": Signal(
+                signal_type=SignalType.SELL,
+                confidence=0.8,
+                strategy_name="trend_following",
+                reason="sell",
+            ),
+            "TSLA": Signal(
+                signal_type=SignalType.HOLD,
+                confidence=0.3,
+                strategy_name="trend_following",
+                reason="hold",
+            ),
+        }
+
+        async def dynamic_analyze(df, symbol):
+            return signal_map.get(symbol, signal_map["TSLA"])
+
+        strategy.analyze = AsyncMock(side_effect=dynamic_analyze)
+
+        mock_adapter.create_sell_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="O2",
+                symbol="AAPL",
+                side="SELL",
+                order_type="limit",
+                quantity=10,
+                price=150.0,
+                status="filled",
+                filled_price=150.0,
+            )
+        )
+
+        await loop._evaluate_all()
+
+        # AAPL should have been evaluated and sell placed
+        mock_adapter.create_sell_order.assert_called_once()
+        call_kwargs = mock_adapter.create_sell_order.call_args
+        assert call_kwargs.kwargs.get("symbol") == "AAPL" or (
+            call_kwargs.args and call_kwargs.args[0] == "AAPL"
+        )
+
+    async def test_exchange_positions_merged_with_tracker(
+        self,
+        mock_adapter,
+        mock_market_data,
+        mock_registry,
+    ):
+        """Exchange positions should be merged with tracker positions (no duplicates)."""
+        from data.indicator_service import IndicatorService
+        from strategies.combiner import SignalCombiner
+        from engine.position_tracker import PositionTracker
+
+        risk = RiskManager()
+        order_mgr = OrderManager(adapter=mock_adapter, risk_manager=risk)
+        tracker = MagicMock(spec=PositionTracker)
+        tracker.tracked_symbols = ["AAPL"]  # Tracker has AAPL
+
+        loop = EvaluationLoop(
+            adapter=mock_adapter,
+            market_data=mock_market_data,
+            indicator_svc=IndicatorService(),
+            registry=mock_registry,
+            combiner=SignalCombiner(),
+            order_manager=order_mgr,
+            risk_manager=risk,
+            watchlist=["TSLA"],
+            position_tracker=tracker,
+        )
+
+        # Exchange has AAPL + GOOG
+        mock_market_data.get_positions.return_value = [
+            Position(symbol="AAPL", exchange="NASD", quantity=10, avg_price=140.0),
+            Position(symbol="GOOG", exchange="NASD", quantity=5, avg_price=170.0),
+        ]
+
+        # Track which symbols get evaluated
+        strategy = mock_registry.get_enabled.return_value[0]
+        evaluated = []
+
+        async def track_analyze(df, symbol):
+            evaluated.append(symbol)
+            return Signal(
+                signal_type=SignalType.HOLD,
+                confidence=0.3,
+                strategy_name="trend_following",
+                reason="hold",
+            )
+
+        strategy.analyze = AsyncMock(side_effect=track_analyze)
+
+        await loop._evaluate_all()
+
+        # All three should be evaluated: TSLA (watchlist), AAPL (tracker+exchange), GOOG (exchange)
+        assert "TSLA" in evaluated
+        assert "AAPL" in evaluated
+        assert "GOOG" in evaluated
+        # AAPL should appear only once (deduped by dict.fromkeys)
+        assert evaluated.count("AAPL") == 1
+
+    async def test_exchange_positions_fallback_on_error(
+        self,
+        mock_adapter,
+        mock_market_data,
+        mock_registry,
+    ):
+        """If get_positions fails, evaluation should still proceed with tracker."""
+        from data.indicator_service import IndicatorService
+        from strategies.combiner import SignalCombiner
+        from engine.position_tracker import PositionTracker
+
+        risk = RiskManager()
+        order_mgr = OrderManager(adapter=mock_adapter, risk_manager=risk)
+        tracker = MagicMock(spec=PositionTracker)
+        tracker.tracked_symbols = ["AAPL"]
+
+        loop = EvaluationLoop(
+            adapter=mock_adapter,
+            market_data=mock_market_data,
+            indicator_svc=IndicatorService(),
+            registry=mock_registry,
+            combiner=SignalCombiner(),
+            order_manager=order_mgr,
+            risk_manager=risk,
+            watchlist=["TSLA"],
+            position_tracker=tracker,
+        )
+
+        # get_positions throws an error
+        mock_market_data.get_positions.side_effect = RuntimeError("API timeout")
+
+        strategy = mock_registry.get_enabled.return_value[0]
+        evaluated = []
+
+        async def track_analyze(df, symbol):
+            evaluated.append(symbol)
+            return Signal(
+                signal_type=SignalType.HOLD,
+                confidence=0.3,
+                strategy_name="trend_following",
+                reason="hold",
+            )
+
+        strategy.analyze = AsyncMock(side_effect=track_analyze)
+
+        # Should not crash, just proceed with tracker-only held set
+        await loop._evaluate_all()
+
+        assert "TSLA" in evaluated
+        assert "AAPL" in evaluated

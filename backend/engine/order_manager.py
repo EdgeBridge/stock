@@ -94,6 +94,21 @@ class OrderManager:
             logger.info("Buy skipped for %s: pending order already exists", symbol)
             return None
 
+        # Defense-in-depth: check exchange positions to prevent buying a
+        # symbol we already hold.  This catches cases where in-memory state
+        # (position tracker, signal dedup) was lost after a restart.
+        if self._market_data:
+            try:
+                exchange_positions = await self._market_data.get_positions()
+                if any(p.symbol == symbol and p.quantity > 0 for p in exchange_positions):
+                    logger.info(
+                        "Buy skipped for %s: already held (exchange positions)",
+                        symbol,
+                    )
+                    return None
+            except Exception:
+                pass  # Proceed if position check fails — other layers provide safety
+
         if sizing_override is not None:
             sizing = sizing_override
         else:
