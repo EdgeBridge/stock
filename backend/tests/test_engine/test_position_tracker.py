@@ -436,6 +436,114 @@ async def test_restore_excludes_paper_orders(adapter, risk, order_mgr):
     await engine.dispose()
 
 
+# ── Exchange field propagation (STOCK-5) ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_execute_sell_passes_exchange_kr(adapter, risk, order_mgr):
+    """KR position tracker passes exchange='KRX' to place_sell on SL/TP."""
+    adapter.fetch_positions = AsyncMock(
+        return_value=[
+            Position(
+                symbol="005930",
+                exchange="KRX",
+                quantity=10,
+                avg_price=70000.0,
+                current_price=63000.0,  # -10% < -8% SL
+            ),
+        ]
+    )
+    from exchange.base import OrderResult
+
+    adapter.create_sell_order = AsyncMock(
+        return_value=OrderResult(
+            order_id="sell_kr1",
+            symbol="005930",
+            side="SELL",
+            order_type="market",
+            quantity=10,
+            status="filled",
+            filled_price=63000.0,
+        )
+    )
+
+    tracker = PositionTracker(adapter, risk, order_mgr, market="KR")
+    tracker.track("005930", 70000.0, 10)
+
+    triggered = await tracker.check_all()
+    assert len(triggered) == 1
+    assert triggered[0]["reason"] == "stop_loss"
+
+    # Verify place_sell was called with exchange="KRX"
+    sell_call = adapter.create_sell_order.call_args
+    assert sell_call is not None
+    assert sell_call.kwargs.get("exchange") == "KRX" or (
+        len(sell_call.args) > 4 and sell_call.args[4] == "KRX"
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_sell_passes_exchange_us(adapter, risk, order_mgr):
+    """US position tracker passes exchange='NASD' to place_sell on SL/TP."""
+    adapter.fetch_positions = AsyncMock(
+        return_value=[
+            Position(
+                symbol="AAPL",
+                exchange="NASD",
+                quantity=10,
+                avg_price=150.0,
+                current_price=135.0,  # -10% < -8% SL
+            ),
+        ]
+    )
+    from exchange.base import OrderResult
+
+    adapter.create_sell_order = AsyncMock(
+        return_value=OrderResult(
+            order_id="sell_us1",
+            symbol="AAPL",
+            side="SELL",
+            order_type="market",
+            quantity=10,
+            status="filled",
+            filled_price=135.0,
+        )
+    )
+
+    tracker = PositionTracker(adapter, risk, order_mgr, market="US")
+    tracker.track("AAPL", 150.0, 10)
+
+    triggered = await tracker.check_all()
+    assert len(triggered) == 1
+    assert triggered[0]["reason"] == "stop_loss"
+
+    # Verify place_sell was called with exchange="NASD"
+    sell_call = adapter.create_sell_order.call_args
+    assert sell_call is not None
+    assert sell_call.kwargs.get("exchange") == "NASD" or (
+        len(sell_call.args) > 4 and sell_call.args[4] == "NASD"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_exchange_kr(adapter, risk, order_mgr):
+    """_resolve_exchange returns 'KRX' for KR market."""
+    tracker = PositionTracker(adapter, risk, order_mgr, market="KR")
+    assert tracker._resolve_exchange("005930") == "KRX"
+    assert tracker._resolve_exchange("263750") == "KRX"
+
+
+@pytest.mark.asyncio
+async def test_resolve_exchange_us(adapter, risk, order_mgr):
+    """_resolve_exchange returns 'NASD' for US market."""
+    tracker = PositionTracker(adapter, risk, order_mgr, market="US")
+    assert tracker._resolve_exchange("AAPL") == "NASD"
+    assert tracker._resolve_exchange("NVDA") == "NASD"
+
+
+# ── Paper/Live order separation (STOCK-6) ────────────────────────────
+
+
 @pytest.mark.asyncio
 async def test_restore_paper_order_only_uses_unknown(adapter, risk, order_mgr):
     """When only paper orders exist, strategy defaults to 'unknown'."""

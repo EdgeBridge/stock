@@ -156,6 +156,7 @@ async def _persist_trade(trade: dict) -> None:
                 buy_strategy=trade.get("buy_strategy", ""),
                 kis_order_id=trade.get("order_id", ""),
                 pnl=trade.get("pnl"),
+                exchange=trade.get("exchange", "NASD"),
                 market=trade.get("market", "US"),
                 session=trade.get("session", "regular"),
                 is_paper=trade.get("is_paper", False),

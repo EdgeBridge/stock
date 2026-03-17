@@ -233,6 +233,7 @@ class PositionTracker:
             price=price,
             strategy_name=f"{tracked.strategy}:{reason}",
             order_type=order_type,
+            exchange=self._resolve_exchange(tracked.symbol),
             entry_price=tracked.entry_price,
             buy_strategy=tracked.strategy,
             session=session,
