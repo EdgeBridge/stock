@@ -101,6 +101,7 @@ class EvaluationLoop:
         self._daily_buy_date: str = ""
         # Recent signals buffer for frontend display (last N signals)
         from collections import deque
+
         self._recent_signals: deque[dict] = deque(maxlen=200)
 
     @property
@@ -109,17 +110,37 @@ class EvaluationLoop:
 
     # ETF-only symbols that should NOT be traded by the stock combiner.
     # These are managed exclusively by the ETF Engine.
-    _ETF_ONLY = frozenset({
-        # Leveraged / inverse
-        "TQQQ", "SQQQ", "UPRO", "SPXU", "SOXL", "SOXS", "TECL", "TECS",
-        "FAS", "ERX", "LABU", "SARK",
-        # Volatility products (structural decay on long hold)
-        "VXX", "UVXY", "SVXY",
-        # Safe-haven / non-equity
-        "SHY", "TLT", "GLD", "UUP",
-        # Index ETFs (benchmark, not for active trading)
-        "SPY", "QQQ", "SOXX", "ARKK",
-    })
+    _ETF_ONLY = frozenset(
+        {
+            # Leveraged / inverse
+            "TQQQ",
+            "SQQQ",
+            "UPRO",
+            "SPXU",
+            "SOXL",
+            "SOXS",
+            "TECL",
+            "TECS",
+            "FAS",
+            "ERX",
+            "LABU",
+            "SARK",
+            # Volatility products (structural decay on long hold)
+            "VXX",
+            "UVXY",
+            "SVXY",
+            # Safe-haven / non-equity
+            "SHY",
+            "TLT",
+            "GLD",
+            "UUP",
+            # Index ETFs (benchmark, not for active trading)
+            "SPY",
+            "QQQ",
+            "SOXX",
+            "ARKK",
+        }
+    )
 
     def set_other_market_data(self, other_md: MarketDataService) -> None:
         """Set the other market's data service for combined portfolio calculation."""
@@ -201,7 +222,9 @@ class EvaluationLoop:
             if category:
                 logger.debug(
                     "%s [%s] signal=%s conf=%.2f",
-                    symbol, category.value, combined.signal_type.value,
+                    symbol,
+                    category.value,
+                    combined.signal_type.value,
                     combined.confidence,
                 )
 
@@ -223,7 +246,10 @@ class EvaluationLoop:
         self._last_classify_time[symbol] = now
         logger.info(
             "Classified %s as %s (vol=%.2f, mom=%.2f)",
-            symbol, profile.category.value, profile.volatility, profile.momentum_score,
+            symbol,
+            profile.category.value,
+            profile.volatility,
+            profile.momentum_score,
         )
 
     async def _evaluate_all(self) -> None:
@@ -240,21 +266,26 @@ class EvaluationLoop:
 
         # Expire old recovery watch entries
         expired = [
-            s for s, ts in self._recovery_watch.items()
-            if now - ts > self._recovery_watch_secs
+            s for s, ts in self._recovery_watch.items() if now - ts > self._recovery_watch_secs
         ]
         for s in expired:
             del self._recovery_watch[s]
 
         # Merge watchlist + held positions + recovery watch
-        held = (
-            set(self._position_tracker.tracked_symbols)
-            if self._position_tracker else set()
-        )
+        held = set(self._position_tracker.tracked_symbols) if self._position_tracker else set()
+
+        # Defense-in-depth: also include exchange positions so held stocks
+        # get SELL evaluations even when position_tracker is empty (e.g.
+        # after restart before restore_from_exchange completes).
+        try:
+            exchange_positions = await self._market_data.get_positions()
+            exchange_held = {p.symbol for p in exchange_positions if p.quantity > 0}
+            held = held | exchange_held
+        except Exception:
+            pass
+
         recovery = set(self._recovery_watch.keys()) - held
-        eval_symbols = list(dict.fromkeys(
-            self._watchlist + sorted(held) + sorted(recovery)
-        ))
+        eval_symbols = list(dict.fromkeys(self._watchlist + sorted(held) + sorted(recovery)))
 
         # Phase 0: Regime-change and sentiment-based protective sells
         if held and self._position_tracker:
@@ -277,7 +308,8 @@ class EvaluationLoop:
                 for strategy in strategies:
                     try:
                         signal = await asyncio.wait_for(
-                            strategy.analyze(df, symbol), timeout=10.0,
+                            strategy.analyze(df, symbol),
+                            timeout=10.0,
                         )
                         signals.append(signal)
                     except asyncio.TimeoutError:
@@ -293,22 +325,27 @@ class EvaluationLoop:
                 if category:
                     logger.debug(
                         "%s [%s] signal=%s conf=%.2f",
-                        symbol, category.value, combined.signal_type.value,
+                        symbol,
+                        category.value,
+                        combined.signal_type.value,
                         combined.confidence,
                     )
 
                 # Log signal for frontend visibility
                 if combined.signal_type in (SignalType.BUY, SignalType.SELL):
                     from datetime import datetime, timezone
-                    self._recent_signals.append({
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "symbol": symbol,
-                        "signal": combined.signal_type.value,
-                        "confidence": round(combined.confidence, 3),
-                        "strategy": combined.strategy_name,
-                        "market_state": self._market_state,
-                        "market": self._market,
-                    })
+
+                    self._recent_signals.append(
+                        {
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "symbol": symbol,
+                            "signal": combined.signal_type.value,
+                            "confidence": round(combined.confidence, 3),
+                            "strategy": combined.strategy_name,
+                            "market_state": self._market_state,
+                            "market": self._market,
+                        }
+                    )
 
                 # SELLs execute immediately (no competition for cash)
                 if combined.signal_type == SignalType.SELL:
@@ -364,8 +401,10 @@ class EvaluationLoop:
                     sell_reason = f"regime_protect(pnl={pnl_pct:.1%})"
                     logger.warning(
                         "Regime sell %s: %s→%s, PnL=%.1f%%",
-                        symbol, self._prev_market_state,
-                        self._market_state, pnl_pct * 100,
+                        symbol,
+                        self._prev_market_state,
+                        self._market_state,
+                        pnl_pct * 100,
                     )
 
             # 2. Strongly negative news sentiment (threshold -0.70, min hold 4h)
@@ -385,18 +424,21 @@ class EvaluationLoop:
                     sell_reason = f"negative_sentiment({sentiment:.2f})"
                     logger.warning(
                         "Sentiment sell %s: score=%.2f (held %.1fh)",
-                        symbol, sentiment, hold_secs / 3600,
+                        symbol,
+                        sentiment,
+                        hold_secs / 3600,
                     )
                 else:
                     logger.info(
                         "Sentiment sell skipped %s: score=%.2f but held only %.1fh (min 4h)",
-                        symbol, sentiment, hold_secs / 3600,
+                        symbol,
+                        sentiment,
+                        hold_secs / 3600,
                     )
 
             if sell_reason:
                 exchange = (
-                    "KRX" if self._market == "KR"
-                    else self._exchange_resolver.resolve(symbol)
+                    "KRX" if self._market == "KR" else self._exchange_resolver.resolve(symbol)
                 )
                 # Look up original buy strategy from position tracker
                 orig_strategy = ""
@@ -472,9 +514,7 @@ class EvaluationLoop:
             logger.debug("Failed to fetch other market balance for combined total: %s", e)
             return None
 
-    async def _execute_signal(
-        self, signal, symbol: str, df: pd.DataFrame
-    ) -> None:
+    async def _execute_signal(self, signal, symbol: str, df: pd.DataFrame) -> None:
         """Execute a combined signal with Kelly-enhanced position sizing."""
         if signal.signal_type == SignalType.HOLD:
             return
@@ -492,6 +532,7 @@ class EvaluationLoop:
             # As more slots are used, require higher confidence to preserve
             # remaining slots for stronger opportunities later in the day.
             from datetime import date as _date
+
             today = _date.today().isoformat()
             if self._daily_buy_date != today:
                 self._daily_buy_count = 0
@@ -502,12 +543,18 @@ class EvaluationLoop:
                 if signal.confidence < 0.90:
                     logger.info(
                         "Skipping BUY for %s: daily limit reached (%d/%d, conf=%.2f < 0.90)",
-                        symbol, self._daily_buy_count, daily_limit, signal.confidence,
+                        symbol,
+                        self._daily_buy_count,
+                        daily_limit,
+                        signal.confidence,
                     )
                     return
                 logger.info(
                     "High-confidence override for %s (conf=%.2f, %d/%d used)",
-                    symbol, signal.confidence, self._daily_buy_count, daily_limit,
+                    symbol,
+                    signal.confidence,
+                    self._daily_buy_count,
+                    daily_limit,
                 )
             elif daily_limit > 0:
                 # Dynamic confidence bar: higher as budget depletes
@@ -521,7 +568,11 @@ class EvaluationLoop:
                 if min_conf > 0 and signal.confidence < min_conf:
                     logger.info(
                         "Skipping BUY for %s: budget %d/%d, need conf>=%.2f (got %.2f)",
-                        symbol, self._daily_buy_count, daily_limit, min_conf, signal.confidence,
+                        symbol,
+                        self._daily_buy_count,
+                        daily_limit,
+                        min_conf,
+                        signal.confidence,
                     )
                     return
 
@@ -552,6 +603,16 @@ class EvaluationLoop:
 
             balance = await self._market_data.get_balance()
             positions = await self._market_data.get_positions()
+
+            # Defense-in-depth: block buy if already holding via exchange
+            # positions.  This catches duplicates even when position_tracker
+            # is empty (e.g. after restart before restore_from_exchange).
+            if any(p.symbol == symbol and p.quantity > 0 for p in positions):
+                logger.info(
+                    "Skipping BUY for %s: already held (exchange positions)",
+                    symbol,
+                )
+                return
 
             # Combined portfolio value for integrated margin allocation
             combined_pv = await self._get_combined_portfolio_value(balance.total)
@@ -593,11 +654,15 @@ class EvaluationLoop:
                 if macro_mult < 1.0:
                     sizing.quantity = max(1, int(sizing.quantity * macro_mult))
                     sizing.allocation_usd *= macro_mult
-                    logger.info("Macro event sizing: %s reduced to %.0f%%", symbol, macro_mult * 100)
+                    logger.info(
+                        "Macro event sizing: %s reduced to %.0f%%", symbol, macro_mult * 100
+                    )
 
             if not sizing.allowed:
                 logger.info(
-                    "Buy rejected for %s: %s", symbol, sizing.reason,
+                    "Buy rejected for %s: %s",
+                    symbol,
+                    sizing.reason,
                 )
                 return
 
@@ -620,7 +685,8 @@ class EvaluationLoop:
                     if not risk_check.get("approved", True):
                         logger.info(
                             "Buy blocked by risk agent for %s: %s",
-                            symbol, risk_check.get("reason", ""),
+                            symbol,
+                            risk_check.get("reason", ""),
                         )
                         return
                 except Exception as e:
@@ -653,7 +719,9 @@ class EvaluationLoop:
 
                 if atr_val and atr_val > 0:
                     sl_pct, tp_pct = self._risk_manager.calculate_dynamic_sl_tp(
-                        price, atr_val, market=self._market,
+                        price,
+                        atr_val,
+                        market=self._market,
                     )
                 else:
                     sl_pct = self._risk_manager.params.default_stop_loss_pct
@@ -672,7 +740,9 @@ class EvaluationLoop:
             positions = await self._market_data.get_positions()
             pos = next((p for p in positions if p.symbol == symbol), None)
             if pos and pos.quantity > 0:
-                exchange = "KRX" if self._market == "KR" else self._exchange_resolver.resolve(symbol)
+                exchange = (
+                    "KRX" if self._market == "KR" else self._exchange_resolver.resolve(symbol)
+                )
                 orig_strategy = ""
                 if self._position_tracker:
                     orig_strategy = self._position_tracker.get_buy_strategy(symbol)
@@ -691,7 +761,10 @@ class EvaluationLoop:
                     self._recovery_watch[symbol] = time.time()
 
     def record_trade_result(
-        self, strategy: str, symbol: str, return_pct: float,
+        self,
+        strategy: str,
+        symbol: str,
+        return_pct: float,
     ) -> None:
         """Record a trade result for signal quality tracking."""
         self._signal_quality.record_trade(strategy, symbol, return_pct)

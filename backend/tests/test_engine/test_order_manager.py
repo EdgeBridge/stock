@@ -7,7 +7,7 @@ import pytest
 
 from engine.order_manager import OrderManager, ManagedOrder
 from engine.risk_manager import RiskManager, RiskParams
-from exchange.base import OrderResult
+from exchange.base import OrderResult, Position
 
 
 @pytest.fixture
@@ -794,3 +794,164 @@ class TestPaperFlag:
             assert recorded[0]["is_paper"] is False
         finally:
             set_trade_recorder(old_recorder)
+
+
+class TestExchangePositionDuplicateBlock:
+    """Test defense-in-depth: order_manager blocks buys for already-held symbols.
+
+    STOCK-4: exchange position check in place_buy prevents duplicate buys
+    even when in-memory dedup state is lost after restart.
+    """
+
+    @pytest.fixture
+    def mock_market_data(self):
+        md = AsyncMock()
+        md.get_positions = AsyncMock(return_value=[])
+        md.invalidate_cache = lambda: None
+        return md
+
+    async def test_buy_blocked_when_already_held(
+        self, mock_adapter, risk_manager, mock_market_data
+    ):
+        """place_buy should refuse if exchange shows existing position."""
+        mock_market_data.get_positions.return_value = [
+            Position(symbol="AAPL", exchange="NASD", quantity=10, avg_price=140.0),
+        ]
+        om = OrderManager(
+            adapter=mock_adapter,
+            risk_manager=risk_manager,
+            market_data=mock_market_data,
+        )
+        order = await om.place_buy(
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=0,
+            strategy_name="test",
+        )
+        assert order is None
+        mock_adapter.create_buy_order.assert_not_called()
+
+    async def test_buy_allowed_when_not_held(self, mock_adapter, risk_manager, mock_market_data):
+        """place_buy should proceed when exchange has no matching position."""
+        mock_market_data.get_positions.return_value = []
+        om = OrderManager(
+            adapter=mock_adapter,
+            risk_manager=risk_manager,
+            market_data=mock_market_data,
+        )
+        order = await om.place_buy(
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=0,
+            strategy_name="test",
+        )
+        assert order is not None
+        mock_adapter.create_buy_order.assert_called_once()
+
+    async def test_buy_allowed_for_different_symbol(
+        self, mock_adapter, risk_manager, mock_market_data
+    ):
+        """Holding TSLA should not block buying AAPL."""
+        mock_market_data.get_positions.return_value = [
+            Position(symbol="TSLA", exchange="NASD", quantity=5, avg_price=200.0),
+        ]
+        om = OrderManager(
+            adapter=mock_adapter,
+            risk_manager=risk_manager,
+            market_data=mock_market_data,
+        )
+        order = await om.place_buy(
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=1,
+            strategy_name="test",
+        )
+        assert order is not None
+
+    async def test_buy_proceeds_without_market_data(self, mock_adapter, risk_manager):
+        """Without market_data, position check is skipped (backward compatible)."""
+        om = OrderManager(
+            adapter=mock_adapter,
+            risk_manager=risk_manager,
+            market_data=None,
+        )
+        order = await om.place_buy(
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=0,
+            strategy_name="test",
+        )
+        assert order is not None
+
+    async def test_buy_proceeds_when_position_check_errors(
+        self, mock_adapter, risk_manager, mock_market_data
+    ):
+        """If get_positions throws, buy should still proceed (other layers provide safety)."""
+        mock_market_data.get_positions.side_effect = RuntimeError("API error")
+        om = OrderManager(
+            adapter=mock_adapter,
+            risk_manager=risk_manager,
+            market_data=mock_market_data,
+        )
+        order = await om.place_buy(
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=0,
+            strategy_name="test",
+        )
+        assert order is not None
+        mock_adapter.create_buy_order.assert_called_once()
+
+    async def test_buy_blocked_kr_market(self, mock_adapter, risk_manager, mock_market_data):
+        """KR market duplicate buy also blocked by exchange position check."""
+        mock_market_data.get_positions.return_value = [
+            Position(symbol="263750", exchange="KRX", quantity=10, avg_price=61400.0),
+        ]
+        om = OrderManager(
+            adapter=mock_adapter,
+            risk_manager=risk_manager,
+            market_data=mock_market_data,
+            market="KR",
+        )
+        order = await om.place_buy(
+            symbol="263750",
+            price=64600.0,
+            portfolio_value=10_000_000,
+            cash_available=5_000_000,
+            current_positions=0,
+            strategy_name="supertrend",
+        )
+        assert order is None
+        mock_adapter.create_buy_order.assert_not_called()
+
+    async def test_zero_quantity_position_not_blocked(
+        self, mock_adapter, risk_manager, mock_market_data
+    ):
+        """Position with quantity=0 should not block new buy."""
+        mock_market_data.get_positions.return_value = [
+            Position(symbol="AAPL", exchange="NASD", quantity=0, avg_price=140.0),
+        ]
+        om = OrderManager(
+            adapter=mock_adapter,
+            risk_manager=risk_manager,
+            market_data=mock_market_data,
+        )
+        order = await om.place_buy(
+            symbol="AAPL",
+            price=150.0,
+            portfolio_value=100_000,
+            cash_available=50_000,
+            current_positions=0,
+            strategy_name="test",
+        )
+        assert order is not None
