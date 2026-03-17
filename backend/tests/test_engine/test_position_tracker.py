@@ -18,10 +18,12 @@ def adapter():
 
 @pytest.fixture
 def risk():
-    return RiskManager(RiskParams(
-        default_stop_loss_pct=0.08,
-        default_take_profit_pct=0.20,
-    ))
+    return RiskManager(
+        RiskParams(
+            default_stop_loss_pct=0.08,
+            default_take_profit_pct=0.20,
+        )
+    )
 
 
 @pytest.fixture
@@ -62,15 +64,26 @@ async def test_check_all_empty(tracker):
 @pytest.mark.asyncio
 async def test_stop_loss_triggered(adapter, risk, order_mgr):
     """Position drops below SL threshold -> sell triggered."""
-    adapter.fetch_positions = AsyncMock(return_value=[
-        Position(symbol="AAPL", exchange="NASD", quantity=10,
-                 avg_price=150.0, current_price=135.0),  # -10% < -8% SL
-    ])
+    adapter.fetch_positions = AsyncMock(
+        return_value=[
+            Position(
+                symbol="AAPL", exchange="NASD", quantity=10, avg_price=150.0, current_price=135.0
+            ),  # -10% < -8% SL
+        ]
+    )
     from exchange.base import OrderResult
-    adapter.create_sell_order = AsyncMock(return_value=OrderResult(
-        order_id="sell1", symbol="AAPL", side="SELL",
-        order_type="market", quantity=10, status="filled", filled_price=135.0,
-    ))
+
+    adapter.create_sell_order = AsyncMock(
+        return_value=OrderResult(
+            order_id="sell1",
+            symbol="AAPL",
+            side="SELL",
+            order_type="market",
+            quantity=10,
+            status="filled",
+            filled_price=135.0,
+        )
+    )
 
     tracker = PositionTracker(adapter, risk, order_mgr)
     tracker.track("AAPL", 150.0, 10)
@@ -85,15 +98,26 @@ async def test_stop_loss_triggered(adapter, risk, order_mgr):
 @pytest.mark.asyncio
 async def test_take_profit_triggered(adapter, risk, order_mgr):
     """Position rises above TP threshold -> sell triggered."""
-    adapter.fetch_positions = AsyncMock(return_value=[
-        Position(symbol="MSFT", exchange="NASD", quantity=5,
-                 avg_price=300.0, current_price=365.0),  # +21.7% > 20% TP
-    ])
+    adapter.fetch_positions = AsyncMock(
+        return_value=[
+            Position(
+                symbol="MSFT", exchange="NASD", quantity=5, avg_price=300.0, current_price=365.0
+            ),  # +21.7% > 20% TP
+        ]
+    )
     from exchange.base import OrderResult
-    adapter.create_sell_order = AsyncMock(return_value=OrderResult(
-        order_id="sell2", symbol="MSFT", side="SELL",
-        order_type="market", quantity=5, status="filled", filled_price=365.0,
-    ))
+
+    adapter.create_sell_order = AsyncMock(
+        return_value=OrderResult(
+            order_id="sell2",
+            symbol="MSFT",
+            side="SELL",
+            order_type="market",
+            quantity=5,
+            status="filled",
+            filled_price=365.0,
+        )
+    )
 
     tracker = PositionTracker(adapter, risk, order_mgr)
     tracker.track("MSFT", 300.0, 5)
@@ -107,15 +131,26 @@ async def test_take_profit_triggered(adapter, risk, order_mgr):
 @pytest.mark.asyncio
 async def test_trailing_stop_triggered(adapter, risk, order_mgr):
     """Price ran up then dropped -> trailing stop fires."""
-    adapter.fetch_positions = AsyncMock(return_value=[
-        Position(symbol="GOOG", exchange="NASD", quantity=8,
-                 avg_price=100.0, current_price=108.0),  # 8% above entry
-    ])
+    adapter.fetch_positions = AsyncMock(
+        return_value=[
+            Position(
+                symbol="GOOG", exchange="NASD", quantity=8, avg_price=100.0, current_price=108.0
+            ),  # 8% above entry
+        ]
+    )
     from exchange.base import OrderResult
-    adapter.create_sell_order = AsyncMock(return_value=OrderResult(
-        order_id="sell3", symbol="GOOG", side="SELL",
-        order_type="market", quantity=8, status="filled", filled_price=108.0,
-    ))
+
+    adapter.create_sell_order = AsyncMock(
+        return_value=OrderResult(
+            order_id="sell3",
+            symbol="GOOG",
+            side="SELL",
+            order_type="market",
+            quantity=8,
+            status="filled",
+            filled_price=108.0,
+        )
+    )
 
     tracker = PositionTracker(adapter, risk, order_mgr)
     tracker.track("GOOG", 100.0, 8)
@@ -135,10 +170,13 @@ async def test_trailing_stop_triggered(adapter, risk, order_mgr):
 @pytest.mark.asyncio
 async def test_no_trigger_when_within_range(adapter, risk, order_mgr):
     """Price is within normal range -> no trigger."""
-    adapter.fetch_positions = AsyncMock(return_value=[
-        Position(symbol="AAPL", exchange="NASD", quantity=10,
-                 avg_price=150.0, current_price=148.0),  # -1.3%, well within SL
-    ])
+    adapter.fetch_positions = AsyncMock(
+        return_value=[
+            Position(
+                symbol="AAPL", exchange="NASD", quantity=10, avg_price=150.0, current_price=148.0
+            ),  # -1.3%, well within SL
+        ]
+    )
 
     tracker = PositionTracker(adapter, risk, order_mgr)
     tracker.track("AAPL", 150.0, 10)
@@ -170,10 +208,13 @@ async def test_position_gone_removes_tracker(adapter, risk, order_mgr):
 @pytest.mark.asyncio
 async def test_highest_price_update(adapter, risk, order_mgr):
     """Highest price tracks the peak for trailing stop."""
-    adapter.fetch_positions = AsyncMock(return_value=[
-        Position(symbol="AAPL", exchange="NASD", quantity=10,
-                 avg_price=150.0, current_price=160.0),
-    ])
+    adapter.fetch_positions = AsyncMock(
+        return_value=[
+            Position(
+                symbol="AAPL", exchange="NASD", quantity=10, avg_price=150.0, current_price=160.0
+            ),
+        ]
+    )
 
     tracker = PositionTracker(adapter, risk, order_mgr)
     tracker.track("AAPL", 150.0, 10)
@@ -186,15 +227,26 @@ async def test_highest_price_update(adapter, risk, order_mgr):
 @pytest.mark.asyncio
 async def test_notification_on_stop_loss(adapter, risk, order_mgr):
     """Notification is sent when stop-loss fires."""
-    adapter.fetch_positions = AsyncMock(return_value=[
-        Position(symbol="AAPL", exchange="NASD", quantity=10,
-                 avg_price=150.0, current_price=135.0),
-    ])
+    adapter.fetch_positions = AsyncMock(
+        return_value=[
+            Position(
+                symbol="AAPL", exchange="NASD", quantity=10, avg_price=150.0, current_price=135.0
+            ),
+        ]
+    )
     from exchange.base import OrderResult
-    adapter.create_sell_order = AsyncMock(return_value=OrderResult(
-        order_id="sell4", symbol="AAPL", side="SELL",
-        order_type="market", quantity=10, status="filled", filled_price=135.0,
-    ))
+
+    adapter.create_sell_order = AsyncMock(
+        return_value=OrderResult(
+            order_id="sell4",
+            symbol="AAPL",
+            side="SELL",
+            order_type="market",
+            quantity=10,
+            status="filled",
+            filled_price=135.0,
+        )
+    )
 
     notif = AsyncMock()
     tracker = PositionTracker(adapter, risk, order_mgr, notification=notif)
@@ -236,12 +288,16 @@ async def test_restore_from_exchange_no_positions(adapter, risk, order_mgr):
 @pytest.mark.asyncio
 async def test_restore_from_exchange_with_positions(adapter, risk, order_mgr):
     """Exchange positions are restored into tracker."""
-    adapter.fetch_positions = AsyncMock(return_value=[
-        Position(symbol="AAPL", exchange="NASD", quantity=10,
-                 avg_price=150.0, current_price=155.0),
-        Position(symbol="MSFT", exchange="NASD", quantity=5,
-                 avg_price=300.0, current_price=310.0),
-    ])
+    adapter.fetch_positions = AsyncMock(
+        return_value=[
+            Position(
+                symbol="AAPL", exchange="NASD", quantity=10, avg_price=150.0, current_price=155.0
+            ),
+            Position(
+                symbol="MSFT", exchange="NASD", quantity=5, avg_price=300.0, current_price=310.0
+            ),
+        ]
+    )
     tracker = PositionTracker(adapter, risk, order_mgr)
 
     restored = await tracker.restore_from_exchange()
@@ -260,10 +316,13 @@ async def test_restore_from_exchange_with_positions(adapter, risk, order_mgr):
 @pytest.mark.asyncio
 async def test_restore_skips_zero_quantity(adapter, risk, order_mgr):
     """Positions with 0 quantity are not restored."""
-    adapter.fetch_positions = AsyncMock(return_value=[
-        Position(symbol="AAPL", exchange="NASD", quantity=0,
-                 avg_price=150.0, current_price=155.0),
-    ])
+    adapter.fetch_positions = AsyncMock(
+        return_value=[
+            Position(
+                symbol="AAPL", exchange="NASD", quantity=0, avg_price=150.0, current_price=155.0
+            ),
+        ]
+    )
     tracker = PositionTracker(adapter, risk, order_mgr)
 
     restored = await tracker.restore_from_exchange()
@@ -274,10 +333,13 @@ async def test_restore_skips_zero_quantity(adapter, risk, order_mgr):
 @pytest.mark.asyncio
 async def test_restore_uses_default_risk_params(adapter, risk, order_mgr):
     """Restored positions get default SL/TP from RiskManager."""
-    adapter.fetch_positions = AsyncMock(return_value=[
-        Position(symbol="AAPL", exchange="NASD", quantity=10,
-                 avg_price=150.0, current_price=155.0),
-    ])
+    adapter.fetch_positions = AsyncMock(
+        return_value=[
+            Position(
+                symbol="AAPL", exchange="NASD", quantity=10, avg_price=150.0, current_price=155.0
+            ),
+        ]
+    )
     tracker = PositionTracker(adapter, risk, order_mgr)
 
     await tracker.restore_from_exchange()
@@ -294,3 +356,133 @@ async def test_restore_fetch_error_graceful(adapter, risk, order_mgr):
 
     restored = await tracker.restore_from_exchange()
     assert restored == []
+
+
+# ── Paper/Live order separation (STOCK-6) ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_restore_excludes_paper_orders(adapter, risk, order_mgr):
+    """restore_from_exchange queries only non-paper orders for entry info."""
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from core.models import Base, Order
+
+    # Set up in-memory DB with both paper and live orders
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    # Insert a paper BUY order (should be ignored)
+    async with session_factory() as session:
+        paper_order = Order(
+            symbol="AAPL",
+            exchange="NASD",
+            side="BUY",
+            order_type="market",
+            quantity=38,
+            price=145.0,
+            filled_quantity=38,
+            filled_price=145.0,
+            status="filled",
+            strategy_name="paper_strategy",
+            is_paper=True,
+            market="US",
+        )
+        session.add(paper_order)
+        await session.commit()
+
+    # Insert a live BUY order (should be used for entry info)
+    async with session_factory() as session:
+        live_order = Order(
+            symbol="AAPL",
+            exchange="NASD",
+            side="BUY",
+            order_type="limit",
+            quantity=42,
+            price=150.0,
+            filled_quantity=42,
+            filled_price=150.0,
+            status="filled",
+            strategy_name="trend_following",
+            kis_order_id="KIS001",
+            is_paper=False,
+            market="US",
+        )
+        session.add(live_order)
+        await session.commit()
+
+    # Exchange shows 42 shares (live only)
+    adapter.fetch_positions = AsyncMock(
+        return_value=[
+            Position(
+                symbol="AAPL",
+                exchange="NASD",
+                quantity=42,
+                avg_price=150.0,
+                current_price=155.0,
+            ),
+        ]
+    )
+
+    tracker = PositionTracker(adapter, risk, order_mgr)
+    restored = await tracker.restore_from_exchange(session_factory=session_factory)
+
+    assert len(restored) == 1
+    assert restored[0]["symbol"] == "AAPL"
+    # Strategy should come from the live order, not the paper one
+    assert restored[0]["strategy"] == "trend_following"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_restore_paper_order_only_uses_unknown(adapter, risk, order_mgr):
+    """When only paper orders exist, strategy defaults to 'unknown'."""
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from core.models import Base, Order
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    # Only paper order exists
+    async with session_factory() as session:
+        paper_order = Order(
+            symbol="MSFT",
+            exchange="NASD",
+            side="BUY",
+            order_type="market",
+            quantity=10,
+            price=400.0,
+            filled_quantity=10,
+            filled_price=400.0,
+            status="filled",
+            strategy_name="paper_strat",
+            is_paper=True,
+            market="US",
+        )
+        session.add(paper_order)
+        await session.commit()
+
+    adapter.fetch_positions = AsyncMock(
+        return_value=[
+            Position(
+                symbol="MSFT",
+                exchange="NASD",
+                quantity=5,
+                avg_price=400.0,
+                current_price=410.0,
+            ),
+        ]
+    )
+
+    tracker = PositionTracker(adapter, risk, order_mgr)
+    restored = await tracker.restore_from_exchange(session_factory=session_factory)
+
+    assert len(restored) == 1
+    # No live order found → defaults to "unknown"
+    assert restored[0]["strategy"] == "unknown"
+
+    await engine.dispose()
