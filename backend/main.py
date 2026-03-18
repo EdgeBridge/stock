@@ -62,13 +62,17 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables created")
 
-    # Auto-migrate: add columns that exist in the ORM model but are missing
-    # from the physical DB (e.g. is_paper, buy_strategy added after initial deploy)
-    from db.migrations import ensure_columns
+    # Auto-migrate: add columns/indexes that exist in the ORM model but are
+    # missing from the physical DB (e.g. is_paper, buy_strategy added after
+    # initial deploy)
+    from db.migrations import ensure_columns, ensure_indexes
 
     added_cols = await ensure_columns(engine)
     if added_cols:
         logger.info("Auto-migration added columns: %s", ", ".join(added_cols))
+    created_idxs = await ensure_indexes(engine)
+    if created_idxs:
+        logger.info("Auto-migration created indexes: %s", ", ".join(created_idxs))
 
     # Initialize exchange adapter
     if config.is_paper:
