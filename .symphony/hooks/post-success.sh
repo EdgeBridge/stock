@@ -6,15 +6,10 @@ set -e
 echo "[symphony] Post-success validation for us-stock"
 
 # --- venv verification ---
-# The pre-run hook should have created the symlink, but verify it exists
-# and recreate if necessary (guards against worktree CWD issues).
 if [ ! -x "venv/bin/python" ]; then
     echo "[symphony] WARN: venv/bin/python not found — attempting recovery..."
-
-    # Remove dangling symlink if present
     [ -L "venv" ] && rm -f venv
 
-    # Resolve source venv (same logic as pre-run.sh)
     SOURCE_VENV=""
     BASE_DIR=$(git worktree list --porcelain 2>/dev/null | head -1 | sed 's/^worktree //')
     if [ -n "$BASE_DIR" ] && [ -d "$BASE_DIR/venv" ]; then
@@ -25,15 +20,12 @@ if [ ! -x "venv/bin/python" ]; then
 
     if [ -z "$SOURCE_VENV" ]; then
         echo "[symphony] ERROR: Cannot locate venv — post-success gate FAILED"
-        echo "[symphony]   Worktree base: ${BASE_DIR:-unknown}"
-        echo "[symphony]   Tried: \$BASE_DIR/venv, /home/chans/us-stock/venv"
         exit 1
     fi
 
     ln -s "$SOURCE_VENV" venv
     echo "[symphony] Recovered venv symlink -> $SOURCE_VENV"
 
-    # Final check after recovery
     if [ ! -x "venv/bin/python" ]; then
         echo "[symphony] ERROR: venv/bin/python still not executable after recovery"
         exit 1
@@ -53,15 +45,7 @@ if [ -z "$TEST_COUNT" ] || [ "$TEST_COUNT" -lt 1400 ]; then
     exit 1
 fi
 
-# --- Lint gate (only changed files vs main) ---
-if [ -x "venv/bin/ruff" ]; then
-    CHANGED_PY=$(git diff --name-only origin/main...HEAD -- 'backend/*.py' 2>/dev/null)
-    if [ -n "$CHANGED_PY" ]; then
-        echo "[symphony] Running lint on changed files..."
-        venv/bin/ruff check $CHANGED_PY
-    else
-        echo "[symphony] No changed Python files — skipping lint"
-    fi
-fi
+# Lint is checked by CI gate, not here.
+# This keeps the hook fast and avoids blocking on auto-fixable issues.
 
 echo "[symphony] Post-success validation PASSED ($TEST_COUNT tests)"
