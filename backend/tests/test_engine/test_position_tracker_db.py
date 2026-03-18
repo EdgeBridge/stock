@@ -51,10 +51,12 @@ def adapter():
 
 @pytest.fixture
 def risk():
-    return RiskManager(RiskParams(
-        default_stop_loss_pct=0.08,
-        default_take_profit_pct=0.20,
-    ))
+    return RiskManager(
+        RiskParams(
+            default_stop_loss_pct=0.08,
+            default_take_profit_pct=0.20,
+        )
+    )
 
 
 @pytest.fixture
@@ -65,7 +67,9 @@ def order_mgr(adapter, risk):
 def _make_tracker(adapter, risk, order_mgr, market: str = "US") -> PositionTracker:
     """Create a tracker WITHOUT session_factory to avoid background DB tasks."""
     return PositionTracker(
-        adapter, risk, order_mgr,
+        adapter,
+        risk,
+        order_mgr,
         market=market,
     )
 
@@ -113,7 +117,9 @@ class TestSyncToDb:
         """sync_to_db should persist all tracked position fields."""
         tracker = _make_tracker(adapter, risk, order_mgr)
         tracker.track(
-            "AAPL", 150.0, 10,
+            "AAPL",
+            150.0,
+            10,
             strategy="trend_following",
             stop_loss_pct=0.10,
             take_profit_pct=0.25,
@@ -374,12 +380,20 @@ class TestRestoreWithDbSync:
     @pytest.mark.asyncio
     async def test_restore_persists_to_db(self, adapter, risk, order_mgr, db_factory):
         """Restored positions should be saved to DB after restore."""
-        adapter.fetch_positions = AsyncMock(return_value=[
-            Position(symbol="AAPL", exchange="NASD", quantity=10,
-                     avg_price=150.0, current_price=155.0),
-            Position(symbol="MSFT", exchange="NASD", quantity=5,
-                     avg_price=300.0, current_price=310.0),
-        ])
+        adapter.fetch_positions = AsyncMock(
+            return_value=[
+                Position(
+                    symbol="AAPL",
+                    exchange="NASD",
+                    quantity=10,
+                    avg_price=150.0,
+                    current_price=155.0,
+                ),
+                Position(
+                    symbol="MSFT", exchange="NASD", quantity=5, avg_price=300.0, current_price=310.0
+                ),
+            ]
+        )
         tracker = _make_tracker(adapter, risk, order_mgr)
 
         restored = await tracker.restore_from_exchange(db_factory)
@@ -415,10 +429,17 @@ class TestRestoreWithDbSync:
     @pytest.mark.asyncio
     async def test_restore_without_session_factory(self, adapter, risk, order_mgr):
         """Restore without session_factory still works (in-memory only)."""
-        adapter.fetch_positions = AsyncMock(return_value=[
-            Position(symbol="AAPL", exchange="NASD", quantity=10,
-                     avg_price=150.0, current_price=155.0),
-        ])
+        adapter.fetch_positions = AsyncMock(
+            return_value=[
+                Position(
+                    symbol="AAPL",
+                    exchange="NASD",
+                    quantity=10,
+                    avg_price=150.0,
+                    current_price=155.0,
+                ),
+            ]
+        )
         tracker = _make_tracker(adapter, risk, order_mgr)
 
         restored = await tracker.restore_from_exchange()
@@ -437,7 +458,9 @@ class TestDbEdgeCases:
         """Verify all TrackedPosition fields are mapped to PositionRecord."""
         tracker = _make_tracker(adapter, risk, order_mgr)
         tracker.track(
-            "TSLA", 250.0, 20,
+            "TSLA",
+            250.0,
+            20,
             strategy="bollinger_squeeze",
             stop_loss_pct=0.15,
             take_profit_pct=0.35,
@@ -494,3 +517,627 @@ class TestDbEdgeCases:
         """Market can be set to 'KR'."""
         tracker = PositionTracker(adapter, risk, order_mgr, market="KR")
         assert tracker._market == "KR"
+
+
+# ── current_price / unrealized_pnl in DB Sync ──────────────────────
+
+
+class TestSyncCurrentPrice:
+    """Test that sync_to_db populates current_price and unrealized_pnl."""
+
+    @pytest.mark.asyncio
+    async def test_sync_stores_current_price(self, adapter, risk, order_mgr, db_factory):
+        """sync_to_db should fetch prices and store current_price in DB."""
+        adapter.fetch_positions = AsyncMock(
+            return_value=[
+                Position(
+                    symbol="AAPL",
+                    exchange="NASD",
+                    quantity=10,
+                    avg_price=150.0,
+                    current_price=165.0,
+                ),
+            ]
+        )
+        tracker = _make_tracker(adapter, risk, order_mgr)
+        tracker.track("AAPL", 150.0, 10, strategy="trend")
+
+        await tracker.sync_to_db(db_factory)
+
+        record = await _get_position(db_factory, "AAPL")
+        assert record is not None
+        assert record.current_price == 165.0
+
+    @pytest.mark.asyncio
+    async def test_sync_calculates_unrealized_pnl(self, adapter, risk, order_mgr, db_factory):
+        """sync_to_db should calculate unrealized_pnl = (current - entry) * qty."""
+        adapter.fetch_positions = AsyncMock(
+            return_value=[
+                Position(
+                    symbol="AAPL",
+                    exchange="NASD",
+                    quantity=10,
+                    avg_price=150.0,
+                    current_price=165.0,
+                ),
+            ]
+        )
+        tracker = _make_tracker(adapter, risk, order_mgr)
+        tracker.track("AAPL", 150.0, 10, strategy="trend")
+
+        await tracker.sync_to_db(db_factory)
+
+        record = await _get_position(db_factory, "AAPL")
+        assert record is not None
+        # (165.0 - 150.0) * 10 = 150.0
+        assert record.unrealized_pnl == pytest.approx(150.0)
+
+    @pytest.mark.asyncio
+    async def test_sync_negative_unrealized_pnl(self, adapter, risk, order_mgr, db_factory):
+        """unrealized_pnl should be negative when current < entry."""
+        adapter.fetch_positions = AsyncMock(
+            return_value=[
+                Position(
+                    symbol="MSFT", exchange="NASD", quantity=5, avg_price=300.0, current_price=285.0
+                ),
+            ]
+        )
+        tracker = _make_tracker(adapter, risk, order_mgr)
+        tracker.track("MSFT", 300.0, 5, strategy="macd")
+
+        await tracker.sync_to_db(db_factory)
+
+        record = await _get_position(db_factory, "MSFT")
+        assert record is not None
+        assert record.current_price == 285.0
+        # (285.0 - 300.0) * 5 = -75.0
+        assert record.unrealized_pnl == pytest.approx(-75.0)
+
+    @pytest.mark.asyncio
+    async def test_sync_multiple_positions_prices(self, adapter, risk, order_mgr, db_factory):
+        """sync_to_db should populate prices for all tracked positions."""
+        adapter.fetch_positions = AsyncMock(
+            return_value=[
+                Position(
+                    symbol="AAPL",
+                    exchange="NASD",
+                    quantity=10,
+                    avg_price=150.0,
+                    current_price=160.0,
+                ),
+                Position(
+                    symbol="MSFT", exchange="NASD", quantity=5, avg_price=300.0, current_price=310.0
+                ),
+            ]
+        )
+        tracker = _make_tracker(adapter, risk, order_mgr)
+        tracker.track("AAPL", 150.0, 10)
+        tracker.track("MSFT", 300.0, 5)
+
+        await tracker.sync_to_db(db_factory)
+
+        aapl = await _get_position(db_factory, "AAPL")
+        msft = await _get_position(db_factory, "MSFT")
+        assert aapl.current_price == 160.0
+        assert aapl.unrealized_pnl == pytest.approx(100.0)  # (160-150)*10
+        assert msft.current_price == 310.0
+        assert msft.unrealized_pnl == pytest.approx(50.0)  # (310-300)*5
+
+    @pytest.mark.asyncio
+    async def test_sync_price_fetch_failure_still_syncs(self, adapter, risk, order_mgr, db_factory):
+        """If price fetch fails, sync should still persist positions (without price)."""
+        adapter.fetch_positions = AsyncMock(side_effect=Exception("API down"))
+        tracker = _make_tracker(adapter, risk, order_mgr)
+        tracker.track("AAPL", 150.0, 10, strategy="trend")
+
+        synced = await tracker.sync_to_db(db_factory)
+
+        assert synced == 1
+        record = await _get_position(db_factory, "AAPL")
+        assert record is not None
+        assert record.strategy_name == "trend"
+        # Price fields remain None when fetch fails
+        assert record.current_price is None
+        assert record.unrealized_pnl is None
+
+    @pytest.mark.asyncio
+    async def test_sync_zero_price_excluded_from_map(self, adapter, risk, order_mgr, db_factory):
+        """Positions with current_price=0 should not populate DB current_price."""
+        adapter.fetch_positions = AsyncMock(
+            return_value=[
+                Position(
+                    symbol="AAPL", exchange="NASD", quantity=10, avg_price=150.0, current_price=0.0
+                ),
+            ]
+        )
+        tracker = _make_tracker(adapter, risk, order_mgr)
+        tracker.track("AAPL", 150.0, 10)
+
+        await tracker.sync_to_db(db_factory)
+
+        record = await _get_position(db_factory, "AAPL")
+        assert record is not None
+        assert record.current_price is None
+
+    @pytest.mark.asyncio
+    async def test_sync_price_update_on_repeated_sync(self, adapter, risk, order_mgr, db_factory):
+        """Prices should update on subsequent syncs."""
+        # First sync with price 155
+        adapter.fetch_positions = AsyncMock(
+            return_value=[
+                Position(
+                    symbol="AAPL",
+                    exchange="NASD",
+                    quantity=10,
+                    avg_price=150.0,
+                    current_price=155.0,
+                ),
+            ]
+        )
+        tracker = _make_tracker(adapter, risk, order_mgr)
+        tracker.track("AAPL", 150.0, 10)
+        await tracker.sync_to_db(db_factory)
+
+        record = await _get_position(db_factory, "AAPL")
+        assert record.current_price == 155.0
+        assert record.unrealized_pnl == pytest.approx(50.0)
+
+        # Second sync with updated price 170
+        adapter.fetch_positions = AsyncMock(
+            return_value=[
+                Position(
+                    symbol="AAPL",
+                    exchange="NASD",
+                    quantity=10,
+                    avg_price=150.0,
+                    current_price=170.0,
+                ),
+            ]
+        )
+        await tracker.sync_to_db(db_factory)
+
+        record = await _get_position(db_factory, "AAPL")
+        assert record.current_price == 170.0
+        assert record.unrealized_pnl == pytest.approx(200.0)
+
+    @pytest.mark.asyncio
+    async def test_sync_market_data_used_when_available(self, adapter, risk, order_mgr, db_factory):
+        """sync_to_db should prefer market_data over adapter for price fetch."""
+        market_data = AsyncMock()
+        market_data.get_positions = AsyncMock(
+            return_value=[
+                Position(
+                    symbol="AAPL",
+                    exchange="NASD",
+                    quantity=10,
+                    avg_price=150.0,
+                    current_price=175.0,
+                ),
+            ]
+        )
+        # Adapter returns different price (should NOT be used)
+        adapter.fetch_positions = AsyncMock(
+            return_value=[
+                Position(
+                    symbol="AAPL",
+                    exchange="NASD",
+                    quantity=10,
+                    avg_price=150.0,
+                    current_price=160.0,
+                ),
+            ]
+        )
+        tracker = PositionTracker(
+            adapter,
+            risk,
+            order_mgr,
+            market_data=market_data,
+            market="US",
+        )
+        tracker.track("AAPL", 150.0, 10)
+
+        await tracker.sync_to_db(db_factory)
+
+        record = await _get_position(db_factory, "AAPL")
+        # Should use market_data price (175), not adapter price (160)
+        assert record.current_price == 175.0
+
+    @pytest.mark.asyncio
+    async def test_sync_kr_positions_with_prices(self, adapter, risk, order_mgr, db_factory):
+        """KR positions should also get current_price and unrealized_pnl."""
+        adapter.fetch_positions = AsyncMock(
+            return_value=[
+                Position(
+                    symbol="005930",
+                    exchange="KRX",
+                    quantity=5,
+                    avg_price=72000.0,
+                    current_price=75000.0,
+                ),
+            ]
+        )
+        tracker = _make_tracker(adapter, risk, order_mgr, market="KR")
+        tracker.track("005930", 72000.0, 5, strategy="kr_trend")
+
+        await tracker.sync_to_db(db_factory)
+
+        record = await _get_position(db_factory, "005930", market="KR")
+        assert record is not None
+        assert record.current_price == 75000.0
+        # (75000 - 72000) * 5 = 15000
+        assert record.unrealized_pnl == pytest.approx(15000.0)
+
+
+# ── Upsert with current_price ────────────────────────────────────────
+
+
+class TestUpsertWithCurrentPrice:
+    """Test _upsert_position_record with current_price parameter."""
+
+    @pytest.mark.asyncio
+    async def test_upsert_with_price_creates_record(self, adapter, risk, order_mgr, db_factory):
+        """Upsert with current_price should create record with price fields."""
+        tracker = _make_tracker(adapter, risk, order_mgr)
+        tracker.track("AAPL", 150.0, 10, strategy="trend")
+
+        async with db_factory() as session:
+            await tracker._upsert_position_record(
+                session,
+                "AAPL",
+                tracker._tracked["AAPL"],
+                current_price=165.0,
+            )
+            await session.commit()
+
+        record = await _get_position(db_factory, "AAPL")
+        assert record.current_price == 165.0
+        assert record.unrealized_pnl == pytest.approx(150.0)
+
+    @pytest.mark.asyncio
+    async def test_upsert_without_price_leaves_null(self, adapter, risk, order_mgr, db_factory):
+        """Upsert without current_price should leave fields as None."""
+        tracker = _make_tracker(adapter, risk, order_mgr)
+        tracker.track("AAPL", 150.0, 10)
+
+        async with db_factory() as session:
+            await tracker._upsert_position_record(
+                session,
+                "AAPL",
+                tracker._tracked["AAPL"],
+            )
+            await session.commit()
+
+        record = await _get_position(db_factory, "AAPL")
+        assert record.current_price is None
+        assert record.unrealized_pnl is None
+
+    @pytest.mark.asyncio
+    async def test_upsert_update_adds_price(self, adapter, risk, order_mgr, db_factory):
+        """Updating an existing record should set current_price."""
+        tracker = _make_tracker(adapter, risk, order_mgr)
+        tracker.track("AAPL", 150.0, 10)
+
+        # First upsert without price
+        async with db_factory() as session:
+            await tracker._upsert_position_record(
+                session,
+                "AAPL",
+                tracker._tracked["AAPL"],
+            )
+            await session.commit()
+
+        record = await _get_position(db_factory, "AAPL")
+        assert record.current_price is None
+
+        # Second upsert with price
+        async with db_factory() as session:
+            await tracker._upsert_position_record(
+                session,
+                "AAPL",
+                tracker._tracked["AAPL"],
+                current_price=160.0,
+            )
+            await session.commit()
+
+        record = await _get_position(db_factory, "AAPL")
+        assert record.current_price == 160.0
+        assert record.unrealized_pnl == pytest.approx(100.0)
+
+    @pytest.mark.asyncio
+    async def test_upsert_preserves_price_when_not_provided(
+        self,
+        adapter,
+        risk,
+        order_mgr,
+        db_factory,
+    ):
+        """Updating without current_price should preserve existing price in DB."""
+        tracker = _make_tracker(adapter, risk, order_mgr)
+        tracker.track("AAPL", 150.0, 10)
+
+        # First upsert with price
+        async with db_factory() as session:
+            await tracker._upsert_position_record(
+                session,
+                "AAPL",
+                tracker._tracked["AAPL"],
+                current_price=160.0,
+            )
+            await session.commit()
+
+        # Second upsert without price (e.g., from track() background task)
+        async with db_factory() as session:
+            await tracker._upsert_position_record(
+                session,
+                "AAPL",
+                tracker._tracked["AAPL"],
+            )
+            await session.commit()
+
+        record = await _get_position(db_factory, "AAPL")
+        # Price should be preserved from previous upsert
+        assert record.current_price == 160.0
+
+
+# ── Strategy Resolution ──────────────────────────────────────────────
+
+
+class TestStrategyResolution:
+    """Test improved strategy name resolution during restore and sync."""
+
+    @pytest.mark.asyncio
+    async def test_restore_uses_buy_order_strategy(self, adapter, risk, order_mgr, db_factory):
+        """restore_from_exchange should use BUY order's strategy_name."""
+        from datetime import datetime
+
+        from core.models import Order
+
+        # Create a BUY order in DB
+        async with db_factory() as session:
+            order = Order(
+                symbol="AAPL",
+                side="BUY",
+                order_type="market",
+                quantity=10,
+                price=150.0,
+                status="filled",
+                strategy_name="trend_following",
+                is_paper=False,
+                created_at=datetime.utcnow(),
+            )
+            session.add(order)
+            await session.commit()
+
+        adapter.fetch_positions = AsyncMock(
+            return_value=[
+                Position(
+                    symbol="AAPL",
+                    exchange="NASD",
+                    quantity=10,
+                    avg_price=150.0,
+                    current_price=155.0,
+                ),
+            ]
+        )
+        tracker = _make_tracker(adapter, risk, order_mgr)
+        restored = await tracker.restore_from_exchange(db_factory)
+
+        assert len(restored) == 1
+        assert restored[0]["strategy"] == "trend_following"
+
+    @pytest.mark.asyncio
+    async def test_restore_fallback_to_any_buy(self, adapter, risk, order_mgr, db_factory):
+        """Should fall back to paper BUY order if no live BUY found."""
+        from datetime import datetime
+
+        from core.models import Order
+
+        # Only paper BUY order
+        async with db_factory() as session:
+            order = Order(
+                symbol="AAPL",
+                side="BUY",
+                order_type="market",
+                quantity=10,
+                price=150.0,
+                status="filled",
+                strategy_name="paper_macd",
+                is_paper=True,
+                created_at=datetime.utcnow(),
+            )
+            session.add(order)
+            await session.commit()
+
+        adapter.fetch_positions = AsyncMock(
+            return_value=[
+                Position(
+                    symbol="AAPL",
+                    exchange="NASD",
+                    quantity=10,
+                    avg_price=150.0,
+                    current_price=155.0,
+                ),
+            ]
+        )
+        tracker = _make_tracker(adapter, risk, order_mgr)
+        restored = await tracker.restore_from_exchange(db_factory)
+
+        assert len(restored) == 1
+        assert restored[0]["strategy"] == "paper_macd"
+
+    @pytest.mark.asyncio
+    async def test_restore_fallback_to_sell_buy_strategy(
+        self,
+        adapter,
+        risk,
+        order_mgr,
+        db_factory,
+    ):
+        """Should fall back to SELL order's buy_strategy if no BUY orders found."""
+        from datetime import datetime
+
+        from core.models import Order
+
+        # Only SELL order with buy_strategy
+        async with db_factory() as session:
+            order = Order(
+                symbol="AAPL",
+                side="SELL",
+                order_type="market",
+                quantity=10,
+                price=165.0,
+                status="filled",
+                strategy_name="trend_following:take_profit",
+                buy_strategy="trend_following",
+                is_paper=False,
+                created_at=datetime.utcnow(),
+            )
+            session.add(order)
+            await session.commit()
+
+        adapter.fetch_positions = AsyncMock(
+            return_value=[
+                Position(
+                    symbol="AAPL",
+                    exchange="NASD",
+                    quantity=10,
+                    avg_price=150.0,
+                    current_price=155.0,
+                ),
+            ]
+        )
+        tracker = _make_tracker(adapter, risk, order_mgr)
+        restored = await tracker.restore_from_exchange(db_factory)
+
+        assert len(restored) == 1
+        assert restored[0]["strategy"] == "trend_following"
+
+    @pytest.mark.asyncio
+    async def test_restore_unknown_when_no_orders(self, adapter, risk, order_mgr, db_factory):
+        """Should default to 'unknown' when no orders found at all."""
+        adapter.fetch_positions = AsyncMock(
+            return_value=[
+                Position(
+                    symbol="AAPL",
+                    exchange="NASD",
+                    quantity=10,
+                    avg_price=150.0,
+                    current_price=155.0,
+                ),
+            ]
+        )
+        tracker = _make_tracker(adapter, risk, order_mgr)
+        restored = await tracker.restore_from_exchange(db_factory)
+
+        assert len(restored) == 1
+        assert restored[0]["strategy"] == "unknown"
+
+    @pytest.mark.asyncio
+    async def test_sync_resolves_unknown_strategy(self, adapter, risk, order_mgr, db_factory):
+        """sync_to_db should re-resolve 'unknown' strategies from order history."""
+        from datetime import datetime
+
+        from core.models import Order
+
+        # Add a BUY order to DB after initial tracking
+        async with db_factory() as session:
+            order = Order(
+                symbol="AAPL",
+                side="BUY",
+                order_type="market",
+                quantity=10,
+                price=150.0,
+                status="filled",
+                strategy_name="rsi_divergence",
+                is_paper=False,
+                created_at=datetime.utcnow(),
+            )
+            session.add(order)
+            await session.commit()
+
+        adapter.fetch_positions = AsyncMock(
+            return_value=[
+                Position(
+                    symbol="AAPL",
+                    exchange="NASD",
+                    quantity=10,
+                    avg_price=150.0,
+                    current_price=160.0,
+                ),
+            ]
+        )
+        tracker = _make_tracker(adapter, risk, order_mgr)
+        # Track with unknown strategy (simulates initial restore failure)
+        tracker.track("AAPL", 150.0, 10, strategy="unknown")
+
+        await tracker.sync_to_db(db_factory)
+
+        # Strategy should be resolved in memory
+        assert tracker._tracked["AAPL"].strategy == "rsi_divergence"
+        # And persisted to DB
+        record = await _get_position(db_factory, "AAPL")
+        assert record.strategy_name == "rsi_divergence"
+
+    @pytest.mark.asyncio
+    async def test_sync_resolves_empty_strategy(self, adapter, risk, order_mgr, db_factory):
+        """sync_to_db should also re-resolve empty string strategies."""
+        from datetime import datetime
+
+        from core.models import Order
+
+        async with db_factory() as session:
+            order = Order(
+                symbol="AAPL",
+                side="BUY",
+                order_type="market",
+                quantity=10,
+                price=150.0,
+                status="filled",
+                strategy_name="bollinger_squeeze",
+                is_paper=False,
+                created_at=datetime.utcnow(),
+            )
+            session.add(order)
+            await session.commit()
+
+        adapter.fetch_positions = AsyncMock(
+            return_value=[
+                Position(
+                    symbol="AAPL",
+                    exchange="NASD",
+                    quantity=10,
+                    avg_price=150.0,
+                    current_price=160.0,
+                ),
+            ]
+        )
+        tracker = _make_tracker(adapter, risk, order_mgr)
+        tracker.track("AAPL", 150.0, 10, strategy="")
+
+        await tracker.sync_to_db(db_factory)
+
+        assert tracker._tracked["AAPL"].strategy == "bollinger_squeeze"
+
+    @pytest.mark.asyncio
+    async def test_sync_keeps_known_strategy(self, adapter, risk, order_mgr, db_factory):
+        """sync_to_db should NOT re-resolve strategies that are already known."""
+        adapter.fetch_positions = AsyncMock(
+            return_value=[
+                Position(
+                    symbol="AAPL",
+                    exchange="NASD",
+                    quantity=10,
+                    avg_price=150.0,
+                    current_price=160.0,
+                ),
+            ]
+        )
+        tracker = _make_tracker(adapter, risk, order_mgr)
+        tracker.track("AAPL", 150.0, 10, strategy="my_strategy")
+
+        await tracker.sync_to_db(db_factory)
+
+        # Strategy should remain unchanged
+        assert tracker._tracked["AAPL"].strategy == "my_strategy"
+        record = await _get_position(db_factory, "AAPL")
+        assert record.strategy_name == "my_strategy"
