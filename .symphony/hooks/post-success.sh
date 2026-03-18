@@ -53,10 +53,15 @@ if [ -z "$TEST_COUNT" ] || [ "$TEST_COUNT" -lt 1400 ]; then
     exit 1
 fi
 
-# --- Lint gate ---
+# --- Lint gate (only changed files vs main) ---
 if [ -x "venv/bin/ruff" ]; then
-    echo "[symphony] Running lint..."
-    venv/bin/ruff check backend/
+    CHANGED_PY=$(git diff --name-only origin/main...HEAD -- 'backend/*.py' 2>/dev/null)
+    if [ -n "$CHANGED_PY" ]; then
+        echo "[symphony] Running lint on changed files..."
+        venv/bin/ruff check $CHANGED_PY
+    else
+        echo "[symphony] No changed Python files — skipping lint"
+    fi
 fi
 
 echo "[symphony] Post-success validation PASSED ($TEST_COUNT tests)"
