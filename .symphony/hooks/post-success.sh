@@ -47,7 +47,7 @@ echo "[symphony] Running full test suite..."
 venv/bin/python -m pytest backend/tests/ -x -q
 
 # --- Test count gate ---
-TEST_COUNT=$(venv/bin/python -m pytest backend/tests/ --co -q 2>/dev/null | tail -1 | grep -oP '\d+')
+TEST_COUNT=$(venv/bin/python -m pytest backend/tests/ --co -q 2>/dev/null | tail -1 | grep -oP '^\d+')
 if [ -z "$TEST_COUNT" ] || [ "$TEST_COUNT" -lt 1400 ]; then
     echo "[symphony] ERROR: Test count is ${TEST_COUNT:-0} (minimum: 1400)"
     exit 1
