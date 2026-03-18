@@ -327,10 +327,13 @@ class EvaluationLoop:
         # Defense-in-depth: also include exchange positions so held stocks
         # get SELL evaluations even when position_tracker is empty (e.g.
         # after restart before restore_from_exchange completes).
+        # Also build position_map for P&L-based exit decisions (STOCK-7).
+        position_map: dict[str, object] = {}
         try:
             exchange_positions = await self._market_data.get_positions()
             exchange_held = {p.symbol for p in exchange_positions if p.quantity > 0}
             held = held | exchange_held
+            position_map = {p.symbol: p for p in exchange_positions if p.quantity > 0}
         except Exception:
             pass
 
@@ -427,11 +430,47 @@ class EvaluationLoop:
                                 evaluated.append(sig)
                         signals = evaluated
 
-                combined = self._combiner.combine(
-                    signals,
-                    weights,
-                    min_active_ratio=0.15 if is_held else None,
-                )
+                # Held positions: lower SELL threshold + bias for easier exits (STOCK-7)
+                if is_held:
+                    _hsb = getattr(self, "_held_sell_bias", 0.10)
+                    _hmc = getattr(self, "_held_min_confidence", 0.25)
+                    combined = self._combiner.combine(
+                        signals,
+                        weights,
+                        min_confidence=_hmc,
+                        min_active_ratio=0.15,
+                        held_sell_bias=_hsb,
+                    )
+                else:
+                    combined = self._combiner.combine(signals, weights)
+
+                # Sell on indifference: if no strategy has a strong opinion
+                # (HOLD) and the held position is losing beyond threshold,
+                # free up capital by selling (STOCK-7).
+                if (
+                    is_held
+                    and combined.signal_type == SignalType.HOLD
+                    and symbol in position_map
+                ):
+                    pos = position_map[symbol]
+                    if hasattr(pos, "avg_price") and pos.avg_price > 0:
+                        pnl_pct = (pos.current_price - pos.avg_price) / pos.avg_price
+                        _spt = getattr(self, "_stale_pnl_threshold", -0.03)
+                        if pnl_pct < _spt:
+                            combined = Signal(
+                                signal_type=SignalType.SELL,
+                                confidence=0.50,
+                                strategy_name="position_cleanup",
+                                reason=(
+                                    f"Sell on indifference: P&L={pnl_pct:.1%},"
+                                    f" no strategy recommends"
+                                ),
+                            )
+                            logger.info(
+                                "Position cleanup SELL for %s: P&L=%.1f%%",
+                                symbol,
+                                pnl_pct * 100,
+                            )
 
                 category = self._adaptive.get_category(symbol)
                 if category:

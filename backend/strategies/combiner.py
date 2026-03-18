@@ -86,6 +86,7 @@ class SignalCombiner:
         weights: dict[str, float],
         min_confidence: float = 0.35,
         min_active_ratio: float | None = None,
+        held_sell_bias: float = 0.0,
     ) -> Signal:
         """Combine signals using weighted voting.
 
@@ -95,6 +96,9 @@ class SignalCombiner:
             min_confidence: Minimum combined confidence to act
             min_active_ratio: Override for minimum active signal ratio
                 (default: use instance-level ``_min_active_ratio``)
+            held_sell_bias: Extra SELL confidence boost for held positions.
+                When > 0 and at least one strategy votes SELL, sell_norm
+                is increased by this amount, making exits easier.
 
         Returns:
             Combined signal
@@ -174,6 +178,12 @@ class SignalCombiner:
         # Normalize by active weight only (HOLD signals excluded from denominator)
         buy_norm = buy_score / active_weight
         sell_norm = sell_score / active_weight
+
+        # Held-position bias: boost SELL norm when evaluating held stocks.
+        # Only activates when at least one strategy already votes SELL,
+        # preventing phantom sells on stocks with no bearish signals.
+        if held_sell_bias > 0 and sell_score > 0:
+            sell_norm += held_sell_bias
 
         if buy_norm > sell_norm and buy_norm >= min_confidence:
             attribution = top_buy[1]
