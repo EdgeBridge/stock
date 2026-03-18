@@ -265,9 +265,7 @@ class PositionTracker:
 
         return None
 
-    def _check_profit_taking(
-        self, tracked: TrackedPosition, current_price: float
-    ) -> bool:
+    def _check_profit_taking(self, tracked: TrackedPosition, current_price: float) -> bool:
         """Check if partial profit-taking should be triggered.
 
         Returns True when:
@@ -490,8 +488,11 @@ class PositionTracker:
                 await self._clear_all_positions_db(sf)
             return []
 
-        # Look up latest live BUY order per symbol from DB to get entry info
-        # (paper orders excluded to prevent position quantity distortion)
+        # Look up strategy name per symbol from DB orders.
+        # Fallback chain:
+        #   1. Latest live BUY order (is_paper=False)
+        #   2. Latest BUY order of any type (including paper)
+        #   3. Latest SELL order's buy_strategy field
         entry_info: dict[str, dict] = {}
         if sf:
             try:
@@ -501,6 +502,7 @@ class PositionTracker:
 
                 async with sf() as session:
                     for pos in positions:
+                        # 1) Latest live BUY order
                         stmt = (
                             select(Order)
                             .where(
@@ -514,9 +516,48 @@ class PositionTracker:
                         )
                         result = await session.execute(stmt)
                         order = result.scalar_one_or_none()
-                        if order:
+                        if order and order.strategy_name:
                             entry_info[pos.symbol] = {
-                                "strategy": order.strategy_name or "",
+                                "strategy": order.strategy_name,
+                            }
+                            continue
+
+                        # 2) Any BUY order (including paper) as fallback
+                        stmt = (
+                            select(Order)
+                            .where(
+                                Order.symbol == pos.symbol,
+                                Order.side == "BUY",
+                                Order.status.in_(["filled", "submitted"]),
+                            )
+                            .order_by(desc(Order.created_at))
+                            .limit(1)
+                        )
+                        result = await session.execute(stmt)
+                        order = result.scalar_one_or_none()
+                        if order and order.strategy_name:
+                            entry_info[pos.symbol] = {
+                                "strategy": order.strategy_name,
+                            }
+                            continue
+
+                        # 3) SELL order's buy_strategy as last resort
+                        stmt = (
+                            select(Order)
+                            .where(
+                                Order.symbol == pos.symbol,
+                                Order.side == "SELL",
+                                Order.buy_strategy.isnot(None),
+                                Order.buy_strategy != "",
+                            )
+                            .order_by(desc(Order.created_at))
+                            .limit(1)
+                        )
+                        result = await session.execute(stmt)
+                        order = result.scalar_one_or_none()
+                        if order and order.buy_strategy:
+                            entry_info[pos.symbol] = {
+                                "strategy": order.buy_strategy,
                             }
             except Exception as e:
                 logger.warning("Failed to look up entry info from DB: %s", e)
@@ -596,11 +637,30 @@ class PositionTracker:
         """Synchronize all in-memory tracked positions to the positions DB table.
 
         Upserts current tracked positions and removes stale DB rows for
-        positions no longer tracked. Returns the number of positions synced.
+        positions no longer tracked. Fetches current prices from exchange
+        to populate current_price and unrealized_pnl. Returns the number
+        of positions synced.
         """
         sf = session_factory or self._session_factory
         if not sf:
             return 0
+
+        # Fetch current prices from exchange to populate current_price/unrealized_pnl
+        price_map: dict[str, float] = {}
+        if self._tracked:
+            try:
+                if self._market_data:
+                    positions = await self._market_data.get_positions()
+                else:
+                    positions = await self._adapter.fetch_positions()
+                price_map = {p.symbol: p.current_price for p in positions if p.current_price > 0}
+            except Exception as e:
+                logger.debug("Failed to fetch prices for DB sync: %s", e)
+
+        # Re-resolve "unknown" strategies from order history
+        unknown_symbols = [sym for sym, t in self._tracked.items() if t.strategy in ("unknown", "")]
+        if unknown_symbols:
+            await self._resolve_unknown_strategies(sf, unknown_symbols)
 
         try:
             from sqlalchemy import select
@@ -621,12 +681,14 @@ class PositionTracker:
                     if db_pos.symbol not in tracked_symbols:
                         await session.delete(db_pos)
 
-                # Upsert all currently tracked positions
+                # Upsert all currently tracked positions with current prices
                 for symbol, tracked in self._tracked.items():
+                    current_price = price_map.get(symbol)
                     await self._upsert_position_record(
                         session,
                         symbol,
                         tracked,
+                        current_price=current_price,
                     )
 
                 await session.commit()
@@ -668,6 +730,87 @@ class PositionTracker:
         ]
 
     # ── DB persistence helpers ──────────────────────────────────────────
+
+    async def _resolve_unknown_strategies(
+        self,
+        session_factory: "async_sessionmaker[AsyncSession]",
+        symbols: list[str],
+    ) -> None:
+        """Try to resolve 'unknown' strategies from order history.
+
+        Updates TrackedPosition.strategy in-memory if a match is found.
+        Uses the same fallback chain as restore_from_exchange.
+        """
+        try:
+            from sqlalchemy import desc, select
+
+            from core.models import Order
+
+            async with session_factory() as session:
+                for symbol in symbols:
+                    strategy: str | None = None
+
+                    # 1) Latest live BUY order
+                    stmt = (
+                        select(Order)
+                        .where(
+                            Order.symbol == symbol,
+                            Order.side == "BUY",
+                            Order.status.in_(["filled", "submitted"]),
+                            Order.is_paper == False,  # noqa: E712
+                        )
+                        .order_by(desc(Order.created_at))
+                        .limit(1)
+                    )
+                    result = await session.execute(stmt)
+                    order = result.scalar_one_or_none()
+                    if order and order.strategy_name:
+                        strategy = order.strategy_name
+
+                    # 2) Any BUY order as fallback
+                    if not strategy:
+                        stmt = (
+                            select(Order)
+                            .where(
+                                Order.symbol == symbol,
+                                Order.side == "BUY",
+                                Order.status.in_(["filled", "submitted"]),
+                            )
+                            .order_by(desc(Order.created_at))
+                            .limit(1)
+                        )
+                        result = await session.execute(stmt)
+                        order = result.scalar_one_or_none()
+                        if order and order.strategy_name:
+                            strategy = order.strategy_name
+
+                    # 3) SELL order's buy_strategy as last resort
+                    if not strategy:
+                        stmt = (
+                            select(Order)
+                            .where(
+                                Order.symbol == symbol,
+                                Order.side == "SELL",
+                                Order.buy_strategy.isnot(None),
+                                Order.buy_strategy != "",
+                            )
+                            .order_by(desc(Order.created_at))
+                            .limit(1)
+                        )
+                        result = await session.execute(stmt)
+                        order = result.scalar_one_or_none()
+                        if order and order.buy_strategy:
+                            strategy = order.buy_strategy
+
+                    if strategy and symbol in self._tracked:
+                        self._tracked[symbol].strategy = strategy
+                        logger.info(
+                            "Resolved strategy for %s: %s",
+                            symbol,
+                            strategy,
+                        )
+        except Exception as e:
+            logger.debug("Failed to resolve unknown strategies: %s", e)
 
     def _schedule_db_upsert(self, symbol: str) -> None:
         """Schedule a fire-and-forget DB upsert for a tracked position."""
@@ -732,8 +875,14 @@ class PositionTracker:
         session: "AsyncSession",
         symbol: str,
         tracked: TrackedPosition,
+        current_price: float | None = None,
     ) -> None:
-        """Upsert a PositionRecord within an existing session (no commit)."""
+        """Upsert a PositionRecord within an existing session (no commit).
+
+        Args:
+            current_price: Current market price. When provided, also computes
+                and stores unrealized_pnl.
+        """
         from sqlalchemy import select
 
         from core.models import PositionRecord
@@ -745,6 +894,11 @@ class PositionTracker:
         result = await session.execute(stmt)
         record = result.scalar_one_or_none()
 
+        # Calculate unrealized PnL when current price is available
+        unrealized_pnl: float | None = None
+        if current_price is not None and tracked.entry_price > 0:
+            unrealized_pnl = (current_price - tracked.entry_price) * tracked.quantity
+
         if record:
             record.quantity = tracked.quantity
             record.avg_price = tracked.entry_price
@@ -752,6 +906,10 @@ class PositionTracker:
             record.take_profit = tracked.take_profit_pct
             record.trailing_stop = tracked.trailing_stop_pct
             record.strategy_name = tracked.strategy
+            if current_price is not None:
+                record.current_price = current_price
+            if unrealized_pnl is not None:
+                record.unrealized_pnl = unrealized_pnl
             record.updated_at = datetime.utcnow()
         else:
             record = PositionRecord(
@@ -760,6 +918,8 @@ class PositionTracker:
                 exchange=self._resolve_exchange(symbol),
                 quantity=tracked.quantity,
                 avg_price=tracked.entry_price,
+                current_price=current_price,
+                unrealized_pnl=unrealized_pnl,
                 stop_loss=tracked.stop_loss_pct,
                 take_profit=tracked.take_profit_pct,
                 trailing_stop=tracked.trailing_stop_pct,

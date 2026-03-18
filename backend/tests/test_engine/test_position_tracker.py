@@ -545,8 +545,8 @@ async def test_resolve_exchange_us(adapter, risk, order_mgr):
 
 
 @pytest.mark.asyncio
-async def test_restore_paper_order_only_uses_unknown(adapter, risk, order_mgr):
-    """When only paper orders exist, strategy defaults to 'unknown'."""
+async def test_restore_paper_order_only_uses_paper_strategy(adapter, risk, order_mgr):
+    """When only paper orders exist, strategy falls back to paper order's strategy."""
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
     from core.models import Base, Order
 
@@ -590,8 +590,8 @@ async def test_restore_paper_order_only_uses_unknown(adapter, risk, order_mgr):
     restored = await tracker.restore_from_exchange(session_factory=session_factory)
 
     assert len(restored) == 1
-    # No live order found → defaults to "unknown"
-    assert restored[0]["strategy"] == "unknown"
+    # Paper BUY order found via fallback chain → uses its strategy name
+    assert restored[0]["strategy"] == "paper_strat"
 
     await engine.dispose()
 
@@ -825,7 +825,9 @@ def test_track_with_trailing_stop_params(adapter, risk_with_profit_taking):
     tracker = PositionTracker(adapter, risk, order_mgr_pt)
 
     tracker.track(
-        "AAPL", 150.0, 10,
+        "AAPL",
+        150.0,
+        10,
         strategy="trend_following",
         stop_loss_pct=0.08,
         take_profit_pct=0.20,
@@ -1056,9 +1058,7 @@ async def test_profit_taking_then_trailing_stop(adapter, risk_with_profit_taking
 
 def test_calculate_profit_take_qty():
     """Verify profit-take quantity calculation."""
-    risk = RiskManager(
-        RiskParams(profit_taking_sell_ratio=0.50)
-    )
+    risk = RiskManager(RiskParams(profit_taking_sell_ratio=0.50))
     order_mgr_mock = MagicMock()
     adapter_mock = MagicMock()
     tracker = PositionTracker(adapter_mock, risk, order_mgr_mock)
