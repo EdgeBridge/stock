@@ -1604,10 +1604,19 @@ async def lifespan(app: FastAPI):
         logger.warning("Failed to load watchlist: %s", e)
 
     # Startup position reconciliation — restore tracking from exchange
+    # Falls back to DB restore if exchange API fails (STOCK-7)
     import asyncio
     try:
         us_restored = await position_tracker.restore_from_exchange(session_factory)
+        if not us_restored:
+            us_restored = await position_tracker.restore_from_db(session_factory)
+            if us_restored:
+                logger.info("US positions restored from DB fallback: %d", len(us_restored))
         kr_restored = await kr_position_tracker.restore_from_exchange(session_factory)
+        if not kr_restored:
+            kr_restored = await kr_position_tracker.restore_from_db(session_factory)
+            if kr_restored:
+                logger.info("KR positions restored from DB fallback: %d", len(kr_restored))
 
         # Notify via Discord on startup
         startup_lines = ["System restarted — position reconciliation complete."]

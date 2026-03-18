@@ -1585,3 +1585,286 @@ class TestOpenedAtFromOrders:
         record = await _get_position(db_factory, "AAPL")
         # Should NOT use cancelled order time, should be ~now
         assert record.opened_at > cancelled_time + timedelta(days=1)
+
+
+# ── restore_from_db: Fallback Recovery (STOCK-7) ───────────────────
+
+
+class TestRestoreFromDb:
+    """Test restore_from_db() fallback when exchange API is unavailable."""
+
+    @pytest.mark.asyncio
+    async def test_restore_from_db_basic(self, adapter, risk, order_mgr, db_factory):
+        """restore_from_db should re-populate tracker from positions DB table."""
+        # First, populate DB via normal flow
+        tracker = _make_tracker(adapter, risk, order_mgr)
+        tracker.track("AAPL", 150.0, 10, strategy="trend")
+        tracker.track("MSFT", 300.0, 5, strategy="macd")
+        await tracker.sync_to_db(db_factory)
+
+        # Create a fresh tracker (simulating restart)
+        tracker2 = _make_tracker(adapter, risk, order_mgr)
+        assert len(tracker2.tracked_symbols) == 0
+
+        # Restore from DB
+        restored = await tracker2.restore_from_db(db_factory)
+        assert len(restored) == 2
+        assert set(tracker2.tracked_symbols) == {"AAPL", "MSFT"}
+
+    @pytest.mark.asyncio
+    async def test_restore_from_db_preserves_sl_tp(self, adapter, risk, order_mgr, db_factory):
+        """restore_from_db should preserve SL/TP from DB records."""
+        tracker = _make_tracker(adapter, risk, order_mgr)
+        tracker.track("AAPL", 150.0, 10, strategy="trend", stop_loss_pct=0.12, take_profit_pct=0.30)
+        await tracker.sync_to_db(db_factory)
+
+        tracker2 = _make_tracker(adapter, risk, order_mgr)
+        await tracker2.restore_from_db(db_factory)
+
+        status = {s["symbol"]: s for s in tracker2.get_status()}
+        assert status["AAPL"]["stop_loss_pct"] == 0.12
+        assert status["AAPL"]["take_profit_pct"] == 0.30
+        assert status["AAPL"]["strategy"] == "trend"
+
+    @pytest.mark.asyncio
+    async def test_restore_from_db_empty(self, adapter, risk, order_mgr, db_factory):
+        """restore_from_db returns empty list when no DB positions exist."""
+        tracker = _make_tracker(adapter, risk, order_mgr)
+        restored = await tracker.restore_from_db(db_factory)
+        assert restored == []
+        assert len(tracker.tracked_symbols) == 0
+
+    @pytest.mark.asyncio
+    async def test_restore_from_db_no_session_factory(self, adapter, risk, order_mgr):
+        """restore_from_db returns empty when no session_factory is available."""
+        tracker = _make_tracker(adapter, risk, order_mgr)
+        restored = await tracker.restore_from_db()
+        assert restored == []
+
+    @pytest.mark.asyncio
+    async def test_restore_from_db_skips_zero_quantity(self, adapter, risk, order_mgr, db_factory):
+        """restore_from_db skips records with quantity <= 0."""
+        # Manually insert a zero-qty record
+        async with db_factory() as session:
+            session.add(PositionRecord(
+                market="US",
+                symbol="DEAD",
+                exchange="NASD",
+                quantity=0,
+                avg_price=50.0,
+                strategy_name="test",
+            ))
+            await session.commit()
+
+        tracker = _make_tracker(adapter, risk, order_mgr)
+        restored = await tracker.restore_from_db(db_factory)
+        assert len(restored) == 0
+        assert "DEAD" not in tracker.tracked_symbols
+
+    @pytest.mark.asyncio
+    async def test_restore_from_db_skips_already_tracked(
+        self, adapter, risk, order_mgr, db_factory,
+    ):
+        """restore_from_db should not overwrite existing tracked positions."""
+        tracker = _make_tracker(adapter, risk, order_mgr)
+        tracker.track("AAPL", 150.0, 10, strategy="existing")
+        await tracker.sync_to_db(db_factory)
+
+        # Tracker already has AAPL, restore should skip it
+        restored = await tracker.restore_from_db(db_factory)
+        assert len(restored) == 0
+        status = {s["symbol"]: s for s in tracker.get_status()}
+        assert status["AAPL"]["strategy"] == "existing"
+
+    @pytest.mark.asyncio
+    async def test_restore_from_db_market_isolation(self, adapter, risk, order_mgr, db_factory):
+        """restore_from_db should only restore positions for its own market."""
+        # Create US positions via tracker
+        us_tracker = _make_tracker(adapter, risk, order_mgr, market="US")
+        us_tracker.track("AAPL", 150.0, 10, strategy="trend")
+        await us_tracker.sync_to_db(db_factory)
+
+        # Create KR positions via tracker
+        kr_tracker = _make_tracker(adapter, risk, order_mgr, market="KR")
+        kr_tracker.track("005930", 70000.0, 5, strategy="macd")
+        await kr_tracker.sync_to_db(db_factory)
+
+        # Fresh US tracker should only get AAPL
+        us_tracker2 = _make_tracker(adapter, risk, order_mgr, market="US")
+        us_restored = await us_tracker2.restore_from_db(db_factory)
+        assert len(us_restored) == 1
+        assert us_restored[0]["symbol"] == "AAPL"
+
+        # Fresh KR tracker should only get 005930
+        kr_tracker2 = _make_tracker(adapter, risk, order_mgr, market="KR")
+        kr_restored = await kr_tracker2.restore_from_db(db_factory)
+        assert len(kr_restored) == 1
+        assert kr_restored[0]["symbol"] == "005930"
+
+    @pytest.mark.asyncio
+    async def test_restore_from_db_returns_source_db(self, adapter, risk, order_mgr, db_factory):
+        """restore_from_db should include source='db' in results."""
+        tracker = _make_tracker(adapter, risk, order_mgr)
+        tracker.track("AAPL", 150.0, 10, strategy="trend")
+        await tracker.sync_to_db(db_factory)
+
+        tracker2 = _make_tracker(adapter, risk, order_mgr)
+        restored = await tracker2.restore_from_db(db_factory)
+        assert len(restored) == 1
+        assert restored[0]["source"] == "db"
+
+
+# ── Auto-Recovery in check_all (STOCK-7) ────────────────────────────
+
+
+class TestAutoRecoverUntracked:
+    """Test _auto_recover_untracked() called from check_all()."""
+
+    @pytest.mark.asyncio
+    async def test_check_all_triggers_auto_recover_when_empty(self, risk, order_mgr):
+        """check_all should auto-recover positions when tracker is empty."""
+        adapter = AsyncMock()
+        market_data = AsyncMock()
+        market_data.get_positions = AsyncMock(return_value=[
+            Position(
+                symbol="AAPL", exchange="NASD",
+                quantity=10, avg_price=150.0, current_price=155.0,
+            ),
+            Position(
+                symbol="MSFT", exchange="NASD",
+                quantity=5, avg_price=300.0, current_price=310.0,
+            ),
+        ])
+
+        tracker = PositionTracker(
+            adapter, risk, order_mgr, market_data=market_data, market="US",
+        )
+        assert len(tracker.tracked_symbols) == 0
+
+        # check_all should auto-recover
+        await tracker.check_all()
+
+        assert set(tracker.tracked_symbols) == {"AAPL", "MSFT"}
+
+    @pytest.mark.asyncio
+    async def test_auto_recover_cooldown(self, risk, order_mgr):
+        """Auto-recovery should respect cooldown interval."""
+        adapter = AsyncMock()
+        market_data = AsyncMock()
+        # First call: empty, second call: has positions
+        market_data.get_positions = AsyncMock(return_value=[])
+
+        tracker = PositionTracker(
+            adapter, risk, order_mgr, market_data=market_data, market="US",
+        )
+
+        # First call - should attempt recovery (cooldown starts)
+        await tracker.check_all()
+        assert market_data.get_positions.call_count == 1
+
+        # Second call - should skip recovery (within cooldown)
+        await tracker.check_all()
+        # Still 1 call because cooldown prevents re-check
+        assert market_data.get_positions.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_auto_recover_exchange_failure_falls_back_to_db(
+        self, risk, order_mgr, db_factory,
+    ):
+        """When exchange fetch fails, auto-recovery falls back to DB."""
+        adapter = AsyncMock()
+        market_data = AsyncMock()
+        market_data.get_positions = AsyncMock(side_effect=Exception("API down"))
+
+        tracker = PositionTracker(
+            adapter, risk, order_mgr, market_data=market_data,
+            session_factory=db_factory, market="US",
+        )
+
+        # Populate DB with a position (simulating previous session)
+        async with db_factory() as session:
+            session.add(PositionRecord(
+                market="US",
+                symbol="GOOG",
+                exchange="NASD",
+                quantity=3,
+                avg_price=140.0,
+                current_price=145.0,
+                strategy_name="macd",
+                stop_loss=0.08,
+                take_profit=0.20,
+            ))
+            await session.commit()
+
+        await tracker.check_all()
+        assert "GOOG" in tracker.tracked_symbols
+
+    @pytest.mark.asyncio
+    async def test_auto_recover_skips_already_tracked(self, risk, order_mgr):
+        """Auto-recovery should not overwrite already-tracked positions."""
+        adapter = AsyncMock()
+        market_data = AsyncMock()
+        market_data.get_positions = AsyncMock(return_value=[
+            Position(
+                symbol="AAPL", exchange="NASD",
+                quantity=10, avg_price=150.0, current_price=155.0,
+            ),
+        ])
+
+        tracker = PositionTracker(
+            adapter, risk, order_mgr, market_data=market_data, market="US",
+        )
+        # Pre-track with specific strategy
+        tracker.track("AAPL", 148.0, 10, strategy="my_strategy")
+
+        # Untrack triggers empty, but auto-recover should not happen
+        # because tracker is not empty
+        status_before = tracker.get_status()
+        assert status_before[0]["strategy"] == "my_strategy"
+
+    @pytest.mark.asyncio
+    async def test_auto_recover_skips_zero_quantity(self, risk, order_mgr):
+        """Auto-recovery should skip positions with zero quantity."""
+        adapter = AsyncMock()
+        market_data = AsyncMock()
+        market_data.get_positions = AsyncMock(return_value=[
+            Position(
+                symbol="DEAD", exchange="NASD",
+                quantity=0, avg_price=50.0, current_price=45.0,
+            ),
+            Position(
+                symbol="LIVE", exchange="NASD",
+                quantity=5, avg_price=100.0, current_price=105.0,
+            ),
+        ])
+
+        tracker = PositionTracker(
+            adapter, risk, order_mgr, market_data=market_data, market="US",
+        )
+        await tracker.check_all()
+        assert "DEAD" not in tracker.tracked_symbols
+        assert "LIVE" in tracker.tracked_symbols
+
+    @pytest.mark.asyncio
+    async def test_check_all_no_auto_recover_when_tracked_exists(
+        self, risk, order_mgr,
+    ):
+        """check_all should NOT auto-recover when tracker has positions."""
+        adapter = AsyncMock()
+        market_data = AsyncMock()
+        market_data.get_positions = AsyncMock(return_value=[
+            Position(
+                symbol="AAPL", exchange="NASD",
+                quantity=10, avg_price=150.0, current_price=155.0,
+            ),
+        ])
+
+        tracker = PositionTracker(
+            adapter, risk, order_mgr, market_data=market_data, market="US",
+        )
+        tracker.track("AAPL", 150.0, 10, strategy="existing")
+
+        # check_all should evaluate normally without auto-recover
+        await tracker.check_all()
+        # get_positions called for SL/TP evaluation, not for recovery
+        assert "AAPL" in tracker.tracked_symbols
