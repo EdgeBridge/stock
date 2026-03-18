@@ -2195,3 +2195,218 @@ class TestSellCooldownDefault:
     async def test_recovery_watch_initialized_empty(self, eval_loop):
         """Recovery watch should start empty."""
         assert eval_loop._recovery_watch == {}
+
+
+# ── STOCK-7: Held-position SELL improvements ────────────────────────
+
+
+class TestHeldPositionSellBias:
+    """Test lower min_confidence and sell-on-indifference for held positions."""
+
+    @pytest.fixture
+    def loop_with_held(self, mock_adapter, mock_market_data, mock_registry):
+        """Evaluation loop configured with a held position in exchange."""
+        from data.indicator_service import IndicatorService
+        from strategies.combiner import SignalCombiner
+
+        risk = RiskManager()
+        order_mgr = OrderManager(adapter=mock_adapter, risk_manager=risk)
+        position_tracker = MagicMock()
+        position_tracker.tracked_symbols = ["AAPL"]
+        position_tracker.get_buy_strategy.return_value = "trend_following"
+
+        # Exchange shows held position with P&L = -5%
+        mock_market_data.get_positions = AsyncMock(return_value=[
+            Position(
+                symbol="AAPL", exchange="NASD", quantity=10,
+                avg_price=150.0, current_price=142.0,  # -5.3%
+            ),
+        ])
+
+        loop = EvaluationLoop(
+            adapter=mock_adapter,
+            market_data=mock_market_data,
+            indicator_svc=IndicatorService(),
+            registry=mock_registry,
+            combiner=SignalCombiner(),
+            order_manager=order_mgr,
+            risk_manager=risk,
+            watchlist=["AAPL"],
+            market_state="uptrend",
+            interval_sec=1,
+            position_tracker=position_tracker,
+        )
+        return loop
+
+    @pytest.mark.asyncio
+    async def test_held_sell_bias_attribute_defaults(self, loop_with_held):
+        """Held-position attributes should have correct defaults."""
+        assert getattr(loop_with_held, "_held_sell_bias", 0.10) == 0.10
+        assert getattr(loop_with_held, "_held_min_confidence", 0.25) == 0.25
+        assert getattr(loop_with_held, "_stale_pnl_threshold", -0.03) == -0.03
+
+    @pytest.mark.asyncio
+    async def test_sell_on_indifference_triggered(
+        self, mock_adapter, mock_market_data, mock_registry,
+    ):
+        """HOLD + P&L < -3% on held position should trigger position_cleanup SELL."""
+        from data.indicator_service import IndicatorService
+        from strategies.combiner import SignalCombiner
+
+        # Set up all strategies to return HOLD (indifference)
+        hold_strategy = AsyncMock()
+        hold_strategy.name = "trend_following"
+        hold_strategy.analyze = AsyncMock(
+            return_value=Signal(
+                signal_type=SignalType.HOLD,
+                confidence=0.5,
+                strategy_name="trend_following",
+                reason="neutral",
+            )
+        )
+        mock_registry.get_enabled.return_value = [hold_strategy]
+        mock_registry.get_profile_weights.return_value = {"trend_following": 1.0}
+        mock_registry.get_trailing_stop_config.return_value = None
+
+        risk = RiskManager()
+        order_mgr = OrderManager(adapter=mock_adapter, risk_manager=risk)
+        position_tracker = MagicMock()
+        position_tracker.tracked_symbols = ["AAPL"]
+        position_tracker.get_buy_strategy.return_value = "trend_following"
+
+        # AAPL held at loss (-5.3%)
+        mock_market_data.get_positions = AsyncMock(return_value=[
+            Position(
+                symbol="AAPL", exchange="NASD", quantity=10,
+                avg_price=150.0, current_price=142.0,
+            ),
+        ])
+
+        mock_adapter.create_sell_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="S1", symbol="AAPL", side="SELL",
+                order_type="market", quantity=10, price=142.0, status="filled",
+            )
+        )
+
+        loop = EvaluationLoop(
+            adapter=mock_adapter,
+            market_data=mock_market_data,
+            indicator_svc=IndicatorService(),
+            registry=mock_registry,
+            combiner=SignalCombiner(),
+            order_manager=order_mgr,
+            risk_manager=risk,
+            watchlist=[],
+            market_state="uptrend",
+            interval_sec=1,
+            position_tracker=position_tracker,
+        )
+
+        await loop._evaluate_all()
+
+        # Should have called place_sell for position_cleanup
+        mock_adapter.create_sell_order.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_sell_on_indifference_not_triggered_above_threshold(
+        self, mock_adapter, mock_market_data, mock_registry,
+    ):
+        """HOLD + P&L > -3% should NOT trigger sell on indifference."""
+        from data.indicator_service import IndicatorService
+        from strategies.combiner import SignalCombiner
+
+        hold_strategy = AsyncMock()
+        hold_strategy.name = "trend_following"
+        hold_strategy.analyze = AsyncMock(
+            return_value=Signal(
+                signal_type=SignalType.HOLD,
+                confidence=0.5,
+                strategy_name="trend_following",
+                reason="neutral",
+            )
+        )
+        mock_registry.get_enabled.return_value = [hold_strategy]
+        mock_registry.get_profile_weights.return_value = {"trend_following": 1.0}
+
+        risk = RiskManager()
+        order_mgr = OrderManager(adapter=mock_adapter, risk_manager=risk)
+        position_tracker = MagicMock()
+        position_tracker.tracked_symbols = ["AAPL"]
+        position_tracker.get_buy_strategy.return_value = "trend_following"
+
+        # AAPL held at small loss (-1%)
+        mock_market_data.get_positions = AsyncMock(return_value=[
+            Position(
+                symbol="AAPL", exchange="NASD", quantity=10,
+                avg_price=150.0, current_price=148.5,  # -1%
+            ),
+        ])
+
+        loop = EvaluationLoop(
+            adapter=mock_adapter,
+            market_data=mock_market_data,
+            indicator_svc=IndicatorService(),
+            registry=mock_registry,
+            combiner=SignalCombiner(),
+            order_manager=order_mgr,
+            risk_manager=risk,
+            watchlist=[],
+            market_state="uptrend",
+            interval_sec=1,
+            position_tracker=position_tracker,
+        )
+
+        await loop._evaluate_all()
+
+        # Should NOT sell — loss is above threshold
+        mock_adapter.create_sell_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_held_uses_default_confidence(
+        self, mock_adapter, mock_market_data, mock_registry,
+    ):
+        """Non-held positions should still use default min_confidence (0.35)."""
+        from data.indicator_service import IndicatorService
+        from strategies.combiner import SignalCombiner
+
+        # Strategy returns low-confidence BUY
+        low_buy = AsyncMock()
+        low_buy.name = "trend_following"
+        low_buy.analyze = AsyncMock(
+            return_value=Signal(
+                signal_type=SignalType.BUY,
+                confidence=0.30,  # Below default 0.35 threshold
+                strategy_name="trend_following",
+                reason="weak buy",
+            )
+        )
+        mock_registry.get_enabled.return_value = [low_buy]
+        mock_registry.get_profile_weights.return_value = {"trend_following": 1.0}
+        mock_registry.get_trailing_stop_config.return_value = None
+
+        risk = RiskManager()
+        order_mgr = OrderManager(adapter=mock_adapter, risk_manager=risk)
+        position_tracker = MagicMock()
+        position_tracker.tracked_symbols = []
+
+        mock_market_data.get_positions = AsyncMock(return_value=[])
+
+        loop = EvaluationLoop(
+            adapter=mock_adapter,
+            market_data=mock_market_data,
+            indicator_svc=IndicatorService(),
+            registry=mock_registry,
+            combiner=SignalCombiner(),
+            order_manager=order_mgr,
+            risk_manager=risk,
+            watchlist=["NEWSTOCK"],
+            market_state="uptrend",
+            interval_sec=1,
+            position_tracker=position_tracker,
+        )
+
+        await loop._evaluate_all()
+
+        # Should NOT buy — confidence (0.30) below default threshold (0.35)
+        mock_adapter.create_buy_order.assert_not_called()

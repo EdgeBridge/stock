@@ -571,3 +571,67 @@ class TestMinActiveRatioOverride:
         ]
         result_remapped = combiner.combine(remapped, weights, min_active_ratio=0.15)
         assert result_remapped.signal_type == SignalType.SELL
+
+
+# ── held_sell_bias (STOCK-7) ────────────────────────────────────────
+
+
+class TestHeldSellBias:
+    """Test held_sell_bias parameter for easier exits on held stocks."""
+
+    def test_sell_bias_boosts_sell_over_threshold(self):
+        """held_sell_bias should boost sell_norm past min_confidence."""
+        combiner = SignalCombiner()
+        signals = [
+            _signal("trend_following", SignalType.HOLD, 0.5),
+            _signal("rsi_divergence", SignalType.SELL, 0.3),
+        ]
+        weights = {"trend_following": 0.15, "rsi_divergence": 0.15}
+
+        # Without bias: SELL conf=0.30 < 0.35 threshold → HOLD
+        result_no_bias = combiner.combine(signals, weights, min_confidence=0.35)
+        assert result_no_bias.signal_type == SignalType.HOLD
+
+        # With bias=0.10: sell_norm becomes 0.30+0.10=0.40 ≥ 0.35 → SELL
+        result_bias = combiner.combine(
+            signals, weights, min_confidence=0.35, held_sell_bias=0.10,
+        )
+        assert result_bias.signal_type == SignalType.SELL
+
+    def test_sell_bias_zero_sell_no_phantom(self):
+        """held_sell_bias should NOT create phantom sells when no strategy votes SELL."""
+        combiner = SignalCombiner()
+        signals = [
+            _signal("trend_following", SignalType.BUY, 0.6),
+            _signal("rsi_divergence", SignalType.HOLD, 0.5),
+        ]
+        weights = {"trend_following": 0.15, "rsi_divergence": 0.15}
+
+        # With bias: but no SELL votes → sell_score=0, bias not applied
+        result = combiner.combine(
+            signals, weights, min_confidence=0.35, held_sell_bias=0.20,
+        )
+        assert result.signal_type == SignalType.BUY
+
+    def test_sell_bias_respects_lower_min_confidence(self):
+        """held_sell_bias combined with lower min_confidence for held positions."""
+        combiner = SignalCombiner()
+        signals = [
+            _signal("trend_following", SignalType.HOLD, 0.5),
+            _signal("supertrend", SignalType.HOLD, 0.5),
+            _signal("rsi_divergence", SignalType.SELL, 0.25),
+        ]
+        weights = {
+            "trend_following": 0.15,
+            "supertrend": 0.15,
+            "rsi_divergence": 0.10,
+        }
+
+        # Low SELL conf + bias + low threshold → SELL
+        result = combiner.combine(
+            signals, weights,
+            min_confidence=0.25,
+            held_sell_bias=0.10,
+            min_active_ratio=0.15,
+        )
+        assert result.signal_type == SignalType.SELL
