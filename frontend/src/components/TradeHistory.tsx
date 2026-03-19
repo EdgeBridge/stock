@@ -24,46 +24,46 @@ function formatKST(utcStr: string): string {
   })
 }
 
-/** Extract KST date string (YYYY-MM-DD) for grouping. */
+/** Extract KST date string (YYYY-MM-DD) for grouping.
+ *  Uses 'en-CA' locale which reliably produces YYYY-MM-DD across all engines. */
+const _kstDateFmt = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Seoul',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+})
+
 function getKSTDate(utcStr: string): string {
   if (!utcStr) return ''
   const isoStr = utcStr.includes('T') || utcStr.endsWith('Z') ? utcStr : utcStr + 'Z'
   const d = new Date(isoStr)
   if (isNaN(d.getTime())) return ''
-  // Format as YYYY-MM-DD in KST
-  const parts = d.toLocaleDateString('ko-KR', {
-    timeZone: 'Asia/Seoul',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  })
-  // ko-KR returns "2026. 03. 19." — normalize to YYYY-MM-DD
-  const nums = parts.replace(/[^0-9]/g, ' ').trim().split(/\s+/)
-  if (nums.length >= 3) return `${nums[0]}-${nums[1].padStart(2, '0')}-${nums[2].padStart(2, '0')}`
-  return parts
+  return _kstDateFmt.format(d)
 }
 
-/** Format date string as a readable group header label. */
+/** Format date string as a readable group header label.
+ *  dateStr is already a KST YYYY-MM-DD string — parse it directly to avoid
+ *  timezone-dependent Date methods producing wrong month/day. */
 function formatDateLabel(dateStr: string): string {
   if (!dateStr) return ''
+  const parts = dateStr.split('-').map(Number)
+  if (parts.length < 3 || parts.some(isNaN)) return dateStr
+  const [, m, dd] = parts
+  // Build a KST date just to extract the weekday name
   const d = new Date(dateStr + 'T00:00:00+09:00')
-  if (isNaN(d.getTime())) return dateStr
-  const dayNames = ['일', '월', '화', '수', '목', '금', '토']
-  const dayOfWeek = d.toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', weekday: 'short' })
-  const month = d.getMonth() + 1
-  const day = d.getDate()
-  // Use the weekday from toLocaleDateString if available, fallback to manual
-  const weekday = dayOfWeek || dayNames[d.getDay()]
-  return `${month}월 ${day}일 (${weekday})`
+  const weekday = isNaN(d.getTime())
+    ? ''
+    : d.toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', weekday: 'short' })
+  return `${m}월 ${dd}일 (${weekday})`
 }
+
+type TradeList = NonNullable<ReturnType<typeof useTrades>['data']>
 
 interface DateGroup {
   date: string
   label: string
-  trades: typeof _dummyTrades
+  trades: TradeList
 }
-// Type helper — infer Trade array type from useTrades
-const _dummyTrades: NonNullable<ReturnType<typeof useTrades>['data']> = []
 
 export default function TradeHistory() {
   const [page, setPage] = useState(0)

@@ -79,8 +79,10 @@ export const removeFromWatchlist = (symbol: string, market = 'US') =>
   api.delete<WatchlistResponse>(`/watchlist/${symbol}`, { params: { market } }).then(r => r.data)
 
 // Trades
-export const fetchTrades = (limit = 50, market?: string, offset = 0) =>
-  api.get<Trade[]>('/trades/', { params: { limit, offset, ...(market && { market }) } }).then(r => r.data)
+export const fetchTrades = (opts: { limit?: number; market?: string; offset?: number } = {}) => {
+  const { limit = 50, market, offset = 0 } = opts
+  return api.get<Trade[]>('/trades/', { params: { limit, offset, ...(market && { market }) } }).then(r => r.data)
+}
 
 export const fetchTradeSummary = (market?: string) =>
   api.get<TradeSummary>('/trades/summary', { params: { ...(market && { market }) } }).then(r => r.data)

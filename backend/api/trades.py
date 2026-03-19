@@ -45,8 +45,9 @@ async def get_trades(
             trades = [t for t in trades if t.get("symbol") == symbol.upper()]
         if market:
             trades = [t for t in trades if t.get("market", "US") == market]
-        # Reverse to newest-first, then apply offset+limit pagination
-        newest_first = list(reversed(trades))
+        # Sort by created_at descending (newest-first) for consistent ordering
+        # even when trades were inserted out of chronological order
+        newest_first = sorted(trades, key=lambda t: t.get('created_at', ''), reverse=True)
         result = newest_first[offset : offset + limit]
 
         # Batch-resolve missing names (fills cache for future calls)
