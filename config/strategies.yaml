@@ -54,25 +54,25 @@ global:
 # Market state -> strategy weight profiles
 profiles:
   strong_uptrend:
-    trend_following: 0.20
-    dual_momentum: 0.15
+    trend_following: 0.22    # STOCK-35: +0.02 from cis_momentum reduction
+    dual_momentum: 0.18     # STOCK-35: +0.03 from cis_momentum reduction
     donchian_breakout: 0.10
     supertrend: 0.10
-    cis_momentum: 0.15
+    cis_momentum: 0.05      # STOCK-35: 0.15 -> 0.05 (25% WR, -159K PnL)
     larry_williams: 0.10
     bnf_deviation: 0.05
-    volume_surge: 0.15
+    volume_surge: 0.20      # STOCK-35: +0.05 from cis_momentum reduction
 
   uptrend:
     trend_following: 0.15
-    dual_momentum: 0.15
+    dual_momentum: 0.17     # STOCK-35: +0.02 from cis_momentum reduction
     donchian_breakout: 0.10
     supertrend: 0.10
     macd_histogram: 0.05
-    cis_momentum: 0.10
+    cis_momentum: 0.05      # STOCK-35: 0.10 -> 0.05 (poor live performance)
     larry_williams: 0.10
     bnf_deviation: 0.10
-    volume_surge: 0.15
+    volume_surge: 0.18      # STOCK-35: +0.03 from cis_momentum reduction
 
   sideways:
     trend_following: 0.05
@@ -80,10 +80,10 @@ profiles:
     donchian_breakout: 0.05
     supertrend: 0.05
     macd_histogram: 0.10
-    rsi_divergence: 0.15
-    bollinger_squeeze: 0.15
+    rsi_divergence: 0.16    # STOCK-35: +0.01 from cis_momentum reduction
+    bollinger_squeeze: 0.16  # STOCK-35: +0.01 from cis_momentum reduction
     volume_profile: 0.10
-    cis_momentum: 0.05
+    cis_momentum: 0.03      # STOCK-35: 0.05 -> 0.03 (minimal in sideways)
     larry_williams: 0.05
     bnf_deviation: 0.10
     volume_surge: 0.10
@@ -106,12 +106,12 @@ profiles:
 stock_profiles:
   growth_momentum:
     # High-growth stocks with strong momentum (e.g. NVDA, META)
-    dual_momentum: 0.20
-    cis_momentum: 0.18
-    trend_following: 0.15
+    dual_momentum: 0.24     # STOCK-35: +0.04 from cis_momentum reduction
+    cis_momentum: 0.08      # STOCK-35: 0.18 -> 0.08 (poor live performance)
+    trend_following: 0.18    # STOCK-35: +0.03 from cis_momentum reduction
     supertrend: 0.15
     sector_rotation: 0.12
-    donchian_breakout: 0.10
+    donchian_breakout: 0.13  # STOCK-35: +0.03 from cis_momentum reduction
     regime_switch: 0.05
     volume_profile: 0.05
 
@@ -140,13 +140,13 @@ stock_profiles:
 
   high_volatility:
     # High-volatility stocks needing careful risk management
-    supertrend: 0.18
-    rsi_divergence: 0.15
-    bnf_deviation: 0.15
+    supertrend: 0.20        # STOCK-35: +0.02 from cis_momentum reduction
+    rsi_divergence: 0.16    # STOCK-35: +0.01 from cis_momentum reduction
+    bnf_deviation: 0.17     # STOCK-35: +0.02 from cis_momentum reduction
     donchian_breakout: 0.15
-    cis_momentum: 0.12
+    cis_momentum: 0.05      # STOCK-35: 0.12 -> 0.05 (poor live performance)
     trend_following: 0.10
-    bollinger_squeeze: 0.10
+    bollinger_squeeze: 0.12  # STOCK-35: +0.02 from cis_momentum reduction
     macd_histogram: 0.05
 
 # Adaptive weight blending
@@ -320,6 +320,11 @@ strategies:
       roc_short_sell: -3.0
       roc_long_sell: -5.0
       volume_ratio_threshold: 1.2
+      # STOCK-35: trend filter — prevent buying into downtrends
+      trend_sma_period: 50
+      # STOCK-35: momentum decay exit — catch gradual declines
+      roc_short_sell_weak: -1.0   # softer than roc_short_sell (-3.0)
+      roc_long_sell_weak: -2.0    # softer than roc_long_sell (-5.0)
     stop_loss:
       type: fixed_pct
       max_pct: 0.12         # SL/TP optimized: wide
