@@ -123,7 +123,31 @@ async def trade_summary(market: str | None = None):
 
 
 def record_trade(trade: dict) -> None:
-    """Record a trade to in-memory log AND persist to DB."""
+    """Record a trade to in-memory log AND persist to DB.
+
+    Idempotent: if an entry with the same non-empty order_id already exists
+    in the trade log, merges new data into the existing entry (preserving
+    PnL if already set). This prevents duplicate rows when both place_sell()
+    and reconciliation record the same order (STOCK-33).
+    """
+    order_id = trade.get("order_id", "")
+
+    # Dedup: merge into existing entry if order_id matches
+    if order_id:
+        for existing in _trade_log:
+            if existing.get("order_id") == order_id:
+                _merge_trade_entry(existing, trade)
+                # Still persist to DB — save_order UPSERT handles DB-level dedup
+                if _session_factory:
+                    import asyncio
+
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(_persist_trade(existing))
+                    except RuntimeError:
+                        pass
+                return
+
     _trade_log.append(trade)
 
     # Async DB persist (fire-and-forget via session factory)
@@ -135,6 +159,22 @@ def record_trade(trade: dict) -> None:
             loop.create_task(_persist_trade(trade))
         except RuntimeError:
             pass  # No event loop — skip DB persist
+
+
+def _merge_trade_entry(existing: dict, new: dict) -> None:
+    """Merge new trade data into an existing entry, preserving PnL.
+
+    Rules:
+    - PnL/pnl_pct: never overwrite a real value with None
+    - status: never downgrade from 'filled'
+    - All other fields: overwrite with new value if provided
+    """
+    for key, value in new.items():
+        if key in ("pnl", "pnl_pct") and value is None and existing.get(key) is not None:
+            continue  # Don't overwrite real PnL with None
+        if key == "status" and existing.get("status") == "filled" and value != "filled":
+            continue  # Don't downgrade from filled
+        existing[key] = value
 
 
 async def _persist_trade(trade: dict) -> None:
@@ -193,6 +233,10 @@ def _order_to_dict(o) -> dict:
 async def restore_trade_log(exclude_paper: bool = True) -> int:
     """Restore in-memory trade log from DB on startup.
 
+    Deduplicates by kis_order_id: when multiple rows share the same non-empty
+    kis_order_id, keeps only the one with PnL data (or the newest if neither
+    has PnL). This cleans up any duplicates that slipped into the DB (STOCK-33).
+
     Args:
         exclude_paper: If True (default), paper orders are excluded from the
             restored trade log to prevent position/PnL distortion.
@@ -211,8 +255,21 @@ async def restore_trade_log(exclude_paper: bool = True) -> int:
                 exclude_paper=exclude_paper,
             )
             _trade_log.clear()
+            seen_order_ids: dict[str, int] = {}  # order_id -> index in _trade_log
             for o in reversed(orders):  # oldest first
-                _trade_log.append(_order_to_dict(o))
+                entry = _order_to_dict(o)
+                oid = entry.get("order_id", "")
+                if oid and oid in seen_order_ids:
+                    # Duplicate kis_order_id — keep the one with PnL
+                    idx = seen_order_ids[oid]
+                    existing = _trade_log[idx]
+                    if entry.get("pnl") is not None and existing.get("pnl") is None:
+                        _trade_log[idx] = entry  # Replace with the one that has PnL
+                    # else: keep existing (it has PnL or both have it)
+                    continue
+                if oid:
+                    seen_order_ids[oid] = len(_trade_log)
+                _trade_log.append(entry)
         logger.info("Restored %d trades from DB into trade log", len(_trade_log))
         return len(_trade_log)
     except Exception as e:

@@ -11,6 +11,7 @@ from api.trades import (
     update_order_in_db,
     init_trades,
     _order_to_dict,
+    _merge_trade_entry,
 )
 
 
@@ -515,3 +516,371 @@ class TestExchangeFieldPersistence:
 
         call_kwargs = mock_repo.save_order.call_args.kwargs
         assert call_kwargs["exchange"] == "NASD"
+
+
+# --- STOCK-33: Sell record deduplication ---
+
+
+class TestMergeTradeEntry:
+    """Unit tests for _merge_trade_entry helper."""
+
+    def test_merge_preserves_pnl_when_new_is_none(self):
+        """New entry with pnl=None should not overwrite existing PnL."""
+        existing = {"order_id": "X", "pnl": 120.0, "pnl_pct": 5.2}
+        new = {"order_id": "X", "pnl": None, "pnl_pct": None, "status": "filled"}
+        _merge_trade_entry(existing, new)
+        assert existing["pnl"] == 120.0
+        assert existing["pnl_pct"] == 5.2
+
+    def test_merge_updates_pnl_when_existing_is_none(self):
+        """Existing entry with pnl=None should accept new PnL."""
+        existing = {"order_id": "X", "pnl": None, "pnl_pct": None}
+        new = {"order_id": "X", "pnl": 200.0, "pnl_pct": 3.5}
+        _merge_trade_entry(existing, new)
+        assert existing["pnl"] == 200.0
+        assert existing["pnl_pct"] == 3.5
+
+    def test_merge_updates_pnl_when_both_have_values(self):
+        """When both have PnL, new value overwrites (correction scenario)."""
+        existing = {"order_id": "X", "pnl": 100.0}
+        new = {"order_id": "X", "pnl": 150.0}
+        _merge_trade_entry(existing, new)
+        assert existing["pnl"] == 150.0
+
+    def test_merge_does_not_downgrade_filled_status(self):
+        """Status should not be downgraded from 'filled' to 'pending'."""
+        existing = {"order_id": "X", "status": "filled"}
+        new = {"order_id": "X", "status": "pending"}
+        _merge_trade_entry(existing, new)
+        assert existing["status"] == "filled"
+
+    def test_merge_upgrades_pending_to_filled(self):
+        """Status should be upgraded from 'pending' to 'filled'."""
+        existing = {"order_id": "X", "status": "pending"}
+        new = {"order_id": "X", "status": "filled"}
+        _merge_trade_entry(existing, new)
+        assert existing["status"] == "filled"
+
+    def test_merge_updates_other_fields(self):
+        """Non-PnL, non-status fields should be updated normally."""
+        existing = {"order_id": "X", "filled_price": None, "filled_quantity": 0}
+        new = {"order_id": "X", "filled_price": 155.0, "filled_quantity": 10}
+        _merge_trade_entry(existing, new)
+        assert existing["filled_price"] == 155.0
+        assert existing["filled_quantity"] == 10
+
+    def test_merge_adds_new_keys(self):
+        """New keys not present in existing should be added."""
+        existing = {"order_id": "X"}
+        new = {"order_id": "X", "market": "US", "strategy": "trend"}
+        _merge_trade_entry(existing, new)
+        assert existing["market"] == "US"
+        assert existing["strategy"] == "trend"
+
+
+class TestRecordTradeDedup:
+    """STOCK-33: record_trade() should be idempotent for same order_id."""
+
+    def test_duplicate_order_id_merges_instead_of_appending(self):
+        """Recording same order_id twice should result in 1 entry, not 2."""
+        record_trade({
+            "order_id": "SELL001",
+            "symbol": "AAPL",
+            "side": "SELL",
+            "pnl": 120.0,
+            "pnl_pct": 5.0,
+            "status": "filled",
+        })
+        assert len(_trade_log) == 1
+
+        # Reconciliation records same order without PnL
+        record_trade({
+            "order_id": "SELL001",
+            "symbol": "AAPL",
+            "side": "SELL",
+            "pnl": None,
+            "pnl_pct": None,
+            "status": "filled",
+            "filled_price": 155.0,
+        })
+
+        # Still only 1 entry
+        assert len(_trade_log) == 1
+        # PnL preserved from first recording
+        assert _trade_log[0]["pnl"] == 120.0
+        assert _trade_log[0]["pnl_pct"] == 5.0
+        # filled_price updated from second recording
+        assert _trade_log[0]["filled_price"] == 155.0
+
+    def test_different_order_ids_append_separately(self):
+        """Different order_ids should create separate entries."""
+        record_trade({"order_id": "A", "symbol": "AAPL", "side": "SELL"})
+        record_trade({"order_id": "B", "symbol": "MSFT", "side": "SELL"})
+        assert len(_trade_log) == 2
+
+    def test_empty_order_id_always_appends(self):
+        """Orders without order_id should always append (no dedup)."""
+        record_trade({"order_id": "", "symbol": "AAPL", "side": "BUY"})
+        record_trade({"order_id": "", "symbol": "MSFT", "side": "BUY"})
+        assert len(_trade_log) == 2
+
+    def test_no_order_id_key_always_appends(self):
+        """Orders without order_id key should always append."""
+        record_trade({"symbol": "AAPL", "side": "BUY"})
+        record_trade({"symbol": "MSFT", "side": "BUY"})
+        assert len(_trade_log) == 2
+
+    def test_reconciliation_after_sell_scenario(self):
+        """Simulate exact STOCK-33 bug: place_sell then reconciliation."""
+        # Step 1: place_sell records SELL with PnL
+        record_trade({
+            "order_id": "0020703700",
+            "symbol": "011200",
+            "side": "SELL",
+            "quantity": 10,
+            "price": 5000,
+            "pnl": 120.0,
+            "pnl_pct": 2.4,
+            "status": "filled",
+            "market": "KR",
+        })
+        assert len(_trade_log) == 1
+        assert _trade_log[0]["pnl"] == 120.0
+
+        # Step 2: Reconciliation records same order without PnL
+        record_trade({
+            "order_id": "0020703700",
+            "symbol": "011200",
+            "side": "SELL",
+            "quantity": 10,
+            "price": 5000,
+            "filled_price": 5012.0,
+            "filled_quantity": 10,
+            "strategy": "",
+            "status": "filled",
+            "market": "KR",
+            "created_at": "",
+        })
+
+        # Must be exactly 1 entry
+        assert len(_trade_log) == 1
+        # PnL preserved
+        assert _trade_log[0]["pnl"] == 120.0
+        assert _trade_log[0]["pnl_pct"] == 2.4
+        # filled_price updated from reconciliation
+        assert _trade_log[0]["filled_price"] == 5012.0
+
+
+class TestRestoreTradeLogDedup:
+    """STOCK-33: restore_trade_log should deduplicate DB rows by order_id."""
+
+    @pytest.mark.asyncio
+    async def test_restore_deduplicates_by_order_id(self):
+        """DB rows with same kis_order_id should be deduplicated, keeping PnL."""
+        # Two DB rows for same order — one with PnL, one without
+        mock_order_with_pnl = MagicMock()
+        mock_order_with_pnl.id = 1
+        mock_order_with_pnl.kis_order_id = "SELL001"
+        mock_order_with_pnl.symbol = "AAPL"
+        mock_order_with_pnl.side = "SELL"
+        mock_order_with_pnl.quantity = 10
+        mock_order_with_pnl.price = 150.0
+        mock_order_with_pnl.filled_price = 155.0
+        mock_order_with_pnl.filled_quantity = 10
+        mock_order_with_pnl.status = "filled"
+        mock_order_with_pnl.strategy_name = "trend"
+        mock_order_with_pnl.pnl = 50.0
+        mock_order_with_pnl.market = "US"
+        mock_order_with_pnl.created_at = "2026-03-12 04:26:13"
+
+        mock_order_no_pnl = MagicMock()
+        mock_order_no_pnl.id = 2
+        mock_order_no_pnl.kis_order_id = "SELL001"
+        mock_order_no_pnl.symbol = "AAPL"
+        mock_order_no_pnl.side = "SELL"
+        mock_order_no_pnl.quantity = 10
+        mock_order_no_pnl.price = 150.0
+        mock_order_no_pnl.filled_price = 155.0
+        mock_order_no_pnl.filled_quantity = 10
+        mock_order_no_pnl.status = "filled"
+        mock_order_no_pnl.strategy_name = "trend"
+        mock_order_no_pnl.pnl = None
+        mock_order_no_pnl.market = "US"
+        mock_order_no_pnl.created_at = "2026-03-12 04:29:53"
+
+        # Unique order (should be preserved)
+        mock_unique = MagicMock()
+        mock_unique.id = 3
+        mock_unique.kis_order_id = "BUY002"
+        mock_unique.symbol = "MSFT"
+        mock_unique.side = "BUY"
+        mock_unique.quantity = 5
+        mock_unique.price = 400.0
+        mock_unique.filled_price = 400.0
+        mock_unique.filled_quantity = 5
+        mock_unique.status = "filled"
+        mock_unique.strategy_name = "momentum"
+        mock_unique.pnl = None
+        mock_unique.market = "US"
+        mock_unique.created_at = "2026-03-12 03:00:00"
+
+        # DB returns newest first (order of get_trade_history)
+        mock_repo = AsyncMock()
+        mock_repo.get_trade_history = AsyncMock(
+            return_value=[mock_order_no_pnl, mock_order_with_pnl, mock_unique]
+        )
+
+        mock_session = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_session)
+
+        with patch("api.trades._session_factory", mock_factory):
+            with patch("db.trade_repository.TradeRepository", return_value=mock_repo):
+                count = await restore_trade_log()
+
+        # 2 unique entries (not 3 with duplicate)
+        assert count == 2
+        assert len(_trade_log) == 2
+
+        # Verify PnL entry was kept
+        sell_entry = next(t for t in _trade_log if t["order_id"] == "SELL001")
+        assert sell_entry["pnl"] == 50.0
+
+        # Unique entry preserved
+        buy_entry = next(t for t in _trade_log if t["order_id"] == "BUY002")
+        assert buy_entry["symbol"] == "MSFT"
+
+    @pytest.mark.asyncio
+    async def test_restore_dedup_keeps_pnl_entry_over_none(self):
+        """When duplicates exist, entry with PnL wins regardless of order."""
+        # PnL entry appears AFTER no-PnL entry (reverse chronological order in DB)
+        mock_order_no_pnl = MagicMock()
+        mock_order_no_pnl.id = 2
+        mock_order_no_pnl.kis_order_id = "X"
+        mock_order_no_pnl.symbol = "AAPL"
+        mock_order_no_pnl.side = "SELL"
+        mock_order_no_pnl.quantity = 10
+        mock_order_no_pnl.price = 150.0
+        mock_order_no_pnl.filled_price = 155.0
+        mock_order_no_pnl.filled_quantity = 10
+        mock_order_no_pnl.status = "filled"
+        mock_order_no_pnl.strategy_name = ""
+        mock_order_no_pnl.pnl = None
+        mock_order_no_pnl.market = "US"
+        mock_order_no_pnl.created_at = "2026-03-12 04:29:53"
+
+        mock_order_with_pnl = MagicMock()
+        mock_order_with_pnl.id = 1
+        mock_order_with_pnl.kis_order_id = "X"
+        mock_order_with_pnl.symbol = "AAPL"
+        mock_order_with_pnl.side = "SELL"
+        mock_order_with_pnl.quantity = 10
+        mock_order_with_pnl.price = 150.0
+        mock_order_with_pnl.filled_price = 155.0
+        mock_order_with_pnl.filled_quantity = 10
+        mock_order_with_pnl.status = "filled"
+        mock_order_with_pnl.strategy_name = "trend"
+        mock_order_with_pnl.pnl = 50.0
+        mock_order_with_pnl.market = "US"
+        mock_order_with_pnl.created_at = "2026-03-12 04:26:13"
+
+        mock_repo = AsyncMock()
+        mock_repo.get_trade_history = AsyncMock(
+            return_value=[mock_order_no_pnl, mock_order_with_pnl]
+        )
+
+        mock_session = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_session)
+
+        with patch("api.trades._session_factory", mock_factory):
+            with patch("db.trade_repository.TradeRepository", return_value=mock_repo):
+                count = await restore_trade_log()
+
+        assert count == 1
+        assert len(_trade_log) == 1
+        assert _trade_log[0]["pnl"] == 50.0
+
+    @pytest.mark.asyncio
+    async def test_restore_empty_order_ids_not_deduplicated(self):
+        """Orders with empty kis_order_id should not be deduplicated."""
+        mock1 = MagicMock()
+        mock1.id = 1
+        mock1.kis_order_id = ""
+        mock1.symbol = "AAPL"
+        mock1.side = "BUY"
+        mock1.quantity = 10
+        mock1.price = 150.0
+        mock1.filled_price = 150.0
+        mock1.filled_quantity = 10
+        mock1.status = "filled"
+        mock1.strategy_name = "trend"
+        mock1.pnl = None
+        mock1.market = "US"
+        mock1.created_at = "2026-03-12 03:00:00"
+
+        mock2 = MagicMock()
+        mock2.id = 2
+        mock2.kis_order_id = ""
+        mock2.symbol = "MSFT"
+        mock2.side = "BUY"
+        mock2.quantity = 5
+        mock2.price = 400.0
+        mock2.filled_price = 400.0
+        mock2.filled_quantity = 5
+        mock2.status = "filled"
+        mock2.strategy_name = "momentum"
+        mock2.pnl = None
+        mock2.market = "US"
+        mock2.created_at = "2026-03-12 03:05:00"
+
+        mock_repo = AsyncMock()
+        mock_repo.get_trade_history = AsyncMock(return_value=[mock2, mock1])
+
+        mock_session = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_session)
+
+        with patch("api.trades._session_factory", mock_factory):
+            with patch("db.trade_repository.TradeRepository", return_value=mock_repo):
+                count = await restore_trade_log()
+
+        # Both entries preserved (empty order_id = no dedup)
+        assert count == 2
+        assert len(_trade_log) == 2
+
+
+class TestTradeSummaryWithDedup:
+    """Ensure trade summary is accurate after dedup (STOCK-33)."""
+
+    @pytest.mark.asyncio
+    async def test_summary_counts_deduplicated_sells_correctly(self):
+        """After dedup, sell count and PnL should not be inflated."""
+        from api.trades import trade_summary
+
+        # Place sell with PnL
+        record_trade({
+            "order_id": "S1",
+            "symbol": "AAPL",
+            "side": "SELL",
+            "pnl": 100.0,
+            "market": "US",
+        })
+        # Reconciliation re-records same sell without PnL
+        record_trade({
+            "order_id": "S1",
+            "symbol": "AAPL",
+            "side": "SELL",
+            "pnl": None,
+            "market": "US",
+            "status": "filled",
+        })
+
+        summary = await trade_summary()
+        # Only 1 sell trade, not 2
+        assert summary["total_trades"] == 1
+        assert summary["wins"] == 1
+        assert summary["total_pnl"] == 100.0
