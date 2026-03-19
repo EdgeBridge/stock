@@ -57,6 +57,11 @@ class OrderManager:
         self._market = market
         self._is_paper = is_paper
         self._active_orders: dict[str, ManagedOrder] = {}
+        # STOCK-26: Counter for position check failures (API errors causing
+        # buy rejections). Allows operations to monitor and distinguish
+        # "correctly blocked duplicates" from "missed opportunities due to
+        # API issues."
+        self._position_check_failures: int = 0
 
     def has_pending_order(self, symbol: str, side: str | None = None) -> bool:
         """Check if there is already a pending/submitted/open order for this symbol."""
@@ -97,6 +102,9 @@ class OrderManager:
         # Defense-in-depth: check exchange positions to prevent buying a
         # symbol we already hold.  This catches cases where in-memory state
         # (position tracker, signal dedup) was lost after a restart.
+        # STOCK-26: On failure, reject the buy (fail-safe). Previously this
+        # silently swallowed errors, allowing duplicate buys when the API
+        # was down.
         if self._market_data:
             try:
                 exchange_positions = await self._market_data.get_positions()
@@ -106,8 +114,17 @@ class OrderManager:
                         symbol,
                     )
                     return None
-            except Exception:
-                pass  # Proceed if position check fails — other layers provide safety
+            except Exception as e:
+                self._position_check_failures += 1
+                logger.warning(
+                    "Buy rejected for %s: position check failed (%s). "
+                    "Refusing buy as safety precaution. "
+                    "(total_failures=%d)",
+                    symbol,
+                    e,
+                    self._position_check_failures,
+                )
+                return None
 
         if sizing_override is not None:
             sizing = sizing_override
@@ -531,6 +548,11 @@ class OrderManager:
     @property
     def active_orders(self) -> dict[str, ManagedOrder]:
         return dict(self._active_orders)
+
+    @property
+    def position_check_failures(self) -> int:
+        """Number of buy rejections caused by position-check API failures."""
+        return self._position_check_failures
 
     def clear_completed(self) -> None:
         """Remove completed/cancelled orders from tracking."""
