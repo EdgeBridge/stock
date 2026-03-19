@@ -11,7 +11,8 @@ Uses MarketStateDetector for regime signals and SectorAnalyzer for sector rotati
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Any
 
 import pandas as pd
 from sqlalchemy import select, desc
@@ -520,7 +521,7 @@ class ETFEngine:
         return actions
 
     async def restore_managed_positions(
-        self, session_factory=None,
+        self, session_factory: Any = None,
     ) -> list[dict]:
         """Restore managed ETF positions from broker + DB on startup.
 
@@ -570,6 +571,7 @@ class ETFEngine:
                                 Order.side == "BUY",
                                 Order.strategy_name.like("etf_engine_%"),
                                 Order.status.in_(["filled", "submitted"]),
+                                Order.is_paper == False,  # noqa: E712
                             )
                             .order_by(desc(Order.created_at))
                             .limit(1)
@@ -586,6 +588,9 @@ class ETFEngine:
                     "ETF Engine restore: DB lookup failed, will use defaults: %s", e,
                 )
 
+        # Pre-compute sector mapping (invariant across positions)
+        all_sectors = self._etf.get_all_sectors()
+
         # Rebuild _managed_positions
         for pos in etf_positions:
             sym = pos.symbol
@@ -593,7 +598,9 @@ class ETFEngine:
                 # Already tracked (idempotent)
                 restored.append({
                     "symbol": sym,
+                    "quantity": int(pos.quantity),
                     "reason": self._managed_positions[sym].reason,
+                    "sector": self._managed_positions[sym].sector,
                     "source": "already_tracked",
                 })
                 continue
@@ -612,6 +619,11 @@ class ETFEngine:
                 # Use actual order creation time for hold-day tracking
                 created_at = info["created_at"]
                 if isinstance(created_at, datetime):
+                    # Ensure timezone-aware before converting to timestamp.
+                    # DB stores UTC but may return naive datetime depending
+                    # on driver — treat naive as UTC (matches DB convention).
+                    if created_at.tzinfo is None:
+                        created_at = created_at.replace(tzinfo=timezone.utc)
                     entry_date = created_at.timestamp()
                 else:
                     entry_date = time.time()
@@ -625,8 +637,7 @@ class ETFEngine:
 
             # Determine sector for sector ETFs
             sector = ""
-            sectors = self._etf.get_all_sectors()
-            for sec_name, sec_info in sectors.items():
+            for sec_name, sec_info in all_sectors.items():
                 if sec_info.etf == sym:
                     sector = sec_name
                     break
