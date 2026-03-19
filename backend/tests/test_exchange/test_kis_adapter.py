@@ -31,7 +31,15 @@ def adapter(mock_config, mock_auth):
 
 
 def _mock_post_response(adapter, response_data):
-    """Helper to mock a POST response on the adapter."""
+    """Helper to mock a POST response on the adapter.
+
+    NOTE: This patches adapter._session directly, which bypasses aiohttp
+    internals. The mock context manager is single-use — if _post() retried
+    (e.g. on a 4xx), the mock would not return a fresh response. This is
+    acceptable for happy-path tests (200 status) and tests where rt_cd="-1"
+    does not trigger HTTP-level retry. Keep this in mind when adding tests
+    that exercise retry paths.
+    """
     mock_resp = AsyncMock()
     mock_resp.status = 200
     mock_resp.json = AsyncMock(return_value=response_data)
@@ -45,6 +53,9 @@ def _mock_post_response(adapter, response_data):
 def _extract_post_body(adapter) -> dict:
     """Extract the JSON body from the most recent POST call."""
     call_args = adapter._session.post.call_args
+    # Support both keyword and positional passing of json body
+    if "json" in call_args.kwargs:
+        return call_args.kwargs["json"]
     return call_args[1]["json"]
 
 
@@ -135,27 +146,32 @@ class TestLimitOrderPrice:
         assert body["ORD_DVSN"] == "00"
 
     @pytest.mark.asyncio
-    async def test_limit_order_no_price_sends_zero(self, adapter):
-        """Limit order with no price falls back to '0'."""
-        _mock_post_response(adapter, _SUCCESS_RESPONSE)
-
+    async def test_limit_order_no_price_default_rejected(self, adapter):
+        """Limit order with default (no price arg) is rejected — price is required."""
         result = await adapter.create_buy_order("AAPL", 10, order_type="limit")
-        assert result.status == "pending"
-
-        body = _extract_post_body(adapter)
-        assert body["OVRS_ORD_UNPR"] == "0"
+        assert result.status == "failed"
+        assert result.order_id == ""
 
     @pytest.mark.asyncio
-    async def test_limit_order_price_zero_sends_formatted(self, adapter):
-        """Limit order with explicit price=0.0 sends '0.00' (not falsy fallback)."""
-        _mock_post_response(adapter, _SUCCESS_RESPONSE)
-
+    async def test_limit_order_price_zero_rejected(self, adapter):
+        """Limit order with price=0.0 is rejected — $0 is never a valid limit price."""
         result = await adapter.create_buy_order("AAPL", 10, price=0.0, order_type="limit")
-        assert result.status == "pending"
+        assert result.status == "failed"
+        assert result.order_id == ""
 
-        body = _extract_post_body(adapter)
-        assert body["OVRS_ORD_UNPR"] == "0.00"
-        assert body["ORD_DVSN"] == "00"
+    @pytest.mark.asyncio
+    async def test_limit_order_price_negative_rejected(self, adapter):
+        """Limit order with negative price is rejected."""
+        result = await adapter.create_buy_order("AAPL", 10, price=-5.0, order_type="limit")
+        assert result.status == "failed"
+        assert result.order_id == ""
+
+    @pytest.mark.asyncio
+    async def test_limit_order_no_price_rejected(self, adapter):
+        """Limit order with no price (None) is rejected."""
+        result = await adapter.create_buy_order("AAPL", 10, price=None, order_type="limit")
+        assert result.status == "failed"
+        assert result.order_id == ""
 
     @pytest.mark.asyncio
     async def test_limit_order_penny_price(self, adapter):
@@ -180,6 +196,14 @@ class TestCreateOrder:
         assert result.status == "pending"
         assert result.symbol == "AAPL"
 
+        # Verify request body sent to KIS API
+        body = _extract_post_body(adapter)
+        assert body["PDNO"] == "AAPL"
+        assert body["ORD_QTY"] == "10"
+        assert body["OVRS_ORD_UNPR"] == "185.50"
+        assert body["ORD_DVSN"] == "00"  # limit order
+        assert body["SLL_TYPE"] == ""  # buy has empty SLL_TYPE
+
     @pytest.mark.asyncio
     async def test_sell_order(self, adapter):
         _mock_post_response(
@@ -194,6 +218,14 @@ class TestCreateOrder:
         assert result.order_id == "0001234568"
         assert result.side == "sell"
         assert result.status == "pending"
+
+        # Verify request body sent to KIS API
+        body = _extract_post_body(adapter)
+        assert body["PDNO"] == "AAPL"
+        assert body["ORD_QTY"] == "10"
+        assert body["OVRS_ORD_UNPR"] == "186.00"
+        assert body["ORD_DVSN"] == "00"  # limit order
+        assert body["SLL_TYPE"] == "00"  # sell has SLL_TYPE="00"
 
     @pytest.mark.asyncio
     async def test_failed_order(self, adapter):

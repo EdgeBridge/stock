@@ -758,6 +758,14 @@ class KISAdapter(ExchangeAdapter):
         await self._auth.ensure_valid_token()
 
         ord_dvsn = "00" if order_type == "limit" else "01"
+        # Reject limit orders with invalid price (same guard as _place_daytime_order)
+        if ord_dvsn == "00" and (price is None or price <= 0):
+            logger.warning("Limit order requires price > 0, got %s", price)
+            return OrderResult(
+                order_id="", symbol=symbol, side=side,
+                order_type="limit", quantity=quantity,
+                status="failed",
+            )
         # KIS US market orders (ord_dvsn="01") require OVRS_ORD_UNPR to be "0"
         if ord_dvsn == "01":
             order_price = "0"
