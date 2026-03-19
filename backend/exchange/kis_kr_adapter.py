@@ -291,7 +291,7 @@ class KISKRAdapter(ExchangeAdapter):
             logger.warning("KR orderable cash is non-positive, using OVRS=N result: %.0f", cash)
             return cash
         except Exception as e:
-            logger.warning("Failed to fetch KR orderable amount: %s", e)
+            logger.warning("Failed to fetch KR orderable amount: %s", e, exc_info=True)
             return None
 
     async def fetch_positions(self) -> list[Position]:

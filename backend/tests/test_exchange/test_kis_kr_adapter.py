@@ -391,7 +391,7 @@ class TestFetchOrderableAmountLogging:
             await adapter._fetch_orderable_amount()
 
         api_error_logs = [r for r in caplog.records if "주문가능조회 failed" in r.message]
-        assert len(api_error_logs) >= 1
+        assert len(api_error_logs) == 2, f"Expected 2 warnings (OVRS=N and Y), got {len(api_error_logs)}"
 
     @pytest.mark.asyncio
     async def test_first_succeeds_returns_cash(self, adapter):

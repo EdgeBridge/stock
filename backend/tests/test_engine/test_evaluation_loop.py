@@ -2787,18 +2787,11 @@ class TestSilentExceptionLogging:
         self, eval_loop, mock_market_data, caplog,
     ):
         """When get_positions raises in _evaluate_all, should log warning."""
-        # First call to get_positions (in _evaluate_all line 331) fails,
+        # First call to get_positions (in _evaluate_all) fails,
         # subsequent calls (in _execute_signal) succeed with empty list.
-        call_count = 0
-
-        async def positions_side_effect():
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise RuntimeError("API connection failed")
-            return []
-
-        mock_market_data.get_positions = AsyncMock(side_effect=positions_side_effect)
+        mock_market_data.get_positions = AsyncMock(
+            side_effect=[RuntimeError("API connection failed"), []]
+        )
         eval_loop.set_watchlist(["AAPL"])
 
         with caplog.at_level(logging.WARNING, logger="engine.evaluation_loop"):

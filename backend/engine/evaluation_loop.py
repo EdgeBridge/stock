@@ -337,7 +337,7 @@ class EvaluationLoop:
             held = held | exchange_held
             position_map = {p.symbol: p for p in exchange_positions if p.quantity > 0}
         except Exception as e:
-            logger.warning("Exchange position fetch failed, using tracker only: %s", e)
+            logger.warning("Exchange position fetch failed, using tracker only: %s", e, exc_info=True)
 
         recovery = set(self._recovery_watch.keys()) - held
         eval_symbols = list(dict.fromkeys(self._watchlist + sorted(held) + sorted(recovery)))
@@ -700,8 +700,8 @@ class EvaluationLoop:
             exchange = "KRX" if self._market == "KR" else self._exchange_resolver.resolve(symbol)
             price = await self._market_data.get_price(symbol, exchange)
         except Exception as e:
-            price = float(df.iloc[-1]["close"])
             logger.warning("Real-time price fetch failed for %s, using OHLCV close: %s", symbol, e)
+            price = float(df.iloc[-1]["close"])
 
         if signal.signal_type == SignalType.BUY:
             # Daily buy budget with dynamic confidence escalation
