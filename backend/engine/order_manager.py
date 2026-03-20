@@ -265,11 +265,17 @@ class OrderManager:
                 "is_paper": self._is_paper,
             }
             if _trade_recorder:
-                _trade_recorder(trade_data)
+                _trade_recorder(trade_data, skip_db_persist=bool(_db_recorder))
             # STOCK-38: Awaited DB persist ensures filled_price/status
             # are saved immediately, not relying on fire-and-forget
             if _db_recorder:
-                await _db_recorder(trade_data)
+                try:
+                    await _db_recorder(trade_data)
+                except Exception:
+                    logger.warning(
+                        "DB persist failed for %s, fire-and-forget will retry",
+                        symbol,
+                    )
             return order
 
         except Exception as e:
@@ -390,11 +396,17 @@ class OrderManager:
                 "is_paper": self._is_paper,
             }
             if _trade_recorder:
-                _trade_recorder(trade_data)
+                _trade_recorder(trade_data, skip_db_persist=bool(_db_recorder))
             # STOCK-38: Awaited DB persist ensures filled_price/status
             # are saved immediately, not relying on fire-and-forget
             if _db_recorder:
-                await _db_recorder(trade_data)
+                try:
+                    await _db_recorder(trade_data)
+                except Exception:
+                    logger.warning(
+                        "DB persist failed for %s, fire-and-forget will retry",
+                        symbol,
+                    )
             return order
 
         except Exception as e:

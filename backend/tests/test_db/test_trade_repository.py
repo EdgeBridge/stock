@@ -1042,12 +1042,14 @@ async def test_recover_not_found_orders_with_pnl(repo, session):
 
     await session.commit()
 
-    count = await repo.recover_not_found_orders()
-    assert count == 1
+    recovered_ids = await repo.recover_not_found_orders()
+    assert len(recovered_ids) == 1
+    assert "KIS001" in recovered_ids
 
     await session.refresh(order1)
     assert order1.status == "filled"
     assert order1.filled_price == 155.0  # Set from price since filled_price was None
+    assert order1.filled_quantity == 10  # Set from quantity since filled_quantity was None
 
     await session.refresh(order2)
     assert order2.status == "not_found"  # No PnL → not recovered
@@ -1078,8 +1080,8 @@ async def test_recover_not_found_preserves_existing_filled_price(repo, session):
     session.add(order)
     await session.commit()
 
-    count = await repo.recover_not_found_orders()
-    assert count == 1
+    recovered_ids = await repo.recover_not_found_orders()
+    assert len(recovered_ids) == 1
 
     await session.refresh(order)
     assert order.status == "filled"
@@ -1105,8 +1107,8 @@ async def test_recover_not_found_zero_when_none_match(repo, session):
     session.add(order)
     await session.commit()
 
-    count = await repo.recover_not_found_orders()
-    assert count == 0
+    recovered_ids = await repo.recover_not_found_orders()
+    assert len(recovered_ids) == 0
 
 
 @pytest.mark.asyncio
@@ -1129,8 +1131,9 @@ async def test_recover_not_found_kr_market(repo, session):
     session.add(order)
     await session.commit()
 
-    count = await repo.recover_not_found_orders()
-    assert count == 1
+    recovered_ids = await repo.recover_not_found_orders()
+    assert len(recovered_ids) == 1
+    assert "KR001" in recovered_ids
 
     await session.refresh(order)
     assert order.status == "filled"

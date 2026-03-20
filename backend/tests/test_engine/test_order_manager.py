@@ -722,7 +722,7 @@ class TestPaperFlag:
         from engine.order_manager import set_trade_recorder, _trade_recorder
 
         old_recorder = _trade_recorder
-        set_trade_recorder(lambda t: recorded.append(t))
+        set_trade_recorder(lambda t, **kw: recorded.append(t))
 
         try:
             om = OrderManager(
@@ -749,7 +749,7 @@ class TestPaperFlag:
         from engine.order_manager import set_trade_recorder, _trade_recorder
 
         old_recorder = _trade_recorder
-        set_trade_recorder(lambda t: recorded.append(t))
+        set_trade_recorder(lambda t, **kw: recorded.append(t))
 
         try:
             om = OrderManager(
@@ -774,7 +774,7 @@ class TestPaperFlag:
         from engine.order_manager import set_trade_recorder, _trade_recorder
 
         old_recorder = _trade_recorder
-        set_trade_recorder(lambda t: recorded.append(t))
+        set_trade_recorder(lambda t, **kw: recorded.append(t))
 
         try:
             om = OrderManager(
@@ -1008,7 +1008,7 @@ class TestExchangeFieldPropagation:
         from engine.order_manager import set_trade_recorder, _trade_recorder
 
         old_recorder = _trade_recorder
-        set_trade_recorder(lambda t: recorded.append(t))
+        set_trade_recorder(lambda t, **kw: recorded.append(t))
 
         try:
             om = OrderManager(
@@ -1037,7 +1037,7 @@ class TestExchangeFieldPropagation:
         from engine.order_manager import set_trade_recorder, _trade_recorder
 
         old_recorder = _trade_recorder
-        set_trade_recorder(lambda t: recorded.append(t))
+        set_trade_recorder(lambda t, **kw: recorded.append(t))
 
         try:
             om = OrderManager(
@@ -1064,7 +1064,7 @@ class TestExchangeFieldPropagation:
         from engine.order_manager import set_trade_recorder, _trade_recorder
 
         old_recorder = _trade_recorder
-        set_trade_recorder(lambda t: recorded.append(t))
+        set_trade_recorder(lambda t, **kw: recorded.append(t))
 
         try:
             om = OrderManager(
@@ -1105,7 +1105,7 @@ class TestExchangeFieldPropagation:
         from engine.order_manager import set_trade_recorder, _trade_recorder
 
         old_recorder = _trade_recorder
-        set_trade_recorder(lambda t: recorded.append(t))
+        set_trade_recorder(lambda t, **kw: recorded.append(t))
 
         try:
             om = OrderManager(
@@ -1602,7 +1602,7 @@ class TestDbRecorderCallback:
         old_trade_recorder = _trade_recorder
         old_db_recorder = _db_recorder
 
-        set_trade_recorder(lambda t: trade_records.append(t))
+        set_trade_recorder(lambda t, **kw: trade_records.append(t))
 
         async def mock_db_recorder(trade):
             db_records.append(trade)

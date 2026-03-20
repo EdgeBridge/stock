@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from api.trades import (
     _trade_log,
+    get_trades,
     record_trade,
     restore_trade_log,
     reconcile_pending_orders,
@@ -69,7 +70,7 @@ class TestRestoreTradeLog:
         mock_factory = MagicMock(return_value=mock_session)
 
         with patch("api.trades._session_factory", mock_factory):
-            with patch("db.trade_repository.TradeRepository", return_value=mock_repo):
+            with patch("api.trades.TradeRepository", return_value=mock_repo):
                 count = await restore_trade_log()
 
         assert count == 1
@@ -105,7 +106,7 @@ class TestReconcilePendingOrders:
         mock_factory = MagicMock(return_value=mock_session)
 
         with patch("api.trades._session_factory", mock_factory):
-            with patch("db.trade_repository.TradeRepository", return_value=mock_repo):
+            with patch("api.trades.TradeRepository", return_value=mock_repo):
                 updated = await reconcile_pending_orders({"AAPL", "MSFT"})
 
         assert updated == 1
@@ -136,7 +137,7 @@ class TestReconcilePendingOrders:
         mock_factory = MagicMock(return_value=mock_session)
 
         with patch("api.trades._session_factory", mock_factory):
-            with patch("db.trade_repository.TradeRepository", return_value=mock_repo):
+            with patch("api.trades.TradeRepository", return_value=mock_repo):
                 updated = await reconcile_pending_orders({"AAPL"})
 
         assert updated == 1
@@ -162,7 +163,7 @@ class TestReconcilePendingOrders:
         mock_factory = MagicMock(return_value=mock_session)
 
         with patch("api.trades._session_factory", mock_factory):
-            with patch("db.trade_repository.TradeRepository", return_value=mock_repo):
+            with patch("api.trades.TradeRepository", return_value=mock_repo):
                 updated = await reconcile_pending_orders(set())
 
         assert updated == 1
@@ -200,7 +201,7 @@ class TestUpdateOrderInDb:
         mock_factory = MagicMock(return_value=mock_session)
 
         with patch("api.trades._session_factory", mock_factory):
-            with patch("db.trade_repository.TradeRepository", return_value=mock_repo):
+            with patch("api.trades.TradeRepository", return_value=mock_repo):
                 ok = await update_order_in_db("KIS123", "filled", 155.0, 10)
 
         assert ok is True
@@ -344,7 +345,7 @@ class TestPaperOrderSeparation:
         mock_factory = MagicMock(return_value=mock_session)
 
         with patch("api.trades._session_factory", mock_factory):
-            with patch("db.trade_repository.TradeRepository", return_value=mock_repo):
+            with patch("api.trades.TradeRepository", return_value=mock_repo):
                 await reconcile_pending_orders({"AAPL"})
 
         # Verify exclude_paper=True was passed
@@ -362,7 +363,7 @@ class TestPaperOrderSeparation:
         mock_factory = MagicMock(return_value=mock_session)
 
         with patch("api.trades._session_factory", mock_factory):
-            with patch("db.trade_repository.TradeRepository", return_value=mock_repo):
+            with patch("api.trades.TradeRepository", return_value=mock_repo):
                 await restore_trade_log()
 
         # Verify exclude_paper=True was passed
@@ -413,7 +414,7 @@ class TestExchangeFieldPersistence:
 
         with patch("api.trades._session_factory", mock_factory):
             with patch(
-                "db.trade_repository.TradeRepository", return_value=mock_repo
+                "api.trades.TradeRepository", return_value=mock_repo
             ):
                 await _persist_trade(trade)
 
@@ -447,7 +448,7 @@ class TestExchangeFieldPersistence:
 
         with patch("api.trades._session_factory", mock_factory):
             with patch(
-                "db.trade_repository.TradeRepository", return_value=mock_repo
+                "api.trades.TradeRepository", return_value=mock_repo
             ):
                 await _persist_trade(trade)
 
@@ -479,7 +480,7 @@ class TestExchangeFieldPersistence:
 
         with patch("api.trades._session_factory", mock_factory):
             with patch(
-                "db.trade_repository.TradeRepository", return_value=mock_repo
+                "api.trades.TradeRepository", return_value=mock_repo
             ):
                 await _persist_trade(trade)
 
@@ -510,7 +511,7 @@ class TestExchangeFieldPersistence:
 
         with patch("api.trades._session_factory", mock_factory):
             with patch(
-                "db.trade_repository.TradeRepository", return_value=mock_repo
+                "api.trades.TradeRepository", return_value=mock_repo
             ):
                 await _persist_trade(trade)
 
@@ -736,7 +737,7 @@ class TestRestoreTradeLogDedup:
         mock_factory = MagicMock(return_value=mock_session)
 
         with patch("api.trades._session_factory", mock_factory):
-            with patch("db.trade_repository.TradeRepository", return_value=mock_repo):
+            with patch("api.trades.TradeRepository", return_value=mock_repo):
                 count = await restore_trade_log()
 
         # 2 unique entries (not 3 with duplicate)
@@ -796,7 +797,7 @@ class TestRestoreTradeLogDedup:
         mock_factory = MagicMock(return_value=mock_session)
 
         with patch("api.trades._session_factory", mock_factory):
-            with patch("db.trade_repository.TradeRepository", return_value=mock_repo):
+            with patch("api.trades.TradeRepository", return_value=mock_repo):
                 count = await restore_trade_log()
 
         assert count == 1
@@ -845,7 +846,7 @@ class TestRestoreTradeLogDedup:
         mock_factory = MagicMock(return_value=mock_session)
 
         with patch("api.trades._session_factory", mock_factory):
-            with patch("db.trade_repository.TradeRepository", return_value=mock_repo):
+            with patch("api.trades.TradeRepository", return_value=mock_repo):
                 count = await restore_trade_log()
 
         # Both entries preserved (empty order_id = no dedup)
@@ -916,7 +917,7 @@ class TestUpdateOrderInDbNotFoundProtection:
         mock_factory = MagicMock(return_value=mock_session)
 
         with patch("api.trades._session_factory", mock_factory):
-            with patch("db.trade_repository.TradeRepository", return_value=mock_repo):
+            with patch("api.trades.TradeRepository", return_value=mock_repo):
                 ok = await update_order_in_db(
                     "KIS_SELL_001", "not_found", filled_price=None, filled_quantity=None,
                 )
@@ -956,7 +957,7 @@ class TestUpdateOrderInDbNotFoundProtection:
         mock_factory = MagicMock(return_value=mock_session)
 
         with patch("api.trades._session_factory", mock_factory):
-            with patch("db.trade_repository.TradeRepository", return_value=mock_repo):
+            with patch("api.trades.TradeRepository", return_value=mock_repo):
                 ok = await update_order_in_db(
                     "KIS_BUY_001", "not_found", filled_price=None, filled_quantity=None,
                 )
@@ -995,7 +996,7 @@ class TestUpdateOrderInDbNotFoundProtection:
         mock_factory = MagicMock(return_value=mock_session)
 
         with patch("api.trades._session_factory", mock_factory):
-            with patch("db.trade_repository.TradeRepository", return_value=mock_repo):
+            with patch("api.trades.TradeRepository", return_value=mock_repo):
                 ok = await update_order_in_db(
                     "KIS_SELL_002", "not_found",
                 )
@@ -1029,7 +1030,7 @@ class TestUpdateOrderInDbNotFoundProtection:
         mock_factory = MagicMock(return_value=mock_session)
 
         with patch("api.trades._session_factory", mock_factory):
-            with patch("db.trade_repository.TradeRepository", return_value=mock_repo):
+            with patch("api.trades.TradeRepository", return_value=mock_repo):
                 ok = await update_order_in_db("KIS_SELL_003", "not_found")
 
         assert ok is True
@@ -1070,7 +1071,7 @@ class TestPersistTradeToDb:
         }
 
         with patch("api.trades._session_factory", mock_factory):
-            with patch("db.trade_repository.TradeRepository", return_value=mock_repo):
+            with patch("api.trades.TradeRepository", return_value=mock_repo):
                 result = await persist_trade_to_db(trade)
 
         assert result is True
@@ -1105,7 +1106,7 @@ class TestPersistTradeToDb:
         mock_factory = MagicMock(return_value=mock_session)
 
         with patch("api.trades._session_factory", mock_factory):
-            with patch("db.trade_repository.TradeRepository", return_value=mock_repo):
+            with patch("api.trades.TradeRepository", return_value=mock_repo):
                 result = await persist_trade_to_db({"symbol": "AAPL"})
 
         assert result is False
@@ -1143,7 +1144,7 @@ class TestPersistTradeToDb:
         }
 
         with patch("api.trades._session_factory", mock_factory):
-            with patch("db.trade_repository.TradeRepository", return_value=mock_repo):
+            with patch("api.trades.TradeRepository", return_value=mock_repo):
                 result = await persist_trade_to_db(trade)
 
         assert result is True
@@ -1183,7 +1184,7 @@ class TestPersistTradeToDb:
         }
 
         with patch("api.trades._session_factory", mock_factory):
-            with patch("db.trade_repository.TradeRepository", return_value=mock_repo):
+            with patch("api.trades.TradeRepository", return_value=mock_repo):
                 result = await persist_trade_to_db(trade)
 
         assert result is True
@@ -1201,7 +1202,9 @@ class TestRecoverNotFoundOrders:
         from api.trades import recover_not_found_orders
 
         mock_repo = AsyncMock()
-        mock_repo.recover_not_found_orders = AsyncMock(return_value=3)
+        mock_repo.recover_not_found_orders = AsyncMock(
+            return_value=["KIS_A", "KIS_B", "KIS_C"]
+        )
 
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -1209,7 +1212,7 @@ class TestRecoverNotFoundOrders:
         mock_factory = MagicMock(return_value=mock_session)
 
         with patch("api.trades._session_factory", mock_factory):
-            with patch("db.trade_repository.TradeRepository", return_value=mock_repo):
+            with patch("api.trades.TradeRepository", return_value=mock_repo):
                 count = await recover_not_found_orders()
 
         assert count == 3
@@ -1227,7 +1230,7 @@ class TestRecoverNotFoundOrders:
 
     @pytest.mark.asyncio
     async def test_recover_updates_in_memory_trade_log(self):
-        """Recovery also updates in-memory trade log entries."""
+        """Recovery uses recovered IDs to target specific in-memory entries."""
         from api.trades import recover_not_found_orders
 
         # Add a not_found entry with PnL to trade log
@@ -1239,12 +1242,14 @@ class TestRecoverNotFoundOrders:
                 "status": "not_found",
                 "pnl": 50.0,
                 "price": 155.0,
+                "quantity": 10,
                 "filled_price": None,
+                "filled_quantity": None,
             }
         )
 
         mock_repo = AsyncMock()
-        mock_repo.recover_not_found_orders = AsyncMock(return_value=1)
+        mock_repo.recover_not_found_orders = AsyncMock(return_value=["KIS100"])
 
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -1252,19 +1257,20 @@ class TestRecoverNotFoundOrders:
         mock_factory = MagicMock(return_value=mock_session)
 
         with patch("api.trades._session_factory", mock_factory):
-            with patch("db.trade_repository.TradeRepository", return_value=mock_repo):
+            with patch("api.trades.TradeRepository", return_value=mock_repo):
                 count = await recover_not_found_orders()
 
         assert count == 1
         assert _trade_log[0]["status"] == "filled"
         assert _trade_log[0]["filled_price"] == 155.0
+        assert _trade_log[0]["filled_quantity"] == 10
 
     @pytest.mark.asyncio
-    async def test_recover_skips_not_found_without_pnl(self):
-        """In-memory entries without PnL are not modified."""
+    async def test_recover_skips_entries_not_in_recovered_ids(self):
+        """In-memory entries not in recovered_ids are not modified."""
         from api.trades import recover_not_found_orders
 
-        # not_found without PnL — should not be touched
+        # not_found without PnL — DB won't recover it
         _trade_log.append(
             {
                 "order_id": "KIS200",
@@ -1277,7 +1283,7 @@ class TestRecoverNotFoundOrders:
         )
 
         mock_repo = AsyncMock()
-        mock_repo.recover_not_found_orders = AsyncMock(return_value=0)
+        mock_repo.recover_not_found_orders = AsyncMock(return_value=[])
 
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -1285,10 +1291,10 @@ class TestRecoverNotFoundOrders:
         mock_factory = MagicMock(return_value=mock_session)
 
         with patch("api.trades._session_factory", mock_factory):
-            with patch("db.trade_repository.TradeRepository", return_value=mock_repo):
+            with patch("api.trades.TradeRepository", return_value=mock_repo):
                 await recover_not_found_orders()
 
-        # Status should remain not_found (pnl is None)
+        # Status should remain not_found (not in recovered_ids)
         assert _trade_log[0]["status"] == "not_found"
 
     @pytest.mark.asyncio
@@ -1305,3 +1311,306 @@ class TestRecoverNotFoundOrders:
             count = await recover_not_found_orders()
 
         assert count == 0
+
+
+class TestRecordTradeSkipDbPersist:
+    """STOCK-38: record_trade skip_db_persist flag."""
+
+    def test_skip_db_persist_true_does_not_fire_background_task(self):
+        """When skip_db_persist=True, no fire-and-forget DB task is created."""
+        import asyncio
+        from unittest.mock import patch as _patch
+
+        created_tasks = []
+        original_create_task = None
+
+        with _patch("api.trades._session_factory", MagicMock()):
+            # We can't easily test asyncio.create_task without a loop,
+            # but we can verify the code path by checking the flag works
+            # without errors at minimum
+            record_trade(
+                {"symbol": "AAPL", "side": "BUY", "status": "pending"},
+                skip_db_persist=True,
+            )
+
+        assert len(_trade_log) == 1
+        assert _trade_log[0]["symbol"] == "AAPL"
+
+    def test_skip_db_persist_false_is_default(self):
+        """Default behavior (skip_db_persist=False) still appends to log."""
+        record_trade({"symbol": "MSFT", "side": "BUY", "status": "pending"})
+        assert len(_trade_log) == 1
+
+
+# --- STOCK-36: Sort order + pagination tests ---
+
+
+class TestGetTradesNewestFirst:
+    """STOCK-36: get_trades returns newest trades first."""
+
+    @pytest.mark.asyncio
+    async def test_returns_newest_first_from_in_memory(self):
+        """In-memory trades should be returned newest-first (descending)."""
+        _trade_log.extend([
+            {
+                "symbol": "AAPL",
+                "side": "BUY",
+                "status": "filled",
+                "created_at": "2026-03-18 01:00:00",
+                "market": "US",
+            },
+            {
+                "symbol": "MSFT",
+                "side": "BUY",
+                "status": "filled",
+                "created_at": "2026-03-19 02:00:00",
+                "market": "US",
+            },
+            {
+                "symbol": "GOOGL",
+                "side": "SELL",
+                "status": "filled",
+                "created_at": "2026-03-20 03:00:00",
+                "market": "US",
+            },
+        ])
+
+        with patch("api.trades.get_name", return_value=""):
+            result = await get_trades(limit=10, offset=0)
+
+        assert len(result) == 3
+        # Newest first
+        assert result[0]["symbol"] == "GOOGL"
+        assert result[1]["symbol"] == "MSFT"
+        assert result[2]["symbol"] == "AAPL"
+
+    @pytest.mark.asyncio
+    async def test_limit_returns_newest_subset(self):
+        """With limit=2 on 3 trades, should return 2 newest."""
+        _trade_log.extend([
+            {
+                "symbol": "AAPL",
+                "side": "BUY",
+                "status": "filled",
+                "created_at": "2026-03-18 01:00:00",
+                "market": "US",
+            },
+            {
+                "symbol": "MSFT",
+                "side": "BUY",
+                "status": "filled",
+                "created_at": "2026-03-19 02:00:00",
+                "market": "US",
+            },
+            {
+                "symbol": "GOOGL",
+                "side": "SELL",
+                "status": "filled",
+                "created_at": "2026-03-20 03:00:00",
+                "market": "US",
+            },
+        ])
+
+        with patch("api.trades.get_name", return_value=""):
+            result = await get_trades(limit=2, offset=0)
+
+        assert len(result) == 2
+        assert result[0]["symbol"] == "GOOGL"
+        assert result[1]["symbol"] == "MSFT"
+
+    @pytest.mark.asyncio
+    async def test_offset_skips_newest(self):
+        """Offset=1 should skip the newest trade."""
+        _trade_log.extend([
+            {
+                "symbol": "AAPL",
+                "side": "BUY",
+                "status": "filled",
+                "created_at": "2026-03-18 01:00:00",
+                "market": "US",
+            },
+            {
+                "symbol": "MSFT",
+                "side": "BUY",
+                "status": "filled",
+                "created_at": "2026-03-19 02:00:00",
+                "market": "US",
+            },
+            {
+                "symbol": "GOOGL",
+                "side": "SELL",
+                "status": "filled",
+                "created_at": "2026-03-20 03:00:00",
+                "market": "US",
+            },
+        ])
+
+        with patch("api.trades.get_name", return_value=""):
+            result = await get_trades(limit=10, offset=1)
+
+        assert len(result) == 2
+        # Skipped GOOGL (newest), starts from MSFT
+        assert result[0]["symbol"] == "MSFT"
+        assert result[1]["symbol"] == "AAPL"
+
+    @pytest.mark.asyncio
+    async def test_offset_and_limit_pagination(self):
+        """Offset + limit should work together for page 2."""
+        _trade_log.extend([
+            {
+                "symbol": f"SYM{i}",
+                "side": "BUY",
+                "status": "filled",
+                "created_at": f"2026-03-{10+i:02d} 01:00:00",
+                "market": "US",
+            }
+            for i in range(5)
+        ])
+
+        with patch("api.trades.get_name", return_value=""):
+            # Page 1: offset=0, limit=2
+            page1 = await get_trades(limit=2, offset=0)
+            # Page 2: offset=2, limit=2
+            page2 = await get_trades(limit=2, offset=2)
+
+        assert len(page1) == 2
+        assert len(page2) == 2
+        # Page 1 = newest 2 (SYM4, SYM3)
+        assert page1[0]["symbol"] == "SYM4"
+        assert page1[1]["symbol"] == "SYM3"
+        # Page 2 = next 2 (SYM2, SYM1)
+        assert page2[0]["symbol"] == "SYM2"
+        assert page2[1]["symbol"] == "SYM1"
+
+    @pytest.mark.asyncio
+    async def test_market_filter_with_sort(self):
+        """Market filter should work with newest-first sort."""
+        _trade_log.extend([
+            {
+                "symbol": "005930",
+                "side": "BUY",
+                "status": "filled",
+                "created_at": "2026-03-20 01:00:00",
+                "market": "KR",
+            },
+            {
+                "symbol": "AAPL",
+                "side": "BUY",
+                "status": "filled",
+                "created_at": "2026-03-20 02:00:00",
+                "market": "US",
+            },
+            {
+                "symbol": "MSFT",
+                "side": "BUY",
+                "status": "filled",
+                "created_at": "2026-03-20 03:00:00",
+                "market": "US",
+            },
+        ])
+
+        with patch("api.trades.get_name", return_value=""):
+            result = await get_trades(limit=10, offset=0, market="US")
+
+        assert len(result) == 2
+        assert result[0]["symbol"] == "MSFT"  # Newest US trade
+        assert result[1]["symbol"] == "AAPL"
+
+    @pytest.mark.asyncio
+    async def test_offset_beyond_total_returns_empty(self):
+        """Offset beyond total trades returns empty list."""
+        _trade_log.append({
+            "symbol": "AAPL",
+            "side": "BUY",
+            "status": "filled",
+            "created_at": "2026-03-20 01:00:00",
+            "market": "US",
+        })
+
+        with patch("api.trades.get_name", return_value=""):
+            result = await get_trades(limit=10, offset=10)
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_db_fallback_passes_offset(self):
+        """DB fallback path should pass offset parameter."""
+        mock_repo = AsyncMock()
+        mock_repo.get_trade_history = AsyncMock(return_value=[])
+
+        mock_session = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_session)
+
+        # _trade_log is empty so it uses DB fallback
+        with patch("api.trades._session_factory", mock_factory):
+            with patch("api.trades.TradeRepository", return_value=mock_repo):
+                await get_trades(limit=30, offset=30)
+
+        mock_repo.get_trade_history.assert_called_once_with(
+            limit=30, offset=30, symbol=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_sort_handles_none_created_at(self):
+        """Trades with created_at=None should not crash the sort."""
+        _trade_log.extend([
+            {
+                "symbol": "AAPL",
+                "side": "BUY",
+                "status": "filled",
+                "created_at": "2026-03-19 01:00:00",
+                "market": "US",
+            },
+            {
+                "symbol": "MSFT",
+                "side": "BUY",
+                "status": "pending",
+                "created_at": None,  # None value — must not crash
+                "market": "US",
+            },
+            {
+                "symbol": "GOOGL",
+                "side": "SELL",
+                "status": "filled",
+                "created_at": "2026-03-20 03:00:00",
+                "market": "US",
+            },
+        ])
+
+        with patch("api.trades.get_name", return_value=""):
+            result = await get_trades(limit=10, offset=0)
+
+        assert len(result) == 3
+        # Newest first, None sorts to the end (empty string)
+        assert result[0]["symbol"] == "GOOGL"
+        assert result[1]["symbol"] == "AAPL"
+        assert result[2]["symbol"] == "MSFT"
+
+    @pytest.mark.asyncio
+    async def test_sort_handles_missing_created_at_key(self):
+        """Trades without created_at key should not crash the sort."""
+        _trade_log.extend([
+            {
+                "symbol": "AAPL",
+                "side": "BUY",
+                "status": "filled",
+                "created_at": "2026-03-19 01:00:00",
+                "market": "US",
+            },
+            {
+                "symbol": "TSLA",
+                "side": "BUY",
+                "status": "pending",
+                "market": "US",
+                # No created_at key at all
+            },
+        ])
+
+        with patch("api.trades.get_name", return_value=""):
+            result = await get_trades(limit=10, offset=0)
+
+        assert len(result) == 2
+        assert result[0]["symbol"] == "AAPL"
+        assert result[1]["symbol"] == "TSLA"

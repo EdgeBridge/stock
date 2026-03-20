@@ -1,17 +1,107 @@
+import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useTrades } from '../hooks/useApi'
 import { fetchTradeSummaryPeriods, type PeriodSummary } from '../api/client'
 import { formatCurrency } from '../utils/format'
 import clsx from 'clsx'
 
+const PAGE_SIZE = 30
+
+/** Format a UTC timestamp string to KST (Asia/Seoul) display. */
+function formatKST(utcStr: string): string {
+  if (!utcStr) return '-'
+  // Backend sends "YYYY-MM-DD HH:MM:SS" — normalise to ISO 8601 with T separator
+  // so all browsers (Safari/Firefox) can parse it reliably.
+  const isoStr = utcStr.includes('T') ? utcStr : utcStr.replace(' ', 'T')
+  const withTZ = isoStr.endsWith('Z') || /[+-]\d{2}:?\d{2}$/.test(isoStr) ? isoStr : isoStr + 'Z'
+  const d = new Date(withTZ)
+  if (isNaN(d.getTime())) return utcStr
+  return d.toLocaleString('ko-KR', {
+    timeZone: 'Asia/Seoul',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+}
+
+/** Extract KST date string (YYYY-MM-DD) for grouping.
+ *  Uses 'en-CA' locale which reliably produces YYYY-MM-DD across all engines. */
+const _kstDateFmt = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Seoul',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+})
+
+function getKSTDate(utcStr: string): string {
+  if (!utcStr) return ''
+  const isoStr = utcStr.includes('T') ? utcStr : utcStr.replace(' ', 'T')
+  const withTZ = isoStr.endsWith('Z') || /[+-]\d{2}:?\d{2}$/.test(isoStr) ? isoStr : isoStr + 'Z'
+  const d = new Date(withTZ)
+  if (isNaN(d.getTime())) return ''
+  return _kstDateFmt.format(d)
+}
+
+/** Format date string as a readable group header label.
+ *  dateStr is already a KST YYYY-MM-DD string — parse it directly to avoid
+ *  timezone-dependent Date methods producing wrong month/day. */
+function formatDateLabel(dateStr: string): string {
+  if (!dateStr) return ''
+  const parts = dateStr.split('-').map(Number)
+  if (parts.length < 3 || parts.some(isNaN)) return dateStr
+  const [, m, dd] = parts
+  // Build a KST date just to extract the weekday name
+  const d = new Date(dateStr + 'T00:00:00+09:00')
+  const weekday = isNaN(d.getTime())
+    ? ''
+    : d.toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', weekday: 'short' })
+  return `${m}월 ${dd}일 (${weekday})`
+}
+
+type TradeList = NonNullable<ReturnType<typeof useTrades>['data']>
+
+interface DateGroup {
+  date: string
+  label: string
+  trades: TradeList
+}
+
 export default function TradeHistory() {
-  const { data: rawTrades, isLoading } = useTrades(100)
+  const [page, setPage] = useState(0)
+  const offset = page * PAGE_SIZE
+  const { data: rawTrades, isLoading } = useTrades(PAGE_SIZE, undefined, offset)
   const { data: periodSummary } = useQuery({
     queryKey: ['trade-summary-periods'],
     queryFn: () => fetchTradeSummaryPeriods(),
     refetchInterval: 60_000,
   })
   const trades = rawTrades?.filter(t => t.status !== 'pending')
+
+  // Group trades by KST date
+  const dateGroups = useMemo<DateGroup[]>(() => {
+    if (!trades || trades.length === 0) return []
+    const groups: Map<string, typeof trades> = new Map()
+    for (const t of trades) {
+      const date = getKSTDate(t.created_at)
+      const key = date || 'unknown'
+      if (!groups.has(key)) groups.set(key, [])
+      groups.get(key)!.push(t)
+    }
+    // Already sorted newest-first from API; preserve order
+    return Array.from(groups.entries()).map(([date, items]) => ({
+      date,
+      label: formatDateLabel(date),
+      trades: items,
+    }))
+  }, [trades])
+
+  // NOTE: hasMore is based on pre-filter count (rawTrades includes pending).
+  // If many pending trades exist, the displayed page may show fewer than PAGE_SIZE items.
+  // Pagination offsets remain correct — only the visual density is slightly inconsistent.
+  const hasMore = rawTrades?.length === PAGE_SIZE
+  const hasPrev = page > 0
 
   return (
     <div className="space-y-4">
@@ -38,13 +128,15 @@ export default function TradeHistory() {
       {isLoading ? (
         <div className="text-gray-500">Loading trades...</div>
       ) : !trades || trades.length === 0 ? (
-        <div className="text-gray-500 text-sm">No trades recorded yet.</div>
+        <div className="text-gray-500 text-sm">
+          {page > 0 ? 'No more trades.' : 'No trades recorded yet.'}
+        </div>
       ) : (
         <div className="bg-gray-900 rounded-lg p-4 overflow-x-auto">
           <table className="w-full text-sm min-w-[750px]">
             <thead className="text-gray-400 border-b border-gray-700">
               <tr>
-                <th className="text-left py-2 px-3">Time</th>
+                <th className="text-left py-2 px-3">Time (KST)</th>
                 <th className="text-left py-2 px-3">Symbol</th>
                 <th className="text-center py-2 px-3">Side</th>
                 <th className="text-right py-2 px-3">Qty</th>
@@ -56,68 +148,115 @@ export default function TradeHistory() {
               </tr>
             </thead>
             <tbody>
-              {trades.map((t, i) => (
-                <tr key={i} className="border-b border-gray-800/50 hover:bg-gray-800/30">
-                  <td className="py-2 px-3 text-gray-400 text-xs">
-                    {t.created_at ? new Date(t.created_at).toLocaleString() : '-'}
-                  </td>
-                  <td className="py-2 px-3 font-medium">
-                    {t.symbol}
-                    {t.name && <span className="text-gray-500 text-xs ml-1">{t.name}</span>}
-                  </td>
-                  <td className="py-2 px-3 text-center">
-                    <span className={clsx(
-                      'px-2 py-0.5 rounded text-xs font-bold',
-                      t.side === 'BUY' ? 'bg-green-900/40 text-green-400' : 'bg-red-900/40 text-red-400'
-                    )}>
-                      {t.side}
-                    </span>
-                    {t.session && t.session !== 'regular' && (
-                      <span className={clsx('ml-1 px-1 py-0.5 rounded text-[10px] font-semibold', {
-                        'bg-orange-900/40 text-orange-300': t.session === 'pre_market',
-                        'bg-purple-900/40 text-purple-300': t.session === 'after_hours',
-                        'bg-indigo-900/40 text-indigo-300': t.session === 'extended_nxt',
-                      })}>
-                        {t.session === 'pre_market' ? 'PRE' : t.session === 'after_hours' ? 'AH' : 'NXT'}
-                      </span>
-                    )}
-                  </td>
-                  <td className="py-2 px-3 text-right">{t.quantity}</td>
-                  <td className="py-2 px-3 text-right">
-                    {t.filled_price ? formatCurrency(t.filled_price, t.market === 'KR' ? 'KRW' : 'USD') : t.price ? formatCurrency(t.price, t.market === 'KR' ? 'KRW' : 'USD') : '-'}
-                  </td>
-                  <td className="py-2 px-3 text-gray-400 text-xs">{t.strategy}</td>
-                  <td className="py-2 px-3 text-center">
-                    <span className={clsx('text-xs', {
-                      'text-green-400': t.status === 'filled',
-                      'text-yellow-400': t.status === 'pending',
-                      'text-red-400': t.status === 'failed',
-                      'text-gray-400': t.status === 'cancelled',
-                    })}>
-                      {t.status}
-                    </span>
-                  </td>
-                  <td className={clsx('py-2 px-3 text-right', {
-                    'text-green-400': t.pnl != null && t.pnl > 0,
-                    'text-red-400': t.pnl != null && t.pnl < 0,
-                    'text-gray-500': t.pnl == null,
-                  })}>
-                    {t.pnl != null ? formatCurrency(t.pnl, t.market === 'KR' ? 'KRW' : 'USD') : '-'}
-                  </td>
-                  <td className={clsx('py-2 px-3 text-right text-xs', {
-                    'text-green-400': t.pnl_pct != null && t.pnl_pct > 0,
-                    'text-red-400': t.pnl_pct != null && t.pnl_pct < 0,
-                    'text-gray-500': t.pnl_pct == null,
-                  })}>
-                    {t.pnl_pct != null ? `${t.pnl_pct >= 0 ? '+' : ''}${t.pnl_pct.toFixed(2)}%` : '-'}
-                  </td>
-                </tr>
+              {dateGroups.map(group => (
+                <DateGroupRows key={group.date} group={group} />
               ))}
             </tbody>
           </table>
         </div>
       )}
+
+      {/* Pagination */}
+      {(hasPrev || hasMore) && (
+        <div className="flex items-center justify-between text-sm">
+          <button
+            onClick={() => setPage(p => Math.max(0, p - 1))}
+            disabled={!hasPrev}
+            className={clsx(
+              'px-3 py-1.5 rounded',
+              hasPrev
+                ? 'bg-gray-700 hover:bg-gray-600 text-white'
+                : 'bg-gray-800 text-gray-600 cursor-not-allowed'
+            )}
+          >
+            ← Newer
+          </button>
+          <span className="text-gray-500">Page {page + 1}</span>
+          <button
+            onClick={() => setPage(p => p + 1)}
+            disabled={!hasMore}
+            className={clsx(
+              'px-3 py-1.5 rounded',
+              hasMore
+                ? 'bg-gray-700 hover:bg-gray-600 text-white'
+                : 'bg-gray-800 text-gray-600 cursor-not-allowed'
+            )}
+          >
+            Older →
+          </button>
+        </div>
+      )}
     </div>
+  )
+}
+
+function DateGroupRows({ group }: { group: DateGroup }) {
+  return (
+    <>
+      {/* Date group header */}
+      <tr className="bg-gray-800/60">
+        <td colSpan={9} className="py-1.5 px-3 text-xs font-semibold text-gray-300">
+          {group.label || group.date}
+        </td>
+      </tr>
+      {group.trades.map((t, i) => (
+        <tr key={`${group.date}-${i}`} className="border-b border-gray-800/50 hover:bg-gray-800/30">
+          <td className="py-2 px-3 text-gray-400 text-xs">
+            {formatKST(t.created_at)}
+          </td>
+          <td className="py-2 px-3 font-medium">
+            {t.symbol}
+            {t.name && <span className="text-gray-500 text-xs ml-1">{t.name}</span>}
+          </td>
+          <td className="py-2 px-3 text-center">
+            <span className={clsx(
+              'px-2 py-0.5 rounded text-xs font-bold',
+              t.side === 'BUY' ? 'bg-green-900/40 text-green-400' : 'bg-red-900/40 text-red-400'
+            )}>
+              {t.side}
+            </span>
+            {t.session && t.session !== 'regular' && (
+              <span className={clsx('ml-1 px-1 py-0.5 rounded text-[10px] font-semibold', {
+                'bg-orange-900/40 text-orange-300': t.session === 'pre_market',
+                'bg-purple-900/40 text-purple-300': t.session === 'after_hours',
+                'bg-indigo-900/40 text-indigo-300': t.session === 'extended_nxt',
+              })}>
+                {t.session === 'pre_market' ? 'PRE' : t.session === 'after_hours' ? 'AH' : 'NXT'}
+              </span>
+            )}
+          </td>
+          <td className="py-2 px-3 text-right">{t.quantity}</td>
+          <td className="py-2 px-3 text-right">
+            {t.filled_price ? formatCurrency(t.filled_price, t.market === 'KR' ? 'KRW' : 'USD') : t.price ? formatCurrency(t.price, t.market === 'KR' ? 'KRW' : 'USD') : '-'}
+          </td>
+          <td className="py-2 px-3 text-gray-400 text-xs">{t.strategy}</td>
+          <td className="py-2 px-3 text-center">
+            <span className={clsx('text-xs', {
+              'text-green-400': t.status === 'filled',
+              'text-yellow-400': t.status === 'pending',
+              'text-red-400': t.status === 'failed',
+              'text-gray-400': t.status === 'cancelled',
+            })}>
+              {t.status}
+            </span>
+          </td>
+          <td className={clsx('py-2 px-3 text-right', {
+            'text-green-400': t.pnl != null && t.pnl > 0,
+            'text-red-400': t.pnl != null && t.pnl < 0,
+            'text-gray-500': t.pnl == null,
+          })}>
+            {t.pnl != null ? formatCurrency(t.pnl, t.market === 'KR' ? 'KRW' : 'USD') : '-'}
+          </td>
+          <td className={clsx('py-2 px-3 text-right text-xs', {
+            'text-green-400': t.pnl_pct != null && t.pnl_pct > 0,
+            'text-red-400': t.pnl_pct != null && t.pnl_pct < 0,
+            'text-gray-500': t.pnl_pct == null,
+          })}>
+            {t.pnl_pct != null ? `${t.pnl_pct >= 0 ? '+' : ''}${t.pnl_pct.toFixed(2)}%` : '-'}
+          </td>
+        </tr>
+      ))}
+    </>
   )
 }
 

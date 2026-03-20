@@ -128,14 +128,16 @@ class TradeRepository:
     async def get_trade_history(
         self,
         limit: int = 50,
+        offset: int = 0,
         symbol: str | None = None,
         exclude_paper: bool = False,
     ) -> list[Order]:
-        stmt = select(Order).order_by(desc(Order.created_at)).limit(limit)
+        stmt = select(Order).order_by(desc(Order.created_at))
         if symbol:
             stmt = stmt.where(Order.symbol == symbol)
         if exclude_paper:
             stmt = stmt.where(Order.is_paper == False)  # noqa: E712
+        stmt = stmt.offset(offset).limit(limit)
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
@@ -238,14 +240,15 @@ class TradeRepository:
             logger.info("Cleaned up %d duplicate orders", deleted)
         return deleted
 
-    async def recover_not_found_orders(self) -> int:
+    async def recover_not_found_orders(self) -> list[str]:
         """STOCK-38: Recover orders stuck in 'not_found' that have PnL data.
 
-        Sets status to 'filled', filled_at to created_at, and filled_price
-        to price (if not already set). Only recovers orders where pnl is set,
+        Sets status to 'filled', filled_at to created_at, filled_price
+        to price (if not already set), and filled_quantity to quantity
+        (if not already set). Only recovers orders where pnl is set,
         meaning the trade was recorded by place_sell with PnL calculation.
 
-        Returns count of recovered orders.
+        Returns list of recovered kis_order_ids (use len() for count).
         """
         stmt = select(Order).where(
             Order.status == "not_found",
@@ -254,18 +257,24 @@ class TradeRepository:
         result = await self._session.execute(stmt)
         orders = list(result.scalars().all())
 
-        count = 0
+        recovered_ids: list[str] = []
         for order in orders:
             order.status = "filled"
             order.filled_at = order.created_at
             if order.filled_price is None:
                 order.filled_price = order.price
-            count += 1
+            if order.filled_quantity is None or order.filled_quantity == 0:
+                order.filled_quantity = order.quantity
+            if order.kis_order_id:
+                recovered_ids.append(order.kis_order_id)
 
-        if count:
+        if recovered_ids:
             await self._session.commit()
-            logger.info("Recovered %d not_found orders to filled status", count)
-        return count
+            logger.info(
+                "Recovered %d not_found orders to filled status",
+                len(recovered_ids),
+            )
+        return recovered_ids
 
     # --- Watchlist ---
 

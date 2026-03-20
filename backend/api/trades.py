@@ -8,6 +8,7 @@ On startup, the trade log is restored from DB so history survives restarts.
 import logging
 
 from data.stock_name_service import get_name
+from db.trade_repository import TradeRepository
 from fastapi import APIRouter, Query, Request
 
 router = APIRouter(prefix="/trades", tags=["trades"])
@@ -29,10 +30,15 @@ def init_trades(session_factory) -> None:
 @router.get("/")
 async def get_trades(
     limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     symbol: str | None = None,
     market: str | None = None,
 ):
-    """Get trade history (in-memory + DB fallback)."""
+    """Get trade history (in-memory + DB fallback).
+
+    Returns trades sorted newest-first (descending by created_at).
+    Supports offset-based pagination for browsing older trades.
+    """
     # If in-memory has data, use it (fast path)
     if _trade_log:
         trades = _trade_log
@@ -40,7 +46,10 @@ async def get_trades(
             trades = [t for t in trades if t.get("symbol") == symbol.upper()]
         if market:
             trades = [t for t in trades if t.get("market", "US") == market]
-        result = trades[-limit:]
+        # Sort by created_at descending (newest-first) for consistent ordering
+        # even when trades were inserted out of chronological order
+        newest_first = sorted(trades, key=lambda t: t.get('created_at') or '', reverse=True)
+        result = newest_first[offset : offset + limit]
 
         # Batch-resolve missing names (fills cache for future calls)
         missing = [t for t in result if not t.get("name")]
@@ -62,11 +71,13 @@ async def get_trades(
     # Fallback: read from DB if available
     if _session_factory:
         try:
-            from db.trade_repository import TradeRepository
-
             async with _session_factory() as session:
                 repo = TradeRepository(session)
-                orders = await repo.get_trade_history(limit=limit, symbol=symbol)
+                # TODO(STOCK-36 follow-up): pass `market` to get_trade_history()
+                # so DB fallback respects market filter — currently only in-memory path filters by market.
+                orders = await repo.get_trade_history(
+                    limit=limit, offset=offset, symbol=symbol,
+                )
                 return [
                     {
                         "symbol": o.symbol,
@@ -122,13 +133,19 @@ async def trade_summary(market: str | None = None):
     }
 
 
-def record_trade(trade: dict) -> None:
+def record_trade(trade: dict, skip_db_persist: bool = False) -> None:
     """Record a trade to in-memory log AND persist to DB.
 
     Idempotent: if an entry with the same non-empty order_id already exists
     in the trade log, merges new data into the existing entry (preserving
     PnL if already set). This prevents duplicate rows when both place_sell()
     and reconciliation record the same order (STOCK-33).
+
+    Args:
+        trade: Trade data dict.
+        skip_db_persist: If True, skip the fire-and-forget DB persist
+            (used when the caller already handles DB persistence via
+            the awaited _db_recorder path, avoiding duplicate writes).
     """
     order_id = trade.get("order_id", "")
 
@@ -138,7 +155,7 @@ def record_trade(trade: dict) -> None:
             if existing.get("order_id") == order_id:
                 _merge_trade_entry(existing, trade)
                 # Still persist to DB — save_order UPSERT handles DB-level dedup
-                if _session_factory:
+                if not skip_db_persist and _session_factory:
                     import asyncio
 
                     try:
@@ -151,7 +168,7 @@ def record_trade(trade: dict) -> None:
     _trade_log.append(trade)
 
     # Async DB persist (fire-and-forget via session factory)
-    if _session_factory:
+    if not skip_db_persist and _session_factory:
         import asyncio
 
         try:
@@ -179,8 +196,6 @@ def _merge_trade_entry(existing: dict, new: dict) -> None:
 
 async def _do_persist_trade(trade: dict) -> None:
     """Core logic: persist trade dict to orders table via TradeRepository."""
-    from db.trade_repository import TradeRepository
-
     async with _session_factory() as session:
         repo = TradeRepository(session)
         await repo.save_order(
@@ -270,8 +285,6 @@ async def restore_trade_log(exclude_paper: bool = True) -> int:
     if not _session_factory:
         return 0
     try:
-        from db.trade_repository import TradeRepository
-
         async with _session_factory() as session:
             repo = TradeRepository(session)
             orders = await repo.get_trade_history(
@@ -317,8 +330,6 @@ async def reconcile_pending_orders(held_symbols: set[str]) -> int:
         return 0
     updated = 0
     try:
-        from db.trade_repository import TradeRepository
-
         async with _session_factory() as session:
             repo = TradeRepository(session)
             pending = await repo.get_open_orders(exclude_paper=True)
@@ -393,8 +404,6 @@ async def update_order_in_db(
                 break
 
     try:
-        from db.trade_repository import TradeRepository
-
         async with _session_factory() as session:
             repo = TradeRepository(session)
             order = await repo.find_by_kis_order_id(kis_order_id)
@@ -433,18 +442,20 @@ async def recover_not_found_orders() -> int:
     if not _session_factory:
         return 0
     try:
-        from db.trade_repository import TradeRepository
-
         async with _session_factory() as session:
             repo = TradeRepository(session)
-            count = await repo.recover_not_found_orders()
-            # Also update in-memory trade log
-            if count:
+            recovered_ids = await repo.recover_not_found_orders()
+            count = len(recovered_ids)
+            # Update in-memory trade log using recovered IDs from DB
+            if recovered_ids:
+                recovered_set = set(recovered_ids)
                 for t in _trade_log:
-                    if t.get("status") == "not_found" and t.get("pnl") is not None:
+                    if t.get("order_id") in recovered_set:
                         t["status"] = "filled"
                         if t.get("filled_price") is None:
                             t["filled_price"] = t.get("price")
+                        if not t.get("filled_quantity"):
+                            t["filled_quantity"] = t.get("quantity")
             return count
     except Exception as e:
         logger.warning("Failed to recover not_found orders: %s", e)
