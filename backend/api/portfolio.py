@@ -105,9 +105,17 @@ async def _combined_summary(request: Request) -> dict:
     if _cached_usd_krw <= 0:
         _cached_usd_krw = 1450.0
 
-    # Total equity: KR total + US total converted to KRW.
-    # CTRP6504R tot_asst_amt only covers overseas assets, not KR — so sum directly.
-    total_equity = krw_total + usd_total * _cached_usd_krw
+    # STOCK-53: Total equity for 통합증거금 accounts.
+    # US adapter stores _full_account_usd (uncapped buying power + positions)
+    # which reflects the full account capacity including KRW auto-conversion.
+    # total = KR domestic stocks + full US account value × rate
+    adapter = getattr(request.app.state, "adapter", None)
+    full_us_usd = getattr(adapter, "_full_account_usd", 0) if adapter else 0
+    if full_us_usd > 0:
+        kr_stock_value = krw_total - krw_available  # domestic stocks only
+        total_equity = kr_stock_value + full_us_usd * _cached_usd_krw
+    else:
+        total_equity = krw_total + usd_total * _cached_usd_krw
 
     # Available cash: KRW + USD converted to KRW
     available_cash = krw_available + usd_available * _cached_usd_krw

@@ -700,21 +700,27 @@ class EvaluationLoop:
         of both markets converted to this market's currency. Returns None
         if other market data is not available.
 
-        Avoids double-counting the shared deposit by adding only the other
-        market's position value (total - available = invested portion).
+        STOCK-53: Uses other market's full total (not just positions) to get
+        a more accurate combined value. The deposit overlap is acceptable
+        because _apply_market_cap limits actual cash usage via
+        min(capped_cash, cash_available).
         """
         if not self._other_market_data:
             return None
         try:
             other_balance = await self._other_market_data.get_balance()
-            # Only add position value from other market (not deposit, to avoid double-count)
-            other_positions = max(0, other_balance.total - other_balance.available)
+            # Add full other market total for accurate allocation sizing.
+            # Deposit double-counting is safe: actual orders are bounded by
+            # real cash_available via min() in _apply_market_cap.
+            other_total = other_balance.total
+            if other_total <= 0:
+                other_total = max(0, other_balance.total - other_balance.available)
             if self._market == "US":
-                # Own is USD, other KR positions are in KRW → convert to USD
-                other_in_own = other_positions / self._exchange_rate
+                # Own is USD, other KR total is in KRW → convert to USD
+                other_in_own = other_total / self._exchange_rate
             else:
-                # Own is KRW, other US positions are in USD → convert to KRW
-                other_in_own = other_positions * self._exchange_rate
+                # Own is KRW, other US total is in USD → convert to KRW
+                other_in_own = other_total * self._exchange_rate
             combined = own_balance_total + other_in_own
             return combined
         except Exception as e:

@@ -344,10 +344,11 @@ class TestMarketAllocation:
         )
         assert with_combined.quantity >= without.quantity
 
-    def test_combined_clamped_to_own_portfolio(self):
-        """Combined cap never exceeds own market's portfolio value."""
+    def test_combined_allocation_limited_by_cash(self):
+        """STOCK-53: combined cap can exceed own portfolio, but real cash limits orders."""
         rm = self._make_rm(us=0.5, kr=0.5)
-        # 50% of 200,000 = 100,000 → but own portfolio is only 60,000
+        # 50% of 200,000 = 100,000 → allocation base is 100,000
+        # but actual cash is only 60,000 (× 0.95 buffer)
         result = rm.calculate_position_size(
             symbol="AAPL",
             price=100.0,
@@ -357,8 +358,13 @@ class TestMarketAllocation:
             market="US",
             combined_portfolio_value=200_000,
         )
-        # Should be capped by portfolio_value (60,000), not combined cap (100,000)
-        assert result.allocation_usd <= 60_000 * 0.10 + 1
+        # Per-position = 100,000 * 7% = 7,000 (regime "uptrend")
+        # Cash limit = 60,000 * 0.95 = 57,000
+        # Allocation = min(7,000, 57,000, headroom) = 7,000
+        assert result.allowed is True
+        assert result.allocation_usd == 7_000
+        # Real cash still limits total allocation
+        assert result.allocation_usd <= 60_000 * 0.95
 
     def test_combined_with_kelly_sizing(self):
         """Kelly sizing also uses combined_portfolio_value."""

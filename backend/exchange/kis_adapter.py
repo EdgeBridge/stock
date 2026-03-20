@@ -291,6 +291,10 @@ class KISAdapter(ExchangeAdapter):
         self._last_exchange_rate = exrt
         self._tot_asst_krw = tot_asst_krw  # 통합증거금 total (KR+US+cash)
         self._usd_deposit_krw = float(pb_o3.get("frcr_evlu_tota", 0)) if pb_o3 else 0
+        # STOCK-53: Store uncapped buying power + positions for total_equity calc.
+        # frcr_ord_psbl_amt1 includes KRW auto-conversion, reflecting the full
+        # account capacity (통합증거금). Used by portfolio summary for accurate total.
+        self._full_account_usd = available + position_value
 
         # 4. Total: use present-balance total if available, else fallback
         if tot_asst_krw > 0:
