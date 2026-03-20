@@ -41,6 +41,7 @@ def _make_app(
     us_adapter.fetch_positions = AsyncMock(return_value=us_positions or [])
     us_adapter._tot_asst_krw = tot_asst_krw
     us_adapter._last_exchange_rate = last_exchange_rate
+    us_adapter._full_account_usd = 0
 
     async def _mock_rate():
         return adapter_exchange_rate
@@ -296,6 +297,7 @@ class TestResponseStructure:
         us_adapter.fetch_positions = AsyncMock(return_value=[])
         us_adapter._tot_asst_krw = None
         us_adapter._last_exchange_rate = 1400.0
+        us_adapter._full_account_usd = 0
 
         async def _mock_rate():
             return 1400.0

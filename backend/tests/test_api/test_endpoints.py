@@ -41,6 +41,8 @@ def app():
         symbol="AAPL", price=160.0, volume=50_000_000,
     ))
     adapter.fetch_ohlcv = AsyncMock(return_value=[])
+    adapter._full_account_usd = 0
+    adapter._last_exchange_rate = 1350.0
 
     test_app.state.adapter = adapter
     test_app.state.market_data = MarketDataService(
