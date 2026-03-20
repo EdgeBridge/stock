@@ -2234,7 +2234,7 @@ LLM_API_KEY=sk-ant-...                         # Anthropic API key
 LLM_MODEL=claude-haiku-4-5-20251001            # Primary model
 LLM_FALLBACK_MODEL=claude-sonnet-4-6           # Anthropic fallback
 LLM_GEMINI_API_KEY=AIza...                     # Google Gemini API key
-LLM_GEMINI_FALLBACK_MODEL=gemini-3-flash-preview  # Gemini fallback
+LLM_GEMINI_FALLBACK_MODEL=gemini-2.5-flash  # Gemini fallback
 LLM_MAX_TOKENS=4096
 
 # ===== External Data =====

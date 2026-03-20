@@ -64,7 +64,7 @@ Architecture inherited from ~/coin project (crypto trading bot). **Live trading*
 - 3-Layer screening: IndicatorScreener (tech) -> FundamentalEnricher (yfinance) -> AI (LLMClient)
   - Layer 2.5: News sentiment enricher (Finnhub US / Naver KR, ±15 point adjustment, 15% weight)
 - LLM multi-provider: services/llm/ — Anthropic primary -> fallback -> Gemini (auto-failover with retry)
-  - Fallback chain: claude-haiku -> claude-sonnet -> gemini-3-flash-preview
+  - Fallback chain: claude-haiku -> claude-sonnet -> gemini-2.5-flash
   - Retry: 3x per model with exponential backoff (2s, 4s, 8s)
   - All 4 agents (market_analyst, risk_assessment, trade_review, news_sentiment) use LLMClient
 - Dual engine: US/KR Stock Engine (individual stocks) + ETF Engine (leveraged/inverse + sector ETFs)
