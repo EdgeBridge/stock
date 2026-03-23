@@ -20,6 +20,39 @@ logger = logging.getLogger(__name__)
 # fraction vs the previous snapshot (e.g. 0.5 = 50% drop).
 ANOMALY_DROP_THRESHOLD = 0.5
 
+# STOCK-46: Cash flow detection threshold (fraction of total equity).
+# If abs(raw_cash_flow) > threshold * prev_total_equity, treat as deposit/withdrawal.
+CASH_FLOW_THRESHOLD = 0.05  # 5%
+
+
+def detect_cash_flow(
+    prev_cash: float,
+    prev_invested: float,
+    prev_total: float,
+    new_cash: float,
+    new_invested: float,
+) -> float:
+    """Detect external deposit/withdrawal between two snapshots.
+
+    Logic: In normal trading, buying stock moves cash → invested (equal amounts).
+    Selling does the reverse (plus realized PnL which is typically small).
+    A deposit increases (cash + invested) without an offsetting decrease.
+
+    Formula: raw_cf = (new_cash + new_invested) - (prev_cash + prev_invested)
+    If abs(raw_cf) > CASH_FLOW_THRESHOLD * prev_total → return raw_cf, else 0.
+
+    Returns the detected cash flow amount (positive=deposit, negative=withdrawal).
+    """
+    if prev_total <= 0:
+        return 0.0
+
+    raw_cf = (new_cash + new_invested) - (prev_cash + prev_invested)
+    threshold_amount = CASH_FLOW_THRESHOLD * prev_total
+
+    if abs(raw_cf) > threshold_amount:
+        return raw_cf
+    return 0.0
+
 
 class PortfolioManager:
     """Track portfolio state and persist snapshots to DB."""
@@ -124,6 +157,25 @@ class PortfolioManager:
 
         daily_pnl = await self._calculate_daily_pnl(total_equity)
 
+        # STOCK-46: Detect external cash flow (deposit/withdrawal).
+        cash_flow = 0.0
+        if prev is not None and prev.total_value_usd > 0:
+            cash_flow = detect_cash_flow(
+                prev_cash=prev.cash_usd,
+                prev_invested=prev.invested_usd,
+                prev_total=prev.total_value_usd,
+                new_cash=balance.available,
+                new_invested=invested,
+            )
+            if cash_flow != 0.0:
+                logger.info(
+                    "[%s] Cash flow detected: %.2f (deposit)"
+                    if cash_flow > 0
+                    else "[%s] Cash flow detected: %.2f (withdrawal)",
+                    self._market,
+                    cash_flow,
+                )
+
         snapshot = PortfolioSnapshot(
             market=self._market,
             total_value_usd=total_equity,
@@ -131,6 +183,7 @@ class PortfolioManager:
             invested_usd=invested,
             unrealized_pnl=unrealized_pnl,
             daily_pnl=daily_pnl,
+            cash_flow=cash_flow,
             recorded_at=datetime.utcnow(),
         )
 
@@ -234,6 +287,7 @@ class PortfolioManager:
                 "invested_usd": s.invested_usd,
                 "unrealized_pnl": s.unrealized_pnl,
                 "daily_pnl": s.daily_pnl,
+                "cash_flow": getattr(s, "cash_flow", 0.0) or 0.0,
             }
             for s in snapshots
         ]

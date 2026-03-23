@@ -239,10 +239,12 @@ async def _enrich_positions(positions, market: str, request: Request) -> list[di
 
 @router.get("/returns")
 async def portfolio_returns(request: Request):
-    """Get cumulative returns: daily, weekly, monthly (from equity snapshots)."""
-    from core.models import PortfolioSnapshot
-    from sqlalchemy import select
+    """Get cumulative returns: daily, weekly, monthly (from equity snapshots).
 
+    STOCK-46: Uses TWR (Time-Weighted Return) when cash flows are detected,
+    so that deposits/withdrawals don't inflate the return percentage.
+    Returns both `pct` (TWR) and `simple_pct` (old method) for transparency.
+    """
     if not _session_factory:
         return {"daily": None, "weekly": None, "monthly": None}
 
@@ -253,7 +255,6 @@ async def portfolio_returns(request: Request):
         "monthly": now - timedelta(days=30),
     }
 
-    # Get the latest snapshot per market as "current" equity
     async with _session_factory() as session:
         result = {}
         for period_name, since in periods.items():
@@ -275,11 +276,24 @@ async def portfolio_returns(request: Request):
 
             if old_equity > 0:
                 change = new_equity - old_equity
-                pct = (change / old_equity) * 100
+                simple_pct = (change / old_equity) * 100
+
+                # STOCK-46: Calculate TWR if cash flows exist in this period
+                us_snapshots = await _get_snapshots_in_range(session, since, "US")
+                kr_snapshots = await _get_snapshots_in_range(session, since, "KR")
+                has_cf = _has_cash_flows(us_snapshots) or _has_cash_flows(kr_snapshots)
+
+                if has_cf:
+                    twr_pct = _calculate_twr(us_snapshots, kr_snapshots, _cached_usd_krw)
+                else:
+                    twr_pct = simple_pct
+
                 result[period_name] = {
                     "change": round(change, 0),
-                    "pct": round(pct, 2),
+                    "pct": round(twr_pct, 2),
+                    "simple_pct": round(simple_pct, 2),
                     "base_equity": round(old_equity, 0),
+                    "has_cash_flows": has_cf,
                 }
             else:
                 result[period_name] = None
@@ -316,6 +330,98 @@ async def _get_latest_snapshot(session, market: str):
     )
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
+
+
+async def _get_snapshots_in_range(session, since: datetime, market: str) -> list:
+    """Get all snapshots for a market in a time range, ordered by time."""
+    from sqlalchemy import select
+
+    from core.models import PortfolioSnapshot
+
+    stmt = (
+        select(PortfolioSnapshot)
+        .where(PortfolioSnapshot.recorded_at >= since)
+        .where(PortfolioSnapshot.market == market)
+        .order_by(PortfolioSnapshot.recorded_at.asc())
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+def _has_cash_flows(snapshots: list) -> bool:
+    """Check if any snapshot in the list has a non-zero cash_flow."""
+    return any((getattr(s, "cash_flow", 0.0) or 0.0) != 0.0 for s in snapshots)
+
+
+def _build_equity_timeline(
+    us_snapshots: list, kr_snapshots: list, usd_krw: float
+) -> list[tuple[datetime, float, float]]:
+    """Build a combined equity timeline from US + KR snapshots.
+
+    Returns list of (timestamp, total_equity_krw, cash_flow_krw) sorted by time.
+    Merges both market streams and converts US values to KRW.
+    """
+    timeline: list[tuple[datetime, float, float]] = []
+
+    for s in us_snapshots:
+        equity = s.total_value_usd * usd_krw
+        cf = (getattr(s, "cash_flow", 0.0) or 0.0) * usd_krw
+        timeline.append((s.recorded_at, equity, cf))
+
+    for s in kr_snapshots:
+        equity = s.total_value_usd  # KR stores KRW directly
+        cf = getattr(s, "cash_flow", 0.0) or 0.0
+        timeline.append((s.recorded_at, equity, cf))
+
+    timeline.sort(key=lambda x: x[0])
+    return timeline
+
+
+def _calculate_twr(us_snapshots: list, kr_snapshots: list, usd_krw: float) -> float:
+    """Calculate TWR (Time-Weighted Return) across a period.
+
+    TWR splits the period at each cash flow event and chains sub-period returns:
+      TWR = prod(1 + Ri) - 1, where Ri = (end_equity - start_equity - cf) / start_equity
+
+    For intervals with no cash flows, this reduces to normal return calculation.
+    If there are no cash flows at all, returns simple return.
+    """
+    timeline = _build_equity_timeline(us_snapshots, kr_snapshots, usd_krw)
+    if len(timeline) < 2:
+        return 0.0
+
+    # Aggregate by timestamp (US + KR at same time get summed)
+    aggregated: list[tuple[datetime, float, float]] = []
+    i = 0
+    while i < len(timeline):
+        ts, eq, cf = timeline[i]
+        # Sum all entries at the same timestamp
+        j = i + 1
+        while j < len(timeline) and timeline[j][0] == ts:
+            eq += timeline[j][1]
+            cf += timeline[j][2]
+            j += 1
+        aggregated.append((ts, eq, cf))
+        i = j
+
+    if len(aggregated) < 2:
+        return 0.0
+
+    # Calculate chained sub-period returns
+    compound = 1.0
+    for idx in range(1, len(aggregated)):
+        prev_eq = aggregated[idx - 1][1]
+        curr_eq = aggregated[idx][1]
+        curr_cf = aggregated[idx][2]
+
+        if prev_eq <= 0:
+            continue
+
+        # Sub-period return: gain excluding the cash flow
+        sub_return = (curr_eq - curr_cf - prev_eq) / prev_eq
+        compound *= 1.0 + sub_return
+
+    return (compound - 1.0) * 100.0
 
 
 @router.delete("/snapshots")
