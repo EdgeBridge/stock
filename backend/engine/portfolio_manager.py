@@ -26,27 +26,28 @@ CASH_FLOW_THRESHOLD = 0.05  # 5%
 
 
 def detect_cash_flow(
-    prev_cash: float,
-    prev_invested: float,
     prev_total: float,
-    new_cash: float,
-    new_invested: float,
+    new_total: float,
 ) -> float:
     """Detect external deposit/withdrawal between two snapshots.
 
-    Logic: In normal trading, buying stock moves cash → invested (equal amounts).
-    Selling does the reverse (plus realized PnL which is typically small).
-    A deposit increases (cash + invested) without an offsetting decrease.
+    Uses total portfolio equity change rather than (cash + invested_cost_basis).
+    This correctly handles profitable sells: selling a position at a gain does NOT
+    change total equity (unrealized PnL is simply converted to cash), so it is
+    never misclassified as a deposit.
 
-    Formula: raw_cf = (new_cash + new_invested) - (prev_cash + prev_invested)
-    If abs(raw_cf) > CASH_FLOW_THRESHOLD * prev_total → return raw_cf, else 0.
+    Genuine deposits/withdrawals directly change total equity:
+      raw_cf = new_total - prev_total
+
+    Normal market appreciation may also appear here, but is typically below the
+    5% threshold within a single snapshot interval.
 
     Returns the detected cash flow amount (positive=deposit, negative=withdrawal).
     """
     if prev_total <= 0:
         return 0.0
 
-    raw_cf = (new_cash + new_invested) - (prev_cash + prev_invested)
+    raw_cf = new_total - prev_total
     threshold_amount = CASH_FLOW_THRESHOLD * prev_total
 
     if abs(raw_cf) > threshold_amount:
@@ -161,19 +162,13 @@ class PortfolioManager:
         cash_flow = 0.0
         if prev is not None and prev.total_value_usd > 0:
             cash_flow = detect_cash_flow(
-                prev_cash=prev.cash_usd,
-                prev_invested=prev.invested_usd,
                 prev_total=prev.total_value_usd,
-                new_cash=balance.available,
-                new_invested=invested,
+                new_total=total_equity,
             )
             if cash_flow != 0.0:
+                action = "deposit" if cash_flow > 0 else "withdrawal"
                 logger.info(
-                    "[%s] Cash flow detected: %.2f (deposit)"
-                    if cash_flow > 0
-                    else "[%s] Cash flow detected: %.2f (withdrawal)",
-                    self._market,
-                    cash_flow,
+                    "[%s] Cash flow detected: %.2f (%s)", self._market, cash_flow, action
                 )
 
         snapshot = PortfolioSnapshot(

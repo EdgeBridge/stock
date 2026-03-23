@@ -134,12 +134,21 @@ class TestBuildEquityTimeline:
         assert timeline[0][2] == 500_000.0
 
     def test_mixed_timeline_sorted(self):
+        """Carry-forward: first US event is skipped until KR arrives.
+
+        The US snapshot at T comes in before KR, but since both markets are
+        active we wait for each market's first reading before emitting a combined
+        entry.  The single aggregated entry reflects both markets' equity.
+        """
         now = datetime.utcnow()
-        us = [_make_snapshot("US", 10_000, now + timedelta(hours=2))]
-        kr = [_make_snapshot("KR", 10_000_000, now)]
+        # US arrives at T, KR arrives 2 seconds later
+        us = [_make_snapshot("US", 10_000, now)]
+        kr = [_make_snapshot("KR", 10_000_000, now + timedelta(seconds=2))]
         timeline = _build_equity_timeline(us, kr, 1400.0)
-        assert len(timeline) == 2
-        assert timeline[0][0] < timeline[1][0]  # KR first (earlier)
+        # The US event is skipped (no KR data yet); the KR event produces the
+        # first combined entry because US equity is now carried forward.
+        assert len(timeline) == 1
+        assert timeline[0][1] == pytest.approx(10_000 * 1400.0 + 10_000_000)
 
 
 # ── _calculate_twr() tests ──────────────────────────────────────────────
@@ -229,19 +238,30 @@ class TestCalculateTWR:
         assert twr == pytest.approx(expected, abs=0.01)
 
     def test_dual_market_twr(self):
-        """TWR with both US and KR snapshots."""
+        """TWR with both US and KR snapshots using realistic offset timestamps.
+
+        In production, save_snapshot() is called independently for each market
+        so their recorded_at values differ by at least milliseconds.  Using
+        slightly offset timestamps validates that the carry-forward aggregation
+        handles this correctly rather than producing nonsensical per-market
+        comparisons.
+        """
         now = datetime.utcnow()
+        # US snapshots arrive at T+0 and T+1h; KR snapshots arrive 5 seconds later.
         us = [
             _make_snapshot("US", 10_000, now, cash_flow=0.0),
             _make_snapshot("US", 10_500, now + timedelta(hours=1), cash_flow=0.0),
         ]
         kr = [
-            _make_snapshot("KR", 5_000_000, now, cash_flow=0.0),
-            _make_snapshot("KR", 5_250_000, now + timedelta(hours=1), cash_flow=0.0),
+            _make_snapshot("KR", 5_000_000, now + timedelta(seconds=5), cash_flow=0.0),
+            _make_snapshot(
+                "KR", 5_250_000, now + timedelta(hours=1, seconds=5), cash_flow=0.0
+            ),
         ]
         rate = 1400.0
         twr = _calculate_twr(us, kr, rate)
         # Combined: old = 10000*1400 + 5M = 19M, new = 10500*1400 + 5.25M = 19.95M
+        # Carry-forward chaining still produces (19.95/19 - 1) * 100 = 5%
         old_eq = 10_000 * rate + 5_000_000
         new_eq = 10_500 * rate + 5_250_000
         expected = (new_eq - old_eq) / old_eq * 100

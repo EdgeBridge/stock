@@ -278,12 +278,15 @@ async def portfolio_returns(request: Request):
                 change = new_equity - old_equity
                 simple_pct = (change / old_equity) * 100
 
-                # STOCK-46: Calculate TWR if cash flows exist in this period
-                us_snapshots = await _get_snapshots_in_range(session, since, "US")
-                kr_snapshots = await _get_snapshots_in_range(session, since, "KR")
-                has_cf = _has_cash_flows(us_snapshots) or _has_cash_flows(kr_snapshots)
+                # STOCK-46: Lightweight check first — only fetch all snapshots when
+                # cash flows actually exist (the common case has none).
+                us_has_cf = await _has_cash_flows_db(session, since, "US")
+                kr_has_cf = await _has_cash_flows_db(session, since, "KR")
+                has_cf = us_has_cf or kr_has_cf
 
                 if has_cf:
+                    us_snapshots = await _get_snapshots_in_range(session, since, "US")
+                    kr_snapshots = await _get_snapshots_in_range(session, since, "KR")
                     twr_pct = _calculate_twr(us_snapshots, kr_snapshots, _cached_usd_krw)
                 else:
                     twr_pct = simple_pct
@@ -353,27 +356,80 @@ def _has_cash_flows(snapshots: list) -> bool:
     return any((getattr(s, "cash_flow", 0.0) or 0.0) != 0.0 for s in snapshots)
 
 
+async def _has_cash_flows_db(session, since: datetime, market: str) -> bool:
+    """Lightweight DB check: does any snapshot in range have non-zero cash_flow?
+
+    Avoids fetching full snapshot rows in the common case (no deposits/withdrawals).
+    """
+    from sqlalchemy import func, select
+
+    from core.models import PortfolioSnapshot
+
+    stmt = (
+        select(func.count())
+        .select_from(PortfolioSnapshot)
+        .where(
+            PortfolioSnapshot.recorded_at >= since,
+            PortfolioSnapshot.market == market,
+            PortfolioSnapshot.cash_flow != 0.0,
+        )
+    )
+    result = await session.execute(stmt)
+    count = result.scalar() or 0
+    return count > 0
+
+
 def _build_equity_timeline(
     us_snapshots: list, kr_snapshots: list, usd_krw: float
 ) -> list[tuple[datetime, float, float]]:
-    """Build a combined equity timeline from US + KR snapshots.
+    """Build a combined equity timeline using carry-forward for mismatched timestamps.
+
+    In production, US and KR save_snapshot() each call datetime.utcnow()
+    independently, so their recorded_at values differ by at least milliseconds.
+    Exact-timestamp aggregation would compare single-market equity values against
+    each other, producing nonsensical sub-period returns.
+
+    Instead, carry forward the last-known equity from each market: at each snapshot
+    event, total portfolio equity = this_market_equity + last_known_other_market_equity.
+    Entries are skipped until at least one snapshot from every active market has been
+    seen, ensuring the initial equity denominator reflects the full portfolio.
 
     Returns list of (timestamp, total_equity_krw, cash_flow_krw) sorted by time.
-    Merges both market streams and converts US values to KRW.
     """
-    timeline: list[tuple[datetime, float, float]] = []
+    events: list[tuple[datetime, str, float, float]] = []
 
     for s in us_snapshots:
         equity = s.total_value_usd * usd_krw
         cf = (getattr(s, "cash_flow", 0.0) or 0.0) * usd_krw
-        timeline.append((s.recorded_at, equity, cf))
+        events.append((s.recorded_at, "US", equity, cf))
 
     for s in kr_snapshots:
         equity = s.total_value_usd  # KR stores KRW directly
         cf = getattr(s, "cash_flow", 0.0) or 0.0
-        timeline.append((s.recorded_at, equity, cf))
+        events.append((s.recorded_at, "KR", equity, cf))
 
-    timeline.sort(key=lambda x: x[0])
+    events.sort(key=lambda x: x[0])
+
+    if not events:
+        return []
+
+    has_us = bool(us_snapshots)
+    has_kr = bool(kr_snapshots)
+    last_equity: dict[str, float | None] = {"US": None, "KR": None}
+    timeline: list[tuple[datetime, float, float]] = []
+
+    for ts, market, equity, cf in events:
+        last_equity[market] = equity
+
+        # Skip until we have an initial equity reading for every active market
+        if has_us and last_equity["US"] is None:
+            continue
+        if has_kr and last_equity["KR"] is None:
+            continue
+
+        total_equity = (last_equity["US"] or 0.0) + (last_equity["KR"] or 0.0)
+        timeline.append((ts, total_equity, cf))
+
     return timeline
 
 
@@ -383,38 +439,26 @@ def _calculate_twr(us_snapshots: list, kr_snapshots: list, usd_krw: float) -> fl
     TWR splits the period at each cash flow event and chains sub-period returns:
       TWR = prod(1 + Ri) - 1, where Ri = (end_equity - start_equity - cf) / start_equity
 
-    For intervals with no cash flows, this reduces to normal return calculation.
-    If there are no cash flows at all, returns simple return.
+    Uses carry-forward per-market equity (via _build_equity_timeline) so that
+    near-simultaneous US and KR snapshots with slightly different timestamps are
+    aggregated correctly rather than being compared against each other directly.
     """
     timeline = _build_equity_timeline(us_snapshots, kr_snapshots, usd_krw)
     if len(timeline) < 2:
         return 0.0
 
-    # Aggregate by timestamp (US + KR at same time get summed)
-    aggregated: list[tuple[datetime, float, float]] = []
-    i = 0
-    while i < len(timeline):
-        ts, eq, cf = timeline[i]
-        # Sum all entries at the same timestamp
-        j = i + 1
-        while j < len(timeline) and timeline[j][0] == ts:
-            eq += timeline[j][1]
-            cf += timeline[j][2]
-            j += 1
-        aggregated.append((ts, eq, cf))
-        i = j
-
-    if len(aggregated) < 2:
-        return 0.0
-
-    # Calculate chained sub-period returns
     compound = 1.0
-    for idx in range(1, len(aggregated)):
-        prev_eq = aggregated[idx - 1][1]
-        curr_eq = aggregated[idx][1]
-        curr_cf = aggregated[idx][2]
+    for idx in range(1, len(timeline)):
+        prev_eq = timeline[idx - 1][1]
+        curr_eq = timeline[idx][1]
+        curr_cf = timeline[idx][2]
 
         if prev_eq <= 0:
+            logger.warning(
+                "[TWR] Skipping sub-period %d: prev_eq=%.2f (zero or negative equity)",
+                idx,
+                prev_eq,
+            )
             continue
 
         # Sub-period return: gain excluding the cash flow
