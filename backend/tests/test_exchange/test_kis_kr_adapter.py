@@ -5,7 +5,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from exchange.kis_kr_adapter import TR_ID_KR_LIVE, TR_ID_KR_PAPER, KISKRAdapter, KRRankedStock
+from exchange.kis_kr_adapter import (
+    TR_ID_KR_LIVE,
+    TR_ID_KR_PAPER,
+    KISKRAdapter,
+    KRRankedStock,
+    _safe_float,
+)
 
 
 @pytest.fixture
@@ -916,6 +922,50 @@ class TestFetchNewHighlow:
         _mock_get_response(adapter, {"rt_cd": "0", "output": []})
         result = await adapter.fetch_new_highlow()
         assert result == []
+
+
+class TestSafeFloat:
+    """Tests for _safe_float helper."""
+
+    def test_normal_values(self):
+        assert _safe_float(100.5) == 100.5
+        assert _safe_float("75000") == 75000.0
+        assert _safe_float(0) == 0.0
+
+    def test_none_and_empty(self):
+        assert _safe_float(None) == 0.0
+        assert _safe_float("") == 0.0
+
+    def test_non_numeric_strings(self):
+        assert _safe_float("N/A") == 0.0
+        assert _safe_float("-") == 0.0
+        assert _safe_float("거래정지") == 0.0
+
+    def test_negative_values(self):
+        assert _safe_float("-3.5") == -3.5
+        assert _safe_float(-100) == -100.0
+
+
+class TestParseKRRankedWithBadData:
+    """Test _parse_kr_ranked with non-numeric API responses."""
+
+    def test_handles_non_numeric_price(self, adapter):
+        """Non-numeric price field (e.g. trading halt) doesn't crash."""
+        data = {
+            "rt_cd": "0",
+            "output": [{
+                "stck_shrn_iscd": "005930",
+                "hts_kor_isnm": "삼성전자",
+                "stck_prpr": "N/A",
+                "prdy_ctrt": "-",
+                "acml_vol": "거래정지",
+            }],
+        }
+        result = adapter._parse_kr_ranked(data, "src", 10, "KRX")
+        assert len(result) == 1
+        assert result[0].price == 0.0
+        assert result[0].change_pct == 0.0
+        assert result[0].volume == 0.0
 
 
 class TestRankingTRIDs:

@@ -469,6 +469,7 @@ async def lifespan(app: FastAPI):
     kr_universe_expander = KRUniverseExpander(
         kis_kr_adapter=kr_adapter,
         rate_limiter=rate_limiter,
+        kr_etf_universe=kr_etf_universe,
     )
     app.state.kr_universe_expander = kr_universe_expander
     logger.info("KR engine components initialized (incl. ETF Engine + Universe Expander)")
@@ -1456,7 +1457,10 @@ async def lifespan(app: FastAPI):
                 if s not in existing_syms_set
             ]
             screener = KRScreener()
-            screen_result = screener.screen(dynamic_symbols=dynamic_new)
+            screen_result = screener.screen(
+                dynamic_symbols=dynamic_new,
+                exchange_map=universe_result.exchange_map,
+            )
             logger.info(
                 "KR scan: %d symbols after screening from %d sources",
                 screen_result.total_discovered, len(screen_result.sources),

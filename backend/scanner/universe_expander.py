@@ -21,6 +21,7 @@ from scanner.sector_analyzer import SectorAnalyzer
 if TYPE_CHECKING:
     from exchange.kis_adapter import KISAdapter
     from exchange.kis_kr_adapter import KISKRAdapter
+    from scanner.etf_universe import ETFUniverse as ETFUniverseType
     from services.rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
@@ -290,10 +291,12 @@ class KRUniverseExpander:
         self,
         kis_kr_adapter: "KISKRAdapter | None" = None,
         rate_limiter: "RateLimiter | None" = None,
+        kr_etf_universe: "ETFUniverseType | None" = None,
         max_total: int = 80,
     ):
         self._kis_kr = kis_kr_adapter
         self._rate_limiter = rate_limiter
+        self._kr_etf_universe = kr_etf_universe
         self._max_total = max_total
 
     async def expand_kr(
@@ -370,7 +373,14 @@ class KRUniverseExpander:
         discovered: list[str] = []
         exchange_map: dict[str, str] = {}
 
-        # (name, coroutine_factory, market_code, exchange_label)
+        # Build ETF exclusion set — KIS ranking can return ETFs mixed with
+        # stocks, which would conflict with the separate ETF Engine.
+        etf_exclude: set[str] = set()
+        if self._kr_etf_universe:
+            etf_exclude.update(self._kr_etf_universe.all_etf_symbols)
+            etf_exclude.update(self._kr_etf_universe.safe_haven)
+
+        # (name, coroutine_factory, exchange_label)
         calls: list[tuple[str, Any, str]] = [
             ("kr_volume_surge_kospi",
              lambda: self._kis_kr.fetch_volume_surge("J"), "KRX"),        # type: ignore[union-attr]
@@ -392,10 +402,15 @@ class KRUniverseExpander:
                     await self._rate_limiter.acquire()
                 stocks = await fetch_fn()
                 for s in stocks[:KR_KIS_SCREEN_LIMIT]:
-                    if _is_valid_kr_symbol(s.symbol):
+                    if (
+                        _is_valid_kr_symbol(s.symbol)
+                        and s.symbol not in etf_exclude
+                    ):
                         discovered.append(s.symbol)
-                        # Prefer the stock's own exchange field, fall back to label
-                        exchange_map[s.symbol] = s.exchange or exchange_label
+                        # Prefer the stock's own exchange field, fall back
+                        exchange_map[s.symbol] = (
+                            s.exchange or exchange_label
+                        )
                 logger.debug(
                     "KIS KR '%s': found %d symbols", name, len(stocks),
                 )

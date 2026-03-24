@@ -34,7 +34,11 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class KRRankedStock:
-    """A KR stock from KIS domestic ranking API."""
+    """A KR stock from KIS domestic ranking API.
+
+    Uses @dataclass (not Pydantic) — intentional for lightweight internal DTO
+    matching the US RankedStock pattern. No validation needed for transport.
+    """
 
     symbol: str
     name: str = ""
@@ -43,6 +47,18 @@ class KRRankedStock:
     volume: float = 0.0
     exchange: str = "KRX"  # KRX (KOSPI) or KOSDAQ
     source: str = ""
+
+
+def _safe_float(val: Any) -> float:
+    """Safely convert a KIS API value to float.
+
+    KIS endpoints can return "N/A", "-", or empty strings for
+    fields during trading halts or special states.
+    """
+    try:
+        return float(val or 0)
+    except (ValueError, TypeError):
+        return 0.0
 
 
 # TR_ID mappings for Korean domestic stock operations
@@ -774,9 +790,9 @@ class KISKRAdapter(ExchangeAdapter):
             results.append(KRRankedStock(
                 symbol=symbol,
                 name=item.get("hts_kor_isnm", ""),
-                price=float(item.get("stck_prpr", 0) or 0),
-                change_pct=float(item.get("prdy_ctrt", 0) or 0),
-                volume=float(item.get("acml_vol", 0) or 0),
+                price=_safe_float(item.get("stck_prpr", 0)),
+                change_pct=_safe_float(item.get("prdy_ctrt", 0)),
+                volume=_safe_float(item.get("acml_vol", 0)),
                 exchange=exchange,
                 source=source,
             ))

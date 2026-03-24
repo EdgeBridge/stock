@@ -627,3 +627,72 @@ class TestKRRunKisKRScreening:
         symbols, exchange_map = await expander._run_kis_kr_screening()
 
         assert exchange_map.get("247540") == "KOSDAQ"
+
+    @pytest.mark.asyncio
+    async def test_etf_symbols_filtered_out(self):
+        """Known ETF symbols from kr_etf_universe are excluded."""
+        mock_kis_kr = AsyncMock()
+        mock_kis_kr.fetch_volume_surge.return_value = [
+            KRRankedStock(symbol="005930", exchange="KRX"),   # stock — keep
+            KRRankedStock(symbol="069500", exchange="KRX"),   # KODEX 200 — ETF
+            KRRankedStock(symbol="122630", exchange="KRX"),   # KODEX 레버리지 — ETF
+        ]
+        mock_kis_kr.fetch_updown_rate.return_value = []
+        mock_kis_kr.fetch_new_highlow.return_value = []
+
+        mock_etf = MagicMock()
+        mock_etf.all_etf_symbols = ["069500", "122630", "114800", "229200"]
+        mock_etf.safe_haven = ["148070", "132030"]
+
+        expander = KRUniverseExpander(
+            kis_kr_adapter=mock_kis_kr,
+            kr_etf_universe=mock_etf,
+        )
+        symbols, _ = await expander._run_kis_kr_screening()
+
+        assert "005930" in symbols
+        assert "069500" not in symbols
+        assert "122630" not in symbols
+
+    @pytest.mark.asyncio
+    async def test_safe_haven_etfs_filtered_out(self):
+        """Safe haven ETF symbols are also excluded."""
+        mock_kis_kr = AsyncMock()
+        mock_kis_kr.fetch_volume_surge.return_value = [
+            KRRankedStock(symbol="148070", exchange="KRX"),   # 국고채 ETF
+            KRRankedStock(symbol="005930", exchange="KRX"),   # stock
+        ]
+        mock_kis_kr.fetch_updown_rate.return_value = []
+        mock_kis_kr.fetch_new_highlow.return_value = []
+
+        mock_etf = MagicMock()
+        mock_etf.all_etf_symbols = ["069500"]
+        mock_etf.safe_haven = ["148070", "132030"]
+
+        expander = KRUniverseExpander(
+            kis_kr_adapter=mock_kis_kr,
+            kr_etf_universe=mock_etf,
+        )
+        symbols, _ = await expander._run_kis_kr_screening()
+
+        assert "005930" in symbols
+        assert "148070" not in symbols
+
+    @pytest.mark.asyncio
+    async def test_no_etf_universe_skips_etf_filter(self):
+        """Without kr_etf_universe, no ETF filtering occurs."""
+        mock_kis_kr = AsyncMock()
+        mock_kis_kr.fetch_volume_surge.return_value = [
+            KRRankedStock(symbol="069500", exchange="KRX"),  # ETF passes
+        ]
+        mock_kis_kr.fetch_updown_rate.return_value = []
+        mock_kis_kr.fetch_new_highlow.return_value = []
+
+        expander = KRUniverseExpander(
+            kis_kr_adapter=mock_kis_kr,
+            kr_etf_universe=None,
+        )
+        symbols, _ = await expander._run_kis_kr_screening()
+
+        # Without ETF universe config, ETFs are not filtered
+        assert "069500" in symbols
