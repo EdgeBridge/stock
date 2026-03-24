@@ -119,6 +119,9 @@ async def test_trade_summary_not_found_in_today_period(db_session):
     """STOCK-37: not_found orders with PnL appear in today period using created_at."""
     session, factory = db_session
     now = datetime.utcnow()
+    # STOCK-48: Use today_start + offset instead of now - offset to avoid
+    # UTC day-boundary issues (now - 1h crosses into yesterday when UTC 00:00~01:00)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
     not_found = _make_order(
         "DOCN",
@@ -127,7 +130,7 @@ async def test_trade_summary_not_found_in_today_period(db_session):
         pnl=41.60,
         pnl_pct=3.0,
         filled_at=None,
-        created_at=now - timedelta(hours=1),
+        created_at=today_start + timedelta(hours=1),
     )
     session.add(not_found)
     await session.commit()
@@ -226,6 +229,9 @@ async def test_trade_summary_mixed_filled_and_not_found(db_session):
     """STOCK-37: Full scenario matching the issue — 11 not_found trades with PnL."""
     session, factory = db_session
     now = datetime.utcnow()
+    # STOCK-48: Use today_start + offset instead of now - offset to avoid
+    # UTC day-boundary issues (now - 1h crosses into yesterday when UTC 00:00~01:00)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
     # Replicate the 11 orders from the issue
     orders_data = [
@@ -248,7 +254,7 @@ async def test_trade_summary_mixed_filled_and_not_found(db_session):
             "not_found",
             pnl=pnl,
             filled_at=None,
-            created_at=now - timedelta(hours=1),
+            created_at=today_start + timedelta(hours=1),
         )
         session.add(order)
     await session.commit()
