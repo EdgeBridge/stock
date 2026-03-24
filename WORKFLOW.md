@@ -61,7 +61,6 @@ notify:
 project:
   knowledge:
     - CLAUDE.md
-    - SYSTEM_DESIGN.md
   scope:
     include:
       - "backend/"
