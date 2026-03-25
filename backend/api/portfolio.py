@@ -593,10 +593,17 @@ async def trade_summary_periods(request: Request, market: str | None = None):
                 today = _market_today(getattr(s, "market", "US"))
                 return d.year == today.year and d.month == today.month
 
-            def _calc(trades):
+            def _calc(trades, convert_currency: bool = False):
                 wins = [t for t in trades if t.pnl > 0]
                 losses = [t for t in trades if t.pnl <= 0]
-                total_pnl = sum(t.pnl for t in trades)
+                if convert_currency:
+                    # Convert US PnL (USD) to KRW for combined summary
+                    total_pnl = sum(
+                        t.pnl * _cached_usd_krw if getattr(t, "market", "US") == "US" else t.pnl
+                        for t in trades
+                    )
+                else:
+                    total_pnl = sum(t.pnl for t in trades)
                 # Cost-weighted PnL %: total_pnl / total_cost_basis
                 total_cost = 0.0
                 for t in trades:
@@ -612,7 +619,10 @@ async def trade_summary_periods(request: Request, market: str | None = None):
                         if pct and sell_price and pct != -100:
                             entry = sell_price / (1 + pct / 100)
                     if entry and qty:
-                        total_cost += abs(entry * qty)
+                        cost = abs(entry * qty)
+                        if convert_currency and getattr(t, "market", "US") == "US":
+                            cost *= _cached_usd_krw
+                        total_cost += cost
                 pnl_pct = round(total_pnl / total_cost * 100, 2) if total_cost > 0 else None
                 return {
                     "trades": len(trades),
@@ -627,11 +637,14 @@ async def trade_summary_periods(request: Request, market: str | None = None):
             week_sells = [s for s in sells if _in_week(s)]
             month_sells = [s for s in sells if _in_month(s)]
 
+            # When no market filter, convert US PnL to KRW for combined totals
+            convert = not market
+
             return {
-                "today": _calc(today_sells),
-                "week": _calc(week_sells),
-                "month": _calc(month_sells),
-                "all_time": _calc(sells),
+                "today": _calc(today_sells, convert_currency=convert),
+                "week": _calc(week_sells, convert_currency=convert),
+                "month": _calc(month_sells, convert_currency=convert),
+                "all_time": _calc(sells, convert_currency=convert),
                 "total_buys": sum(
                     1 for o in all_orders if o.side == "BUY" and o.status in ("filled", "not_found")
                 ),

@@ -140,7 +140,7 @@ async def test_trade_summary_not_found_in_today_period(db_session):
             from api.portfolio import trade_summary_periods
 
             mock_request = MagicMock()
-            result = await trade_summary_periods(mock_request)
+            result = await trade_summary_periods(mock_request, market="US")
 
     # Should appear in today's trades
     assert result["today"]["trades"] == 1
@@ -217,7 +217,7 @@ async def test_trade_summary_not_found_losses_counted(db_session):
             from api.portfolio import trade_summary_periods
 
             mock_request = MagicMock()
-            result = await trade_summary_periods(mock_request)
+            result = await trade_summary_periods(mock_request, market="US")
 
     assert result["all_time"]["trades"] == 1
     assert result["all_time"]["losses"] == 1
@@ -264,7 +264,7 @@ async def test_trade_summary_mixed_filled_and_not_found(db_session):
             from api.portfolio import trade_summary_periods
 
             mock_request = MagicMock()
-            result = await trade_summary_periods(mock_request)
+            result = await trade_summary_periods(mock_request, market="US")
 
     assert result["all_time"]["trades"] == 11
     assert result["all_time"]["pnl"] == pytest.approx(154.52)
