@@ -121,13 +121,10 @@ async def test_trade_summary_not_found_in_today_period(db_session):
     session, factory = db_session
 
     # STOCK-50: Create order at a time that's definitely "today" in the market's timezone.
-    # Get current time in market's timezone (US = America/New_York), find the start of that day,
-    # then add offset. Convert back to UTC (naive) for storage.
     ny_tz = ZoneInfo("America/New_York")
     now_ny = datetime.now(ny_tz)
     today_start_ny = now_ny.replace(hour=0, minute=0, second=0, microsecond=0)
     trade_time_ny = today_start_ny + timedelta(hours=1)
-    # Convert to UTC by removing tzinfo after getting the UTC equivalent
     trade_time_utc = trade_time_ny.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
 
     not_found = _make_order(
