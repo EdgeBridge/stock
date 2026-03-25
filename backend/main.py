@@ -99,12 +99,15 @@ async def lifespan(app: FastAPI):
     # KR adapter (shares same KIS auth — same app_key/secret/account)
     if config.is_paper:
         from exchange.paper_adapter import PaperAdapter as PaperAdapterCls
+
         kr_adapter = PaperAdapterCls(
-            config.trading.initial_balance_usd * 50_000, currency="KRW",
+            config.trading.initial_balance_usd * 50_000,
+            currency="KRW",
         )
         await kr_adapter.initialize()
     else:
         from exchange.kis_kr_adapter import KISKRAdapter
+
         kr_adapter = KISKRAdapter(config.kis, auth)
         await kr_adapter.initialize()
     app.state.kr_adapter = kr_adapter
@@ -119,9 +122,7 @@ async def lifespan(app: FastAPI):
     app.state.kis_ws = kis_ws
 
     # Initialize services
-    rate_limiter = RateLimiter(
-        max_per_second=5 if config.is_paper else 20
-    )
+    rate_limiter = RateLimiter(max_per_second=5 if config.is_paper else 20)
     market_data = MarketDataService(adapter=adapter, rate_limiter=rate_limiter)
     app.state.market_data = market_data
     app.state.indicator_svc = IndicatorService()
@@ -144,6 +145,7 @@ async def lifespan(app: FastAPI):
 
     # Engine components
     from engine.risk_manager import RiskParams
+
     market_allocs = {
         "US": config.risk.market_allocation_us,
         "KR": config.risk.market_allocation_kr,
@@ -164,10 +166,10 @@ async def lifespan(app: FastAPI):
 
     risk_params = RiskParams(
         market_allocations=market_allocs,
-        max_position_pct=0.08,          # 8% per position (diversified, backtest optimal)
-        max_positions=20,               # More positions, better diversification
-        default_stop_loss_pct=0.12,     # Wider SL: more room for volatility
-        default_take_profit_pct=0.50,   # Wide TP: let winners run
+        max_position_pct=0.08,  # 8% per position (diversified, backtest optimal)
+        max_positions=20,  # More positions, better diversification
+        default_stop_loss_pct=0.12,  # Wider SL: more room for volatility
+        default_take_profit_pct=0.50,  # Wide TP: let winners run
         tiered_trailing_tiers=tiered_tiers,
         breakeven_stop_enabled=be_enabled,
         breakeven_stop_activation_ratio=be_activation,
@@ -179,8 +181,8 @@ async def lifespan(app: FastAPI):
     # KR-specific risk params: wider SL for ±30% daily limit, tighter TP
     kr_risk_params = RiskParams(
         market_allocations=market_allocs,
-        default_stop_loss_pct=0.12,     # 12% (wider for KR volatility)
-        default_take_profit_pct=0.25,   # 25% (allow larger moves)
+        default_stop_loss_pct=0.12,  # 12% (wider for KR volatility)
+        default_take_profit_pct=0.25,  # 25% (allow larger moves)
         tiered_trailing_tiers=tiered_tiers,
         breakeven_stop_enabled=be_enabled,
         breakeven_stop_activation_ratio=be_activation,
@@ -188,7 +190,13 @@ async def lifespan(app: FastAPI):
         breakeven_stop_lock_pct=be_lock_pct,
     )
     kr_risk_manager = RiskManager(params=kr_risk_params)
-    order_manager = OrderManager(adapter=adapter, risk_manager=risk_manager, notification=notification, market_data=market_data, is_paper=config.is_paper)
+    order_manager = OrderManager(
+        adapter=adapter,
+        risk_manager=risk_manager,
+        notification=notification,
+        market_data=market_data,
+        is_paper=config.is_paper,
+    )
     app.state.risk_manager = risk_manager
     app.state.order_manager = order_manager
     consensus_cfg = registry._config_loader.get_consensus_config()
@@ -196,6 +204,7 @@ async def lifespan(app: FastAPI):
 
     # Wire trade recording
     from api.trades import record_trade, persist_trade_to_db
+
     set_trade_recorder(record_trade)
     # STOCK-38: Awaited DB persist ensures filled_price/status are saved
     # at order time, not relying solely on fire-and-forget or reconciliation
@@ -212,6 +221,11 @@ async def lifespan(app: FastAPI):
     health.set_notification(notification)
     app.state.health = health
 
+    # Exchange resolver (caches yfinance exchange lookups for KIS API)
+    # Created early so both PositionTracker and EvaluationLoop share the same instance
+    exchange_resolver = ExchangeResolver()
+    app.state.exchange_resolver = exchange_resolver
+
     # Position tracker (session_factory set below after DB init)
     position_tracker = PositionTracker(
         adapter=adapter,
@@ -220,11 +234,13 @@ async def lifespan(app: FastAPI):
         notification=notification,
         market_data=market_data,
         market="US",
+        exchange_resolver=exchange_resolver,
     )
     app.state.position_tracker = position_tracker
 
     # Adaptive weight manager (per-stock strategy selection)
     from engine.adaptive_weights import AdaptiveWeightManager
+
     adaptive_cfg = registry._config_loader.get_adaptive_config()
     stock_profiles = registry._config_loader.get_stock_profiles() or None
     adaptive_weights = AdaptiveWeightManager(
@@ -237,7 +253,8 @@ async def lifespan(app: FastAPI):
     # Portfolio manager
     session_factory = get_session_factory(config.database)
     portfolio_manager = PortfolioManager(
-        market_data=market_data, session_factory=session_factory,
+        market_data=market_data,
+        session_factory=session_factory,
     )
     app.state.portfolio_manager = portfolio_manager
 
@@ -246,16 +263,19 @@ async def lifespan(app: FastAPI):
 
     # Wire trade DB persistence
     from api.trades import init_trades
+
     init_trades(session_factory)
 
     # Wire portfolio DB access
     from api.portfolio import init_portfolio
+
     init_portfolio(session_factory)
 
     # LLM client (multi-provider with fallback)
     llm_client = None
     if config.llm.enabled and (config.llm.api_key or config.llm.gemini_api_key):
         from services.llm import LLMClient
+
         llm_client = LLMClient(config.llm)
         providers = []
         if config.llm.api_key:
@@ -269,6 +289,7 @@ async def lifespan(app: FastAPI):
     agent_ctx = None
     if llm_client:
         from services.agent_context import AgentContextService
+
         agent_ctx = AgentContextService(session_factory)
         logger.info("Agent context service enabled")
     app.state.agent_context = agent_ctx
@@ -284,6 +305,7 @@ async def lifespan(app: FastAPI):
         from agents.risk_assessment import RiskAssessmentAgent
         from agents.trade_review import TradeReviewAgent
         from agents.news_sentiment_agent import NewsSentimentAgent
+
         ai_agent = MarketAnalystAgent(llm_client=llm_client, context_service=agent_ctx)
         risk_agent = RiskAssessmentAgent(llm_client=llm_client, context_service=agent_ctx)
         trade_review_agent = TradeReviewAgent(llm_client=llm_client, context_service=agent_ctx)
@@ -293,7 +315,8 @@ async def lifespan(app: FastAPI):
             news_model = config.llm.gemini_fallback_model
         news_batch_size = config.llm.news_batch_size
         news_sentiment_agent = NewsSentimentAgent(
-            llm_client=llm_client, context_service=agent_ctx,
+            llm_client=llm_client,
+            context_service=agent_ctx,
             model_override=news_model,
             batch_size=news_batch_size,
         )
@@ -315,6 +338,7 @@ async def lifespan(app: FastAPI):
     # News service (Finnhub)
     from data.news_service import FinnhubNewsService
     from scanner.news_enricher import NewsEnricher
+
     news_service = FinnhubNewsService(api_key=config.external.finnhub_api_key)
     app.state.news_service = news_service
     news_enricher = NewsEnricher() if news_service.available else None
@@ -326,6 +350,7 @@ async def lifespan(app: FastAPI):
     from data.macro_calendar import MacroCalendarService
     from data.insider_service import InsiderTradingService
     from data.event_calendar import EventCalendarService
+
     earnings_svc = EarningsCalendarService(api_key=config.external.finnhub_api_key)
     macro_svc = MacroCalendarService()
     insider_svc = InsiderTradingService(api_key=config.external.finnhub_api_key)
@@ -334,6 +359,7 @@ async def lifespan(app: FastAPI):
     position_tracker._event_calendar = event_calendar
 
     from data.kr_macro_calendar import KRMacroCalendarService
+
     kr_macro_calendar = KRMacroCalendarService()
     app.state.kr_macro_calendar = kr_macro_calendar
     logger.info("Event calendar services initialized (US + KR)")
@@ -348,10 +374,6 @@ async def lifespan(app: FastAPI):
         news_enricher=news_enricher,
     )
     app.state.scanner_pipeline = scanner_pipeline
-
-    # Exchange resolver (caches yfinance exchange lookups for KIS API)
-    exchange_resolver = ExchangeResolver()
-    app.state.exchange_resolver = exchange_resolver
 
     # Evaluation loop (after agents — risk_agent used for pre-trade check)
     # Pre-trade AI risk check disabled by default (biggest LLM cost driver)
@@ -387,8 +409,10 @@ async def lifespan(app: FastAPI):
     for sym in etf_universe.all_etf_symbols:
         exchange_resolver.set(sym, etf_universe.get_exchange(sym))
     universe_expander = UniverseExpander(
-        etf_universe=etf_universe, sector_analyzer=sector_analyzer,
-        kis_adapter=adapter, rate_limiter=rate_limiter,
+        etf_universe=etf_universe,
+        sector_analyzer=sector_analyzer,
+        kis_adapter=adapter,
+        rate_limiter=rate_limiter,
     )
     app.state.stock_scanner = stock_scanner
     app.state.sector_analyzer = sector_analyzer
@@ -419,14 +443,20 @@ async def lifespan(app: FastAPI):
     # KR engine components (separate instances, same classes)
     from data.kr_symbol_mapper import to_yfinance as kr_to_yfinance
     from scanner.kr_screener import get_kr_exchange
+
     # Share rate limiter with US — same KIS credentials, same rate limit
     kr_market_data = MarketDataService(
-        adapter=kr_adapter, rate_limiter=rate_limiter,
+        adapter=kr_adapter,
+        rate_limiter=rate_limiter,
         yf_symbol_mapper=lambda s: kr_to_yfinance(s, get_kr_exchange(s)),
     )
     kr_order_manager = OrderManager(
-        adapter=kr_adapter, risk_manager=kr_risk_manager, notification=notification,
-        market_data=kr_market_data, market="KR", is_paper=config.is_paper,
+        adapter=kr_adapter,
+        risk_manager=kr_risk_manager,
+        notification=notification,
+        market_data=kr_market_data,
+        market="KR",
+        is_paper=config.is_paper,
     )
     kr_position_tracker = PositionTracker(
         adapter=kr_adapter,
@@ -443,13 +473,15 @@ async def lifespan(app: FastAPI):
 
     # KR portfolio manager (for equity history)
     kr_portfolio_manager = PortfolioManager(
-        market_data=kr_market_data, session_factory=session_factory,
+        market_data=kr_market_data,
+        session_factory=session_factory,
         market="KR",
     )
     app.state.kr_portfolio_manager = kr_portfolio_manager
 
     # KR ETF Engine
     from pathlib import Path
+
     kr_etf_config_path = Path(__file__).resolve().parent.parent / "config" / "kr_etf_universe.yaml"
     kr_etf_universe = ETFUniverse(config_path=kr_etf_config_path)
     kr_etf_engine = ETFEngine(
@@ -540,6 +572,7 @@ async def lifespan(app: FastAPI):
 
     async def task_daily_scan():
         from db.trade_repository import TradeRepository
+
         try:
             async with session_factory() as session:
                 repo = TradeRepository(session)
@@ -552,38 +585,53 @@ async def lifespan(app: FastAPI):
             logger.error("Daily scan failed: %s", e)
 
     scheduler.add_task(
-        "health_check", task_health_check,
-        interval_sec=120, phases=None,  # always
+        "health_check",
+        task_health_check,
+        interval_sec=120,
+        phases=None,  # always
     )
     scheduler.add_task(
-        "system_status_report", task_system_status_report,
-        interval_sec=1800, phases=None,  # always, every 30 min
+        "system_status_report",
+        task_system_status_report,
+        interval_sec=1800,
+        phases=None,  # always, every 30 min
     )
     scheduler.add_task(
-        "position_check", task_position_check,
-        interval_sec=60, phases=[MarketPhase.REGULAR],
+        "position_check",
+        task_position_check,
+        interval_sec=60,
+        phases=[MarketPhase.REGULAR],
     )
     scheduler.add_task(
-        "position_db_sync", task_position_db_sync,
-        interval_sec=300, phases=[MarketPhase.REGULAR],  # sync every 5 min
+        "position_db_sync",
+        task_position_db_sync,
+        interval_sec=300,
+        phases=[MarketPhase.REGULAR],  # sync every 5 min
     )
     scheduler.add_task(
-        "daily_reset", task_daily_reset,
-        interval_sec=86400, phases=[MarketPhase.PRE_MARKET],
+        "daily_reset",
+        task_daily_reset,
+        interval_sec=86400,
+        phases=[MarketPhase.PRE_MARKET],
     )
     scheduler.add_task(
-        "evaluation_loop", task_evaluation_loop,
-        interval_sec=300, phases=[MarketPhase.REGULAR],
+        "evaluation_loop",
+        task_evaluation_loop,
+        interval_sec=300,
+        phases=[MarketPhase.REGULAR],
     )
     scheduler.add_task(
-        "daily_scan", task_daily_scan,
-        interval_sec=86400, phases=[MarketPhase.PRE_MARKET],
+        "daily_scan",
+        task_daily_scan,
+        interval_sec=86400,
+        phases=[MarketPhase.PRE_MARKET],
     )
 
     async def task_update_watchlist_names():
         """Batch update stock names in watchlist DB (daily)."""
         from db.trade_repository import TradeRepository
         from data.stock_name_service import resolve_names, get_name
+
         try:
             for mkt in ("US", "KR"):
                 async with session_factory() as session:
@@ -607,8 +655,10 @@ async def lifespan(app: FastAPI):
             logger.error("Watchlist name update failed: %s", e)
 
     scheduler.add_task(
-        "update_watchlist_names", task_update_watchlist_names,
-        interval_sec=86400, phases=[MarketPhase.PRE_MARKET],
+        "update_watchlist_names",
+        task_update_watchlist_names,
+        interval_sec=86400,
+        phases=[MarketPhase.PRE_MARKET],
     )
 
     async def task_portfolio_snapshot():
@@ -621,6 +671,7 @@ async def lifespan(app: FastAPI):
             logger.info("Order reconciliation: %d status changes", len(changes))
             # Persist status changes to DB
             from api.trades import update_order_in_db, record_trade
+
             for change in changes:
                 # Update existing DB row status (also updates in-memory log entry)
                 await update_order_in_db(
@@ -634,26 +685,30 @@ async def lifespan(app: FastAPI):
                 # exists in _trade_log (from place_sell), it merges without
                 # creating a duplicate. PnL is preserved during merge.
                 if change["new_status"] == "filled" and change["old_status"] != "filled":
-                    record_trade({
-                        "order_id": change.get("order_id", ""),
-                        "symbol": change["symbol"],
-                        "side": change["side"],
-                        "quantity": change.get("quantity", 0),
-                        "price": change.get("price"),
-                        "filled_price": change.get("filled_price"),
-                        "filled_quantity": change.get("filled_quantity", 0),
-                        "strategy": change.get("strategy", ""),
-                        "status": "filled",
-                        "market": "US",
-                        "created_at": "",
-                    })
+                    record_trade(
+                        {
+                            "order_id": change.get("order_id", ""),
+                            "symbol": change["symbol"],
+                            "side": change["side"],
+                            "quantity": change.get("quantity", 0),
+                            "price": change.get("price"),
+                            "filled_price": change.get("filled_price"),
+                            "filled_quantity": change.get("filled_quantity", 0),
+                            "strategy": change.get("strategy", ""),
+                            "status": "filled",
+                            "market": "US",
+                            "created_at": "",
+                        }
+                    )
         # Cancel stale unfilled orders
         stale = await order_manager.cancel_stale_orders(config.trading.pending_order_ttl_min)
         if stale:
             from api.trades import update_order_in_db
+
             for s in stale:
                 await update_order_in_db(
-                    kis_order_id=s["order_id"], status="cancelled",
+                    kis_order_id=s["order_id"],
+                    status="cancelled",
                 )
             if notification:
                 symbols = ", ".join(f"{s['side']} {s['symbol']}" for s in stale)
@@ -673,8 +728,10 @@ async def lifespan(app: FastAPI):
                 risk_manager.set_market_regime("US", state.regime.value)
                 logger.info(
                     "Market state: %s (SPY=%.2f, SMA200=%.2f, VIX=%.1f)",
-                    state.regime.value, state.spy_price,
-                    state.spy_sma200, state.vix_level,
+                    state.regime.value,
+                    state.spy_price,
+                    state.spy_sma200,
+                    state.vix_level,
                 )
         except Exception as e:
             logger.error("Market state update failed: %s", e)
@@ -701,8 +758,10 @@ async def lifespan(app: FastAPI):
             if total > 0:
                 logger.info(
                     "ETF Engine: %d actions (regime=%d, sector=%d, risk=%d)",
-                    total, len(actions["regime"]),
-                    len(actions["sector"]), len(actions["risk"]),
+                    total,
+                    len(actions["regime"]),
+                    len(actions["sector"]),
+                    len(actions["risk"]),
                 )
         except Exception as e:
             logger.error("ETF evaluation failed: %s", e)
@@ -710,6 +769,7 @@ async def lifespan(app: FastAPI):
     async def task_intraday_hot_scan():
         """T2: Intraday hot scan — find active stocks during session."""
         from db.trade_repository import TradeRepository
+
         try:
             async with session_factory() as session:
                 repo = TradeRepository(session)
@@ -738,7 +798,8 @@ async def lifespan(app: FastAPI):
             logger.error("Sector analysis failed: %s", e)
 
     async def _cleanup_watchlist(
-        existing: list, candidate_symbols: list[str],
+        existing: list,
+        candidate_symbols: list[str],
     ) -> list[str]:
         """Auto-remove scanner-added stocks that no longer qualify.
 
@@ -787,11 +848,11 @@ async def lifespan(app: FastAPI):
         if active_count > max_watchlist:
             # Sort by oldest first (stale scanner picks)
             removable.sort(key=lambda w: w.added_at or now)
-            to_remove = removable[:active_count - max_watchlist + 5]  # Remove 5 extra buffer
+            to_remove = removable[: active_count - max_watchlist + 5]  # Remove 5 extra buffer
         else:
             # Under limit but have removable: trim stale scanner picks
             removable.sort(key=lambda w: w.added_at or now)
-            to_remove = removable[:max(len(removable) // 2, 1)]  # Remove half of stale
+            to_remove = removable[: max(len(removable) // 2, 1)]  # Remove half of stale
 
         removed = []
         async with session_factory() as session:
@@ -828,7 +889,8 @@ async def lifespan(app: FastAPI):
             universe = universe_result.symbols
             logger.info(
                 "After-hours scan: %d symbols in universe (discovered=%d)",
-                len(universe), universe_result.total_discovered,
+                len(universe),
+                universe_result.total_discovered,
             )
 
             # Fetch fresh news if available (for Layer 2.5)
@@ -836,12 +898,16 @@ async def lifespan(app: FastAPI):
             if news_service.available and news_sentiment_agent:
                 try:
                     # Only fetch for non-ETF universe symbols
-                    news_syms = [s for s in universe if not any(
-                        s.endswith(x) for x in ("QQQ", "SPY", "XL", "SO")
-                    )][:25]
+                    news_syms = [
+                        s
+                        for s in universe
+                        if not any(s.endswith(x) for x in ("QQQ", "SPY", "XL", "SO"))
+                    ][:25]
                     if news_syms:
                         batch = await news_service.fetch_batch(
-                            symbols=news_syms, days_back=3, max_per_symbol=3,
+                            symbols=news_syms,
+                            days_back=3,
+                            max_per_symbol=3,
                         )
                         if batch.articles:
                             news_summary = await news_sentiment_agent.analyze_batch(
@@ -856,7 +922,9 @@ async def lifespan(app: FastAPI):
 
             # Run pipeline (grade C to cast a wider net)
             candidates = await scanner_pipeline.run_full_scan(
-                symbols=universe, min_grade="C", max_candidates=15,
+                symbols=universe,
+                min_grade="C",
+                max_candidates=15,
                 news_summary=news_summary,
             )
 
@@ -877,14 +945,16 @@ async def lifespan(app: FastAPI):
                 for sym in top_symbols:
                     if sym not in existing_syms:
                         await repo.add_to_watchlist(
-                            symbol=sym, source="scanner",
+                            symbol=sym,
+                            source="scanner",
                         )
                         added.append(sym)
                 # Ensure ETF universe is in watchlist
                 for sym in etf_symbols:
                     if sym not in existing_syms:
                         await repo.add_to_watchlist(
-                            symbol=sym, source="etf_universe",
+                            symbol=sym,
+                            source="etf_universe",
                         )
                         added.append(sym)
 
@@ -918,7 +988,9 @@ async def lifespan(app: FastAPI):
             await notification.notify_system_event("after_hours_scan", msg)
             logger.info(
                 "After-hours scan: %d candidates, +%d added, -%d removed",
-                len(candidates), len(added), len(removed),
+                len(candidates),
+                len(added),
+                len(removed),
             )
         except Exception as e:
             logger.error("After-hours scan failed: %s", e)
@@ -928,10 +1000,7 @@ async def lifespan(app: FastAPI):
         try:
             positions = await market_data.get_positions()
             balance = await market_data.get_balance()
-            daily_pnl = sum(
-                (p.current_price - p.avg_price) * p.quantity
-                for p in positions
-            )
+            daily_pnl = sum((p.current_price - p.avg_price) * p.quantity for p in positions)
             await notification.notify_daily_summary(
                 equity=balance.total,
                 daily_pnl=daily_pnl,
@@ -942,36 +1011,52 @@ async def lifespan(app: FastAPI):
             logger.error("Daily briefing failed: %s", e)
 
     scheduler.add_task(
-        "market_state_update", task_market_state_update,
-        interval_sec=900, phases=[MarketPhase.REGULAR],
+        "market_state_update",
+        task_market_state_update,
+        interval_sec=900,
+        phases=[MarketPhase.REGULAR],
     )
     scheduler.add_task(
-        "etf_evaluation", task_etf_evaluation,
-        interval_sec=900, phases=[MarketPhase.REGULAR],
+        "etf_evaluation",
+        task_etf_evaluation,
+        interval_sec=900,
+        phases=[MarketPhase.REGULAR],
     )
     scheduler.add_task(
-        "portfolio_snapshot", task_portfolio_snapshot,
-        interval_sec=3600, phases=[MarketPhase.REGULAR],
+        "portfolio_snapshot",
+        task_portfolio_snapshot,
+        interval_sec=3600,
+        phases=[MarketPhase.REGULAR],
     )
     scheduler.add_task(
-        "order_reconciliation", task_order_reconciliation,
-        interval_sec=120, phases=[MarketPhase.REGULAR],
+        "order_reconciliation",
+        task_order_reconciliation,
+        interval_sec=120,
+        phases=[MarketPhase.REGULAR],
     )
     scheduler.add_task(
-        "intraday_hot_scan", task_intraday_hot_scan,
-        interval_sec=1800, phases=[MarketPhase.REGULAR],
+        "intraday_hot_scan",
+        task_intraday_hot_scan,
+        interval_sec=1800,
+        phases=[MarketPhase.REGULAR],
     )
     scheduler.add_task(
-        "sector_analysis", task_sector_analysis,
-        interval_sec=3600, phases=[MarketPhase.REGULAR],
+        "sector_analysis",
+        task_sector_analysis,
+        interval_sec=3600,
+        phases=[MarketPhase.REGULAR],
     )
     scheduler.add_task(
-        "after_hours_scan", task_after_hours_scan,
-        interval_sec=86400, phases=[MarketPhase.AFTER_HOURS],
+        "after_hours_scan",
+        task_after_hours_scan,
+        interval_sec=86400,
+        phases=[MarketPhase.AFTER_HOURS],
     )
     scheduler.add_task(
-        "daily_briefing", task_daily_briefing,
-        interval_sec=86400, phases=[MarketPhase.AFTER_HOURS],
+        "daily_briefing",
+        task_daily_briefing,
+        interval_sec=86400,
+        phases=[MarketPhase.AFTER_HOURS],
     )
 
     async def task_macro_update():
@@ -993,8 +1078,10 @@ async def lifespan(app: FastAPI):
             logger.error("Macro update failed: %s", e)
 
     scheduler.add_task(
-        "macro_update", task_macro_update,
-        interval_sec=86400, phases=[MarketPhase.PRE_MARKET],
+        "macro_update",
+        task_macro_update,
+        interval_sec=86400,
+        phases=[MarketPhase.PRE_MARKET],
     )
 
     # WebSocket lifecycle management (market hours only)
@@ -1009,6 +1096,7 @@ async def lifespan(app: FastAPI):
             return
         try:
             from engine.scheduler import get_market_phase
+
             phase = get_market_phase()
 
             if phase == MarketPhase.REGULAR:
@@ -1027,8 +1115,10 @@ async def lifespan(app: FastAPI):
             logger.error("WS lifecycle error: %s", e)
 
     scheduler.add_task(
-        "ws_lifecycle", task_ws_lifecycle,
-        interval_sec=300, phases=None,  # always — manages its own phase logic
+        "ws_lifecycle",
+        task_ws_lifecycle,
+        interval_sec=300,
+        phases=None,  # always — manages its own phase logic
     )
 
     # Trade review: review completed trades after hours
@@ -1038,6 +1128,7 @@ async def lifespan(app: FastAPI):
             return
         try:
             from db.trade_repository import TradeRepository
+
             async with session_factory() as session:
                 repo = TradeRepository(session)
                 # Get trades completed in the last 24h
@@ -1089,8 +1180,10 @@ async def lifespan(app: FastAPI):
             logger.error("Trade review task failed: %s", e)
 
     scheduler.add_task(
-        "trade_review", task_trade_review,
-        interval_sec=86400, phases=[MarketPhase.AFTER_HOURS],
+        "trade_review",
+        task_trade_review,
+        interval_sec=86400,
+        phases=[MarketPhase.AFTER_HOURS],
     )
 
     # Agent memory cleanup: remove expired + enforce limits
@@ -1107,14 +1200,17 @@ async def lifespan(app: FastAPI):
             if expired or total_trimmed:
                 logger.info(
                     "Agent memory cleanup: %d expired, %d trimmed",
-                    expired, total_trimmed,
+                    expired,
+                    total_trimmed,
                 )
         except Exception as e:
             logger.error("Agent memory cleanup failed: %s", e)
 
     scheduler.add_task(
-        "agent_memory_cleanup", task_agent_memory_cleanup,
-        interval_sec=86400, phases=[MarketPhase.CLOSED],
+        "agent_memory_cleanup",
+        task_agent_memory_cleanup,
+        interval_sec=86400,
+        phases=[MarketPhase.CLOSED],
     )
 
     # News sentiment analysis: fetch + analyze news for watchlist symbols
@@ -1135,17 +1231,18 @@ async def lifespan(app: FastAPI):
                 repo = TradeRepository(session)
                 wl = await repo.get_watchlist(active_only=True, market="US")
                 # Only fetch news for non-ETF stocks (ETFs rarely have useful news)
-                symbols = [
-                    w.symbol for w in wl
-                    if w.source != "etf_universe"
-                ][:15]  # Limit to save LLM costs + avoid rate limits
+                symbols = [w.symbol for w in wl if w.source != "etf_universe"][
+                    :15
+                ]  # Limit to save LLM costs + avoid rate limits
 
             if not symbols:
                 return
 
             # Fetch news batch from Finnhub
             batch = await news_service.fetch_batch(
-                symbols=symbols, days_back=3, max_per_symbol=5,
+                symbols=symbols,
+                days_back=3,
+                max_per_symbol=5,
             )
 
             if not batch.articles:
@@ -1161,8 +1258,10 @@ async def lifespan(app: FastAPI):
                 logger.info(
                     "News analysis: %d articles -> %d symbols, "
                     "market_sentiment=%.2f, actionable=%d",
-                    len(batch.articles), len(summary.symbol_sentiments),
-                    summary.market_sentiment, actionable,
+                    len(batch.articles),
+                    len(summary.symbol_sentiments),
+                    summary.market_sentiment,
+                    actionable,
                 )
 
                 # Cache for API endpoint
@@ -1193,8 +1292,10 @@ async def lifespan(app: FastAPI):
             logger.error("News analysis failed: %s", e)
 
     scheduler.add_task(
-        "news_analysis", task_news_analysis,
-        interval_sec=3600, phases=[MarketPhase.PRE_MARKET, MarketPhase.REGULAR],
+        "news_analysis",
+        task_news_analysis,
+        interval_sec=3600,
+        phases=[MarketPhase.PRE_MARKET, MarketPhase.REGULAR],
     )
 
     # Event calendar refresh (earnings, insider transactions)
@@ -1204,13 +1305,11 @@ async def lifespan(app: FastAPI):
             return
         try:
             from db.trade_repository import TradeRepository
+
             async with session_factory() as session:
                 repo = TradeRepository(session)
                 wl = await repo.get_watchlist(active_only=True, market="US")
-                symbols = [
-                    w.symbol for w in wl
-                    if w.source != "etf_universe"
-                ][:40]
+                symbols = [w.symbol for w in wl if w.source != "etf_universe"][:40]
 
             if not symbols:
                 return
@@ -1232,12 +1331,15 @@ async def lifespan(app: FastAPI):
             logger.error("Event calendar refresh failed: %s", e)
 
     scheduler.add_task(
-        "event_calendar_refresh", task_event_calendar_refresh,
-        interval_sec=86400, phases=[MarketPhase.PRE_MARKET],
+        "event_calendar_refresh",
+        task_event_calendar_refresh,
+        interval_sec=86400,
+        phases=[MarketPhase.PRE_MARKET],
     )
 
     # KR news sentiment analysis (Naver Finance)
     from data.naver_news_service import NaverNewsService
+
     naver_news_service = NaverNewsService()
     app.state.naver_news_service = naver_news_service
 
@@ -1255,10 +1357,9 @@ async def lifespan(app: FastAPI):
             async with session_factory() as session:
                 repo = TradeRepository(session)
                 wl = await repo.get_watchlist(active_only=True, market="KR")
-                symbols = [
-                    w.symbol for w in wl
-                    if w.source != "etf_universe"
-                ][:15]  # Limit to save LLM costs
+                symbols = [w.symbol for w in wl if w.source != "etf_universe"][
+                    :15
+                ]  # Limit to save LLM costs
 
             if not symbols:
                 return
@@ -1271,7 +1372,8 @@ async def lifespan(app: FastAPI):
                     kr_names[sym] = name
 
             batch = await naver_news_service.fetch_batch(
-                symbols=symbols, max_per_symbol=5,
+                symbols=symbols,
+                max_per_symbol=5,
             )
 
             if not batch.articles:
@@ -1280,15 +1382,18 @@ async def lifespan(app: FastAPI):
 
             if kr_news_sentiment_agent:
                 summary = await kr_news_sentiment_agent.analyze_batch(
-                    batch.articles, symbol_names=kr_names,
+                    batch.articles,
+                    symbol_names=kr_names,
                 )
 
                 actionable = len(summary.actionable_signals)
                 logger.info(
                     "KR news analysis: %d articles -> %d symbols, "
                     "market_sentiment=%.2f, actionable=%d",
-                    len(batch.articles), len(summary.symbol_sentiments),
-                    summary.market_sentiment, actionable,
+                    len(batch.articles),
+                    len(summary.symbol_sentiments),
+                    summary.market_sentiment,
+                    actionable,
                 )
 
                 # Cache for API endpoint
@@ -1319,8 +1424,10 @@ async def lifespan(app: FastAPI):
             logger.error("KR news analysis failed: %s", e)
 
     scheduler.add_task(
-        "kr_news_analysis", task_kr_news_analysis,
-        interval_sec=3600, phases=[MarketPhase.PRE_MARKET, MarketPhase.REGULAR],
+        "kr_news_analysis",
+        task_kr_news_analysis,
+        interval_sec=3600,
+        phases=[MarketPhase.PRE_MARKET, MarketPhase.REGULAR],
         market="KR",
     )
 
@@ -1366,6 +1473,7 @@ async def lifespan(app: FastAPI):
         if changes:
             logger.info("KR order reconciliation: %d status changes", len(changes))
             from api.trades import update_order_in_db, record_trade
+
             for change in changes:
                 # Update existing DB row status (also updates in-memory log entry)
                 await update_order_in_db(
@@ -1379,28 +1487,32 @@ async def lifespan(app: FastAPI):
                 # exists in _trade_log (from place_sell), it merges without
                 # creating a duplicate. PnL is preserved during merge.
                 if change["new_status"] == "filled" and change["old_status"] != "filled":
-                    record_trade({
-                        "order_id": change.get("order_id", ""),
-                        "symbol": change["symbol"],
-                        "side": change["side"],
-                        "quantity": change.get("quantity", 0),
-                        "price": change.get("price"),
-                        "filled_price": change.get("filled_price"),
-                        "filled_quantity": change.get("filled_quantity", 0),
-                        "strategy": change.get("strategy", ""),
-                        "status": "filled",
-                        "market": "KR",
-                        "created_at": "",
-                    })
+                    record_trade(
+                        {
+                            "order_id": change.get("order_id", ""),
+                            "symbol": change["symbol"],
+                            "side": change["side"],
+                            "quantity": change.get("quantity", 0),
+                            "price": change.get("price"),
+                            "filled_price": change.get("filled_price"),
+                            "filled_quantity": change.get("filled_quantity", 0),
+                            "strategy": change.get("strategy", ""),
+                            "status": "filled",
+                            "market": "KR",
+                            "created_at": "",
+                        }
+                    )
         # Cancel stale unfilled orders
         stale = await kr_order_manager.cancel_stale_orders(
             config.trading.pending_order_ttl_min,
         )
         if stale:
             from api.trades import update_order_in_db
+
             for s in stale:
                 await update_order_in_db(
-                    kis_order_id=s["order_id"], status="cancelled",
+                    kis_order_id=s["order_id"],
+                    status="cancelled",
                 )
             if notification:
                 symbols = ", ".join(f"{s['side']} {s['symbol']}" for s in stale)
@@ -1442,8 +1554,7 @@ async def lifespan(app: FastAPI):
                 existing_watchlist=existing_syms,
             )
             logger.info(
-                "KR universe expanded: %d symbols "
-                "(watchlist=%d, seed=%d, kis_kr=%d)",
+                "KR universe expanded: %d symbols (watchlist=%d, seed=%d, kis_kr=%d)",
                 universe_result.total_discovered,
                 len(universe_result.sources.get("watchlist", [])),
                 len(universe_result.sources.get("seed", [])),
@@ -1453,7 +1564,8 @@ async def lifespan(app: FastAPI):
             # Quality filter via KRScreener (market cap + volume)
             # Pass dynamic symbols so screener can apply yfinance quality filter
             dynamic_new = [
-                s for s in universe_result.sources.get("kis_kr_ranking", [])
+                s
+                for s in universe_result.sources.get("kis_kr_ranking", [])
                 if s not in existing_syms_set
             ]
             screener = KRScreener()
@@ -1463,7 +1575,8 @@ async def lifespan(app: FastAPI):
             )
             logger.info(
                 "KR scan: %d symbols after screening from %d sources",
-                screen_result.total_discovered, len(screen_result.sources),
+                screen_result.total_discovered,
+                len(screen_result.sources),
             )
 
             if not screen_result.symbols:
@@ -1478,8 +1591,10 @@ async def lifespan(app: FastAPI):
                         # Use exchange from universe expansion map, fallback to KRX
                         exchange = universe_result.exchange_map.get(sym, "KRX")
                         await repo.add_to_watchlist(
-                            symbol=sym, exchange=exchange,
-                            source="scanner", market="KR",
+                            symbol=sym,
+                            exchange=exchange,
+                            source="scanner",
+                            market="KR",
                         )
                         added.append(sym)
 
@@ -1500,28 +1615,46 @@ async def lifespan(app: FastAPI):
             logger.error("KR daily scan failed: %s", e)
 
     scheduler.add_task(
-        "kr_position_check", task_kr_position_check,
-        interval_sec=60, phases=[MarketPhase.REGULAR], market="KR",
+        "kr_position_check",
+        task_kr_position_check,
+        interval_sec=60,
+        phases=[MarketPhase.REGULAR],
+        market="KR",
     )
     scheduler.add_task(
-        "kr_position_db_sync", task_kr_position_db_sync,
-        interval_sec=300, phases=[MarketPhase.REGULAR], market="KR",
+        "kr_position_db_sync",
+        task_kr_position_db_sync,
+        interval_sec=300,
+        phases=[MarketPhase.REGULAR],
+        market="KR",
     )
     scheduler.add_task(
-        "kr_order_reconciliation", task_kr_order_reconciliation,
-        interval_sec=120, phases=[MarketPhase.REGULAR], market="KR",
+        "kr_order_reconciliation",
+        task_kr_order_reconciliation,
+        interval_sec=120,
+        phases=[MarketPhase.REGULAR],
+        market="KR",
     )
     scheduler.add_task(
-        "kr_portfolio_snapshot", task_kr_portfolio_snapshot,
-        interval_sec=3600, phases=[MarketPhase.REGULAR], market="KR",
+        "kr_portfolio_snapshot",
+        task_kr_portfolio_snapshot,
+        interval_sec=3600,
+        phases=[MarketPhase.REGULAR],
+        market="KR",
     )
     scheduler.add_task(
-        "kr_evaluation_loop", task_kr_evaluation_loop,
-        interval_sec=300, phases=[MarketPhase.REGULAR], market="KR",
+        "kr_evaluation_loop",
+        task_kr_evaluation_loop,
+        interval_sec=300,
+        phases=[MarketPhase.REGULAR],
+        market="KR",
     )
     scheduler.add_task(
-        "kr_daily_scan", task_kr_daily_scan,
-        interval_sec=86400, phases=[MarketPhase.PRE_MARKET], market="KR",
+        "kr_daily_scan",
+        task_kr_daily_scan,
+        interval_sec=86400,
+        phases=[MarketPhase.PRE_MARKET],
+        market="KR",
     )
 
     async def task_kr_market_state_update():
@@ -1534,14 +1667,19 @@ async def lifespan(app: FastAPI):
                 kr_risk_manager.set_market_regime("KR", state.regime.value)
                 logger.info(
                     "KR market state: %s (KODEX200=%.0f, SMA200=%.0f)",
-                    state.regime.value, state.spy_price, state.spy_sma200,
+                    state.regime.value,
+                    state.spy_price,
+                    state.spy_sma200,
                 )
         except Exception as e:
             logger.error("KR market state update failed: %s", e)
 
     scheduler.add_task(
-        "kr_market_state_update", task_kr_market_state_update,
-        interval_sec=900, phases=[MarketPhase.REGULAR], market="KR",
+        "kr_market_state_update",
+        task_kr_market_state_update,
+        interval_sec=900,
+        phases=[MarketPhase.REGULAR],
+        market="KR",
     )
 
     async def task_kr_etf_evaluation():
@@ -1567,15 +1705,20 @@ async def lifespan(app: FastAPI):
             if total > 0:
                 logger.info(
                     "KR ETF Engine: %d actions (regime=%d, sector=%d, risk=%d)",
-                    total, len(actions["regime"]),
-                    len(actions["sector"]), len(actions["risk"]),
+                    total,
+                    len(actions["regime"]),
+                    len(actions["sector"]),
+                    len(actions["risk"]),
                 )
         except Exception as e:
             logger.error("KR ETF evaluation failed: %s", e)
 
     scheduler.add_task(
-        "kr_etf_evaluation", task_kr_etf_evaluation,
-        interval_sec=900, phases=[MarketPhase.REGULAR], market="KR",
+        "kr_etf_evaluation",
+        task_kr_etf_evaluation,
+        interval_sec=900,
+        phases=[MarketPhase.REGULAR],
+        market="KR",
     )
 
     # ── Extended Hours Tasks ─────────────────────────────────────────
@@ -1587,6 +1730,7 @@ async def lifespan(app: FastAPI):
         if not config.extended_hours.enabled or not config.extended_hours.us_enabled:
             return
         from engine.scheduler import get_market_phase
+
         phase = get_market_phase()
         session = "pre_market" if phase == MarketPhase.PRE_MARKET else "after_hours"
         try:
@@ -1594,7 +1738,8 @@ async def lifespan(app: FastAPI):
             if triggered:
                 logger.info(
                     "US extended hours [%s]: %d SL/TP triggered",
-                    session, len(triggered),
+                    session,
+                    len(triggered),
                 )
         except Exception as e:
             logger.error("US extended position check failed: %s", e)
@@ -1604,6 +1749,7 @@ async def lifespan(app: FastAPI):
         if not config.extended_hours.enabled or not config.extended_hours.kr_enabled:
             return
         from engine.scheduler import get_kr_market_phase
+
         phase = get_kr_market_phase()
         if phase == MarketPhase.PRE_MARKET:
             session = "pre_market"
@@ -1616,18 +1762,23 @@ async def lifespan(app: FastAPI):
             if triggered:
                 logger.info(
                     "KR extended hours [%s]: %d SL/TP triggered",
-                    session, len(triggered),
+                    session,
+                    len(triggered),
                 )
         except Exception as e:
             logger.error("KR extended position check failed: %s", e)
 
     scheduler.add_task(
-        "us_extended_position_check", task_us_extended_position_check,
-        interval_sec=120, phases=[MarketPhase.PRE_MARKET, MarketPhase.AFTER_HOURS],
+        "us_extended_position_check",
+        task_us_extended_position_check,
+        interval_sec=120,
+        phases=[MarketPhase.PRE_MARKET, MarketPhase.AFTER_HOURS],
     )
     scheduler.add_task(
-        "kr_extended_position_check", task_kr_extended_position_check,
-        interval_sec=120, phases=[MarketPhase.PRE_MARKET, MarketPhase.AFTER_HOURS],
+        "kr_extended_position_check",
+        task_kr_extended_position_check,
+        interval_sec=120,
+        phases=[MarketPhase.PRE_MARKET, MarketPhase.AFTER_HOURS],
         market="KR",
     )
 
@@ -1636,6 +1787,7 @@ async def lifespan(app: FastAPI):
     # Load watchlists into evaluation loops from DB
     try:
         from db.trade_repository import TradeRepository
+
         async with session_factory() as session:
             repo = TradeRepository(session)
             # US watchlist
@@ -1658,15 +1810,14 @@ async def lifespan(app: FastAPI):
         us_cooldowns = await evaluation_loop.load_sell_cooldowns()
         kr_cooldowns = await kr_evaluation_loop.load_sell_cooldowns()
         if us_cooldowns or kr_cooldowns:
-            logger.info(
-                "Sell cooldowns restored: US=%d, KR=%d", us_cooldowns, kr_cooldowns
-            )
+            logger.info("Sell cooldowns restored: US=%d, KR=%d", us_cooldowns, kr_cooldowns)
     except Exception as e:
         logger.warning("Failed to load sell cooldowns: %s", e)
 
     # Startup position reconciliation — restore tracking from exchange
     # Falls back to DB restore if exchange API fails (STOCK-7)
     import asyncio
+
     try:
         us_restored = await position_tracker.restore_from_exchange(session_factory)
         if not us_restored:
@@ -1701,11 +1852,13 @@ async def lifespan(app: FastAPI):
             startup_lines.append("No open positions found.")
 
         await notification.notify_system_event(
-            "startup_reconciliation", "\n".join(startup_lines),
+            "startup_reconciliation",
+            "\n".join(startup_lines),
         )
         logger.info(
             "Startup reconciliation: US=%d, KR=%d positions restored",
-            len(us_restored), len(kr_restored),
+            len(us_restored),
+            len(kr_restored),
         )
     except Exception as e:
         logger.error("Startup position reconciliation failed: %s", e)
@@ -1722,11 +1875,13 @@ async def lifespan(app: FastAPI):
             if kr_etf_restored:
                 etf_lines.append(f"  KR: {', '.join(r['symbol'] for r in kr_etf_restored)}")
             await notification.notify_system_event(
-                "etf_restore", "\n".join(etf_lines),
+                "etf_restore",
+                "\n".join(etf_lines),
             )
             logger.info(
                 "ETF Engine restore: US=%d, KR=%d positions",
-                len(us_etf_restored), len(kr_etf_restored),
+                len(us_etf_restored),
+                len(kr_etf_restored),
             )
     except Exception as e:
         logger.error("ETF Engine position restore failed: %s", e)
@@ -1744,8 +1899,12 @@ async def lifespan(app: FastAPI):
                             cancelled += 1
                             logger.info(
                                 "Cancelled orphaned %s order: %s %s %s %d @ %.0f",
-                                label, order.order_id, order.side,
-                                order.symbol, int(order.quantity), order.price or 0,
+                                label,
+                                order.order_id,
+                                order.side,
+                                order.symbol,
+                                int(order.quantity),
+                                order.price or 0,
                             )
                     except Exception as cancel_err:
                         logger.warning("Failed to cancel order %s: %s", order.order_id, cancel_err)
@@ -1768,15 +1927,13 @@ async def lifespan(app: FastAPI):
         # STOCK-38: Recover orders stuck in 'not_found' (from before the fix)
         recovered = await recover_not_found_orders()
         if recovered:
-            logger.info(
-                "STOCK-38: Recovered %d not_found orders on startup", recovered
-            )
+            logger.info("STOCK-38: Recovered %d not_found orders on startup", recovered)
 
         # Collect all currently held symbols (from position restore above)
         held_symbols: set[str] = set()
-        for p in (us_restored or []):
+        for p in us_restored or []:
             held_symbols.add(p["symbol"])
-        for p in (kr_restored or []):
+        for p in kr_restored or []:
             held_symbols.add(p["symbol"])
 
         # Update pending DB orders based on what we actually hold
@@ -1814,7 +1971,9 @@ async def lifespan(app: FastAPI):
 
         if errors and notification:
             try:
-                msg = "⚠️ **Startup Background Tasks Failed**\n" + "\n".join(f"- {e}" for e in errors)
+                msg = "⚠️ **Startup Background Tasks Failed**\n" + "\n".join(
+                    f"- {e}" for e in errors
+                )
                 await notification.send_message(msg)
             except Exception as e:
                 logger.error("Failed to send startup failure notification: %s", e)
@@ -1873,7 +2032,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 
 @app.get("/health")

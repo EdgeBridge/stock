@@ -8,7 +8,7 @@ don't fire background tasks), then pass session_factory explicitly to
 sync_to_db() / _upsert_position_db / _remove_position_db.
 """
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
@@ -64,13 +64,20 @@ def order_mgr(adapter, risk):
     return OrderManager(adapter=adapter, risk_manager=risk)
 
 
-def _make_tracker(adapter, risk, order_mgr, market: str = "US") -> PositionTracker:
+def _make_tracker(
+    adapter,
+    risk,
+    order_mgr,
+    market: str = "US",
+    exchange_resolver=None,
+) -> PositionTracker:
     """Create a tracker WITHOUT session_factory to avoid background DB tasks."""
     return PositionTracker(
         adapter,
         risk,
         order_mgr,
         market=market,
+        exchange_resolver=exchange_resolver,
     )
 
 
@@ -362,13 +369,39 @@ class TestDualMarketIsolation:
 
     @pytest.mark.asyncio
     async def test_us_exchange_code(self, adapter, risk, order_mgr, db_factory):
-        """US positions should get NASD exchange code."""
-        tracker = _make_tracker(adapter, risk, order_mgr, market="US")
+        """US positions should get exchange code from resolver."""
+        resolver = MagicMock()
+        resolver.resolve = MagicMock(return_value="NASD")
+        tracker = _make_tracker(adapter, risk, order_mgr, market="US", exchange_resolver=resolver)
         tracker.track("AAPL", 150.0, 10)
         await tracker.sync_to_db(db_factory)
 
         record = await _get_position(db_factory, "AAPL", "US")
         assert record.exchange == "NASD"
+
+    @pytest.mark.asyncio
+    async def test_us_nyse_exchange_code(self, adapter, risk, order_mgr, db_factory):
+        """NYSE positions should get NYSE exchange code from resolver."""
+        resolver = MagicMock()
+        resolver.resolve = MagicMock(return_value="NYSE")
+        tracker = _make_tracker(adapter, risk, order_mgr, market="US", exchange_resolver=resolver)
+        tracker.track("JPM", 180.0, 20)
+        await tracker.sync_to_db(db_factory)
+
+        record = await _get_position(db_factory, "JPM", "US")
+        assert record.exchange == "NYSE"
+
+    @pytest.mark.asyncio
+    async def test_us_amex_exchange_code(self, adapter, risk, order_mgr, db_factory):
+        """AMEX positions should get AMEX exchange code from resolver."""
+        resolver = MagicMock()
+        resolver.resolve = MagicMock(return_value="AMEX")
+        tracker = _make_tracker(adapter, risk, order_mgr, market="US", exchange_resolver=resolver)
+        tracker.track("XLE", 90.0, 15)
+        await tracker.sync_to_db(db_factory)
+
+        record = await _get_position(db_factory, "XLE", "US")
+        assert record.exchange == "AMEX"
 
 
 # ── Restore from Exchange with DB Sync ───────────────────────────────
@@ -1184,9 +1217,7 @@ class TestOpenedAtFromOrders:
         tracker.track("AAPL", 150.0, 10, strategy="trend_following")
 
         async with db_factory() as session:
-            await tracker._upsert_position_record(
-                session, "AAPL", tracker._tracked["AAPL"]
-            )
+            await tracker._upsert_position_record(session, "AAPL", tracker._tracked["AAPL"])
             await session.commit()
 
         record = await _get_position(db_factory, "AAPL")
@@ -1194,9 +1225,7 @@ class TestOpenedAtFromOrders:
         assert record.opened_at == buy_time
 
     @pytest.mark.asyncio
-    async def test_opened_at_picks_earliest_buy(
-        self, adapter, risk, order_mgr, db_factory
-    ):
+    async def test_opened_at_picks_earliest_buy(self, adapter, risk, order_mgr, db_factory):
         """When multiple BUY orders exist, opened_at uses the earliest one."""
         from datetime import datetime
 
@@ -1238,18 +1267,14 @@ class TestOpenedAtFromOrders:
         tracker.track("AAPL", 145.0, 10)
 
         async with db_factory() as session:
-            await tracker._upsert_position_record(
-                session, "AAPL", tracker._tracked["AAPL"]
-            )
+            await tracker._upsert_position_record(session, "AAPL", tracker._tracked["AAPL"])
             await session.commit()
 
         record = await _get_position(db_factory, "AAPL")
         assert record.opened_at == early_time
 
     @pytest.mark.asyncio
-    async def test_opened_at_falls_back_without_orders(
-        self, adapter, risk, order_mgr, db_factory
-    ):
+    async def test_opened_at_falls_back_without_orders(self, adapter, risk, order_mgr, db_factory):
         """When no BUY orders exist, opened_at falls back to ~utcnow()."""
         from datetime import datetime, timedelta
 
@@ -1258,9 +1283,7 @@ class TestOpenedAtFromOrders:
 
         before = datetime.utcnow()
         async with db_factory() as session:
-            await tracker._upsert_position_record(
-                session, "NEWSTOCK", tracker._tracked["NEWSTOCK"]
-            )
+            await tracker._upsert_position_record(session, "NEWSTOCK", tracker._tracked["NEWSTOCK"])
             await session.commit()
         after = datetime.utcnow()
 
@@ -1270,9 +1293,7 @@ class TestOpenedAtFromOrders:
         assert before - timedelta(seconds=2) <= record.opened_at <= after + timedelta(seconds=2)
 
     @pytest.mark.asyncio
-    async def test_opened_at_ignores_paper_orders(
-        self, adapter, risk, order_mgr, db_factory
-    ):
+    async def test_opened_at_ignores_paper_orders(self, adapter, risk, order_mgr, db_factory):
         """Paper orders (is_paper=True) should NOT be used for opened_at."""
         from datetime import datetime, timedelta
 
@@ -1300,9 +1321,7 @@ class TestOpenedAtFromOrders:
         tracker.track("AAPL", 150.0, 10)
 
         async with db_factory() as session:
-            await tracker._upsert_position_record(
-                session, "AAPL", tracker._tracked["AAPL"]
-            )
+            await tracker._upsert_position_record(session, "AAPL", tracker._tracked["AAPL"])
             await session.commit()
 
         record = await _get_position(db_factory, "AAPL")
@@ -1310,9 +1329,7 @@ class TestOpenedAtFromOrders:
         assert record.opened_at > paper_time + timedelta(days=1)
 
     @pytest.mark.asyncio
-    async def test_opened_at_ignores_sell_orders(
-        self, adapter, risk, order_mgr, db_factory
-    ):
+    async def test_opened_at_ignores_sell_orders(self, adapter, risk, order_mgr, db_factory):
         """SELL orders should NOT be used for opened_at."""
         from datetime import datetime, timedelta
 
@@ -1340,9 +1357,7 @@ class TestOpenedAtFromOrders:
         tracker.track("AAPL", 150.0, 10)
 
         async with db_factory() as session:
-            await tracker._upsert_position_record(
-                session, "AAPL", tracker._tracked["AAPL"]
-            )
+            await tracker._upsert_position_record(session, "AAPL", tracker._tracked["AAPL"])
             await session.commit()
 
         record = await _get_position(db_factory, "AAPL")
@@ -1350,9 +1365,7 @@ class TestOpenedAtFromOrders:
         assert record.opened_at > sell_time + timedelta(days=1)
 
     @pytest.mark.asyncio
-    async def test_opened_at_preserved_on_update(
-        self, adapter, risk, order_mgr, db_factory
-    ):
+    async def test_opened_at_preserved_on_update(self, adapter, risk, order_mgr, db_factory):
         """Updating an existing PositionRecord should NOT reset opened_at."""
         from datetime import datetime
 
@@ -1381,9 +1394,7 @@ class TestOpenedAtFromOrders:
 
         # First upsert creates the record
         async with db_factory() as session:
-            await tracker._upsert_position_record(
-                session, "AAPL", tracker._tracked["AAPL"]
-            )
+            await tracker._upsert_position_record(session, "AAPL", tracker._tracked["AAPL"])
             await session.commit()
 
         record = await _get_position(db_factory, "AAPL")
@@ -1392,9 +1403,7 @@ class TestOpenedAtFromOrders:
         # Second upsert updates the record (should NOT reset opened_at)
         tracker._tracked["AAPL"].quantity = 20
         async with db_factory() as session:
-            await tracker._upsert_position_record(
-                session, "AAPL", tracker._tracked["AAPL"]
-            )
+            await tracker._upsert_position_record(session, "AAPL", tracker._tracked["AAPL"])
             await session.commit()
 
         record = await _get_position(db_factory, "AAPL")
@@ -1402,9 +1411,7 @@ class TestOpenedAtFromOrders:
         assert record.quantity == 20
 
     @pytest.mark.asyncio
-    async def test_opened_at_survives_resync(
-        self, adapter, risk, order_mgr, db_factory
-    ):
+    async def test_opened_at_survives_resync(self, adapter, risk, order_mgr, db_factory):
         """Delete and recreate position should recover correct opened_at."""
         from datetime import datetime
 
@@ -1435,9 +1442,7 @@ class TestOpenedAtFromOrders:
 
         # Create initial record
         async with db_factory() as session:
-            await tracker._upsert_position_record(
-                session, "TSLA", tracker._tracked["TSLA"]
-            )
+            await tracker._upsert_position_record(session, "TSLA", tracker._tracked["TSLA"])
             await session.commit()
 
         record = await _get_position(db_factory, "TSLA")
@@ -1445,16 +1450,12 @@ class TestOpenedAtFromOrders:
 
         # Delete the position record (simulates DB clear / STOCK-2 scenario)
         async with db_factory() as session:
-            await session.execute(
-                delete(PositionRecord).where(PositionRecord.symbol == "TSLA")
-            )
+            await session.execute(delete(PositionRecord).where(PositionRecord.symbol == "TSLA"))
             await session.commit()
 
         # Recreate — should recover opened_at from orders
         async with db_factory() as session:
-            await tracker._upsert_position_record(
-                session, "TSLA", tracker._tracked["TSLA"]
-            )
+            await tracker._upsert_position_record(session, "TSLA", tracker._tracked["TSLA"])
             await session.commit()
 
         record = await _get_position(db_factory, "TSLA")
@@ -1507,9 +1508,7 @@ class TestOpenedAtFromOrders:
         assert record.opened_at == buy_time
 
     @pytest.mark.asyncio
-    async def test_kr_position_opened_at_from_orders(
-        self, adapter, risk, order_mgr, db_factory
-    ):
+    async def test_kr_position_opened_at_from_orders(self, adapter, risk, order_mgr, db_factory):
         """KR market positions should also get opened_at from orders."""
         from datetime import datetime
 
@@ -1537,9 +1536,7 @@ class TestOpenedAtFromOrders:
         tracker.track("005930", 72000.0, 10, strategy="kr_trend")
 
         async with db_factory() as session:
-            await tracker._upsert_position_record(
-                session, "005930", tracker._tracked["005930"]
-            )
+            await tracker._upsert_position_record(session, "005930", tracker._tracked["005930"])
             await session.commit()
 
         record = await _get_position(db_factory, "005930", market="KR")
@@ -1547,9 +1544,7 @@ class TestOpenedAtFromOrders:
         assert record.opened_at == buy_time
 
     @pytest.mark.asyncio
-    async def test_opened_at_ignores_cancelled_orders(
-        self, adapter, risk, order_mgr, db_factory
-    ):
+    async def test_opened_at_ignores_cancelled_orders(self, adapter, risk, order_mgr, db_factory):
         """Cancelled orders should NOT be used for opened_at."""
         from datetime import datetime, timedelta
 
@@ -1577,9 +1572,7 @@ class TestOpenedAtFromOrders:
         tracker.track("AAPL", 150.0, 10)
 
         async with db_factory() as session:
-            await tracker._upsert_position_record(
-                session, "AAPL", tracker._tracked["AAPL"]
-            )
+            await tracker._upsert_position_record(session, "AAPL", tracker._tracked["AAPL"])
             await session.commit()
 
         record = await _get_position(db_factory, "AAPL")
@@ -1646,14 +1639,16 @@ class TestRestoreFromDb:
         """restore_from_db skips records with quantity <= 0."""
         # Manually insert a zero-qty record
         async with db_factory() as session:
-            session.add(PositionRecord(
-                market="US",
-                symbol="DEAD",
-                exchange="NASD",
-                quantity=0,
-                avg_price=50.0,
-                strategy_name="test",
-            ))
+            session.add(
+                PositionRecord(
+                    market="US",
+                    symbol="DEAD",
+                    exchange="NASD",
+                    quantity=0,
+                    avg_price=50.0,
+                    strategy_name="test",
+                )
+            )
             await session.commit()
 
         tracker = _make_tracker(adapter, risk, order_mgr)
@@ -1663,7 +1658,11 @@ class TestRestoreFromDb:
 
     @pytest.mark.asyncio
     async def test_restore_from_db_skips_already_tracked(
-        self, adapter, risk, order_mgr, db_factory,
+        self,
+        adapter,
+        risk,
+        order_mgr,
+        db_factory,
     ):
         """restore_from_db should not overwrite existing tracked positions."""
         tracker = _make_tracker(adapter, risk, order_mgr)
@@ -1725,19 +1724,31 @@ class TestAutoRecoverUntracked:
         """check_all should auto-recover positions when tracker is empty."""
         adapter = AsyncMock()
         market_data = AsyncMock()
-        market_data.get_positions = AsyncMock(return_value=[
-            Position(
-                symbol="AAPL", exchange="NASD",
-                quantity=10, avg_price=150.0, current_price=155.0,
-            ),
-            Position(
-                symbol="MSFT", exchange="NASD",
-                quantity=5, avg_price=300.0, current_price=310.0,
-            ),
-        ])
+        market_data.get_positions = AsyncMock(
+            return_value=[
+                Position(
+                    symbol="AAPL",
+                    exchange="NASD",
+                    quantity=10,
+                    avg_price=150.0,
+                    current_price=155.0,
+                ),
+                Position(
+                    symbol="MSFT",
+                    exchange="NASD",
+                    quantity=5,
+                    avg_price=300.0,
+                    current_price=310.0,
+                ),
+            ]
+        )
 
         tracker = PositionTracker(
-            adapter, risk, order_mgr, market_data=market_data, market="US",
+            adapter,
+            risk,
+            order_mgr,
+            market_data=market_data,
+            market="US",
         )
         assert len(tracker.tracked_symbols) == 0
 
@@ -1755,7 +1766,11 @@ class TestAutoRecoverUntracked:
         market_data.get_positions = AsyncMock(return_value=[])
 
         tracker = PositionTracker(
-            adapter, risk, order_mgr, market_data=market_data, market="US",
+            adapter,
+            risk,
+            order_mgr,
+            market_data=market_data,
+            market="US",
         )
 
         # First call - should attempt recovery (cooldown starts)
@@ -1769,7 +1784,10 @@ class TestAutoRecoverUntracked:
 
     @pytest.mark.asyncio
     async def test_auto_recover_exchange_failure_falls_back_to_db(
-        self, risk, order_mgr, db_factory,
+        self,
+        risk,
+        order_mgr,
+        db_factory,
     ):
         """When exchange fetch fails, auto-recovery falls back to DB."""
         adapter = AsyncMock()
@@ -1777,23 +1795,29 @@ class TestAutoRecoverUntracked:
         market_data.get_positions = AsyncMock(side_effect=Exception("API down"))
 
         tracker = PositionTracker(
-            adapter, risk, order_mgr, market_data=market_data,
-            session_factory=db_factory, market="US",
+            adapter,
+            risk,
+            order_mgr,
+            market_data=market_data,
+            session_factory=db_factory,
+            market="US",
         )
 
         # Populate DB with a position (simulating previous session)
         async with db_factory() as session:
-            session.add(PositionRecord(
-                market="US",
-                symbol="GOOG",
-                exchange="NASD",
-                quantity=3,
-                avg_price=140.0,
-                current_price=145.0,
-                strategy_name="macd",
-                stop_loss=0.08,
-                take_profit=0.20,
-            ))
+            session.add(
+                PositionRecord(
+                    market="US",
+                    symbol="GOOG",
+                    exchange="NASD",
+                    quantity=3,
+                    avg_price=140.0,
+                    current_price=145.0,
+                    strategy_name="macd",
+                    stop_loss=0.08,
+                    take_profit=0.20,
+                )
+            )
             await session.commit()
 
         await tracker.check_all()
@@ -1804,15 +1828,24 @@ class TestAutoRecoverUntracked:
         """Auto-recovery should not overwrite already-tracked positions."""
         adapter = AsyncMock()
         market_data = AsyncMock()
-        market_data.get_positions = AsyncMock(return_value=[
-            Position(
-                symbol="AAPL", exchange="NASD",
-                quantity=10, avg_price=150.0, current_price=155.0,
-            ),
-        ])
+        market_data.get_positions = AsyncMock(
+            return_value=[
+                Position(
+                    symbol="AAPL",
+                    exchange="NASD",
+                    quantity=10,
+                    avg_price=150.0,
+                    current_price=155.0,
+                ),
+            ]
+        )
 
         tracker = PositionTracker(
-            adapter, risk, order_mgr, market_data=market_data, market="US",
+            adapter,
+            risk,
+            order_mgr,
+            market_data=market_data,
+            market="US",
         )
         # Pre-track with specific strategy
         tracker.track("AAPL", 148.0, 10, strategy="my_strategy")
@@ -1827,19 +1860,31 @@ class TestAutoRecoverUntracked:
         """Auto-recovery should skip positions with zero quantity."""
         adapter = AsyncMock()
         market_data = AsyncMock()
-        market_data.get_positions = AsyncMock(return_value=[
-            Position(
-                symbol="DEAD", exchange="NASD",
-                quantity=0, avg_price=50.0, current_price=45.0,
-            ),
-            Position(
-                symbol="LIVE", exchange="NASD",
-                quantity=5, avg_price=100.0, current_price=105.0,
-            ),
-        ])
+        market_data.get_positions = AsyncMock(
+            return_value=[
+                Position(
+                    symbol="DEAD",
+                    exchange="NASD",
+                    quantity=0,
+                    avg_price=50.0,
+                    current_price=45.0,
+                ),
+                Position(
+                    symbol="LIVE",
+                    exchange="NASD",
+                    quantity=5,
+                    avg_price=100.0,
+                    current_price=105.0,
+                ),
+            ]
+        )
 
         tracker = PositionTracker(
-            adapter, risk, order_mgr, market_data=market_data, market="US",
+            adapter,
+            risk,
+            order_mgr,
+            market_data=market_data,
+            market="US",
         )
         await tracker.check_all()
         assert "DEAD" not in tracker.tracked_symbols
@@ -1847,20 +1892,31 @@ class TestAutoRecoverUntracked:
 
     @pytest.mark.asyncio
     async def test_check_all_no_auto_recover_when_tracked_exists(
-        self, risk, order_mgr,
+        self,
+        risk,
+        order_mgr,
     ):
         """check_all should NOT auto-recover when tracker has positions."""
         adapter = AsyncMock()
         market_data = AsyncMock()
-        market_data.get_positions = AsyncMock(return_value=[
-            Position(
-                symbol="AAPL", exchange="NASD",
-                quantity=10, avg_price=150.0, current_price=155.0,
-            ),
-        ])
+        market_data.get_positions = AsyncMock(
+            return_value=[
+                Position(
+                    symbol="AAPL",
+                    exchange="NASD",
+                    quantity=10,
+                    avg_price=150.0,
+                    current_price=155.0,
+                ),
+            ]
+        )
 
         tracker = PositionTracker(
-            adapter, risk, order_mgr, market_data=market_data, market="US",
+            adapter,
+            risk,
+            order_mgr,
+            market_data=market_data,
+            market="US",
         )
         tracker.track("AAPL", 150.0, 10, strategy="existing")
 

@@ -22,6 +22,7 @@ from data.market_data_service import MarketDataService
 from engine.order_manager import OrderManager
 from engine.risk_manager import RiskManager
 from exchange.base import ExchangeAdapter
+from services.exchange_resolver import ExchangeResolver
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -60,6 +61,7 @@ class PositionTracker:
         event_calendar=None,
         session_factory: "async_sessionmaker[AsyncSession] | None" = None,
         market: str = "US",
+        exchange_resolver: ExchangeResolver | None = None,
     ):
         self._adapter = adapter
         self._market_data = market_data
@@ -69,6 +71,7 @@ class PositionTracker:
         self._event_calendar = event_calendar
         self._session_factory = session_factory
         self._market = market
+        self._exchange_resolver = exchange_resolver
         self._tracked: dict[str, TrackedPosition] = {}
         # Callbacks invoked after a sell is executed (STOCK-43).
         # Signature: callback(symbol: str, sell_timestamp: float) -> None
@@ -1235,8 +1238,14 @@ class PositionTracker:
             logger.debug("Failed to clear DB positions for %s: %s", self._market, e)
 
     def _resolve_exchange(self, symbol: str) -> str:
-        """Resolve exchange code from symbol."""
+        """Resolve exchange code from symbol.
+
+        KR market always returns 'KRX'.
+        US market uses ExchangeResolver (yfinance lookup + cache) when
+        available, falling back to 'NASD' for backward compatibility.
+        """
         if self._market == "KR":
             return "KRX"
-        # US: default NASD, could be improved with exchange resolver
+        if self._exchange_resolver is not None:
+            return self._exchange_resolver.resolve(symbol)
         return "NASD"
