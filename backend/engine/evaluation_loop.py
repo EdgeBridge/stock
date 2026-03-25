@@ -871,6 +871,12 @@ class EvaluationLoop:
                             time.time(),
                             is_loss=True,
                         )
+                    elif sell_order.status in ("submitted", "open", "pending"):
+                        # STOCK-54: Sell order in flight — also exclude from Phase 1
+                        # to prevent BUY→HOLD remapping while the order is pending.
+                        # Untrack is deferred to reconciliation. "failed"/"cancelled"
+                        # are intentionally excluded so the next cycle can retry.
+                        sold_symbols.add(symbol)
 
         # Clear processed sentiments to avoid re-selling
         for symbol in held:

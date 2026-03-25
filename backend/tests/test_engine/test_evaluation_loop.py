@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from engine.evaluation_loop import EvaluationLoop
-from engine.order_manager import OrderManager
+from engine.order_manager import ManagedOrder, OrderManager
 from engine.risk_manager import RiskManager
 from exchange.base import Balance, Position, OrderResult
 from strategies.base import Signal
@@ -744,34 +744,56 @@ class TestKRMarketExchange:
         resolver.resolve.assert_called_with("AAPL")
 
 
+def _make_loop_with_tracker(
+    mock_adapter,
+    mock_market_data,
+    mock_registry,
+    *,
+    tracked_symbols: list,
+    watchlist: list | None = None,
+):
+    """Shared factory for EvaluationLoop with a mocked PositionTracker.
+
+    Extracted to avoid verbatim duplication across TestProtectiveSells,
+    TestPhase0HeldSetUpdate, and TestSellPendingOrderDedup (STOCK-54 rework).
+    """
+    from data.indicator_service import IndicatorService
+    from engine.position_tracker import PositionTracker
+    from strategies.combiner import SignalCombiner
+
+    risk = RiskManager()
+    order_mgr = OrderManager(adapter=mock_adapter, risk_manager=risk)
+    position_tracker = MagicMock(spec=PositionTracker)
+    position_tracker.tracked_symbols = tracked_symbols
+    position_tracker._tracked = {}  # for hold-time check in sentiment sells
+    position_tracker.get_buy_strategy.return_value = "trend_following"
+
+    loop = EvaluationLoop(
+        adapter=mock_adapter,
+        market_data=mock_market_data,
+        indicator_svc=IndicatorService(),
+        registry=mock_registry,
+        combiner=SignalCombiner(),
+        order_manager=order_mgr,
+        risk_manager=risk,
+        watchlist=watchlist if watchlist is not None else tracked_symbols,
+        market_state="uptrend",
+        position_tracker=position_tracker,
+    )
+    return loop
+
+
 class TestProtectiveSells:
     """Test regime-change and news-sentiment protective sell mechanisms."""
 
     @pytest.fixture
     def loop_with_tracker(self, mock_adapter, mock_market_data, mock_registry):
-        from data.indicator_service import IndicatorService
-        from strategies.combiner import SignalCombiner
-        from engine.position_tracker import PositionTracker
-
-        risk = RiskManager()
-        order_mgr = OrderManager(adapter=mock_adapter, risk_manager=risk)
-        position_tracker = MagicMock(spec=PositionTracker)
-        position_tracker.tracked_symbols = ["AAPL", "TSLA"]
-        position_tracker._tracked = {}  # for hold-time check in sentiment sells
-
-        loop = EvaluationLoop(
-            adapter=mock_adapter,
-            market_data=mock_market_data,
-            indicator_svc=IndicatorService(),
-            registry=mock_registry,
-            combiner=SignalCombiner(),
-            order_manager=order_mgr,
-            risk_manager=risk,
-            watchlist=["AAPL", "TSLA"],
-            market_state="uptrend",
-            position_tracker=position_tracker,
+        return _make_loop_with_tracker(
+            mock_adapter,
+            mock_market_data,
+            mock_registry,
+            tracked_symbols=["AAPL", "TSLA"],
         )
-        return loop
 
     async def test_set_market_state_tracks_previous(self, loop_with_tracker):
         """set_market_state should save previous state."""
@@ -1157,13 +1179,18 @@ class TestProtectiveSells:
         assert "AAPL" in sold
         assert "TSLA" not in sold
 
-    async def test_protective_sell_returns_empty_when_no_fills(
+    async def test_protective_sell_includes_submitted_in_sold(
         self,
         loop_with_tracker,
         mock_market_data,
         mock_adapter,
     ):
-        """STOCK-54: Returns empty set when no orders are filled."""
+        """STOCK-54: Submitted (in-flight) sell orders are included in sold_symbols.
+
+        A "submitted" order means the sell is in transit. Including the symbol
+        in sold_symbols prevents Phase 1 BUY→HOLD remapping while the order
+        is pending. Untrack is deferred to reconciliation.
+        """
         mock_market_data.get_positions.return_value = [
             Position(
                 symbol="AAPL", exchange="NASD", quantity=10, avg_price=150.0, current_price=130.0
@@ -1177,7 +1204,7 @@ class TestProtectiveSells:
                 order_type="limit",
                 quantity=10,
                 price=130.0,
-                status="submitted",  # Not filled yet
+                status="submitted",
                 filled_price=None,
             )
         )
@@ -1185,6 +1212,37 @@ class TestProtectiveSells:
 
         sold = await loop_with_tracker._check_protective_sells({"AAPL"})
 
+        assert "AAPL" in sold
+
+    async def test_protective_sell_excludes_failed_orders(
+        self,
+        loop_with_tracker,
+        mock_market_data,
+        mock_adapter,
+    ):
+        """STOCK-54: Failed sell orders not returned so next cycle can retry."""
+        mock_market_data.get_positions.return_value = [
+            Position(
+                symbol="AAPL", exchange="NASD", quantity=10, avg_price=150.0, current_price=130.0
+            ),
+        ]
+        mock_adapter.create_sell_order = AsyncMock(
+            return_value=OrderResult(
+                order_id="O1",
+                symbol="AAPL",
+                side="SELL",
+                order_type="limit",
+                quantity=10,
+                price=130.0,
+                status="failed",
+                filled_price=None,
+            )
+        )
+        loop_with_tracker.set_market_state("downtrend")
+
+        sold = await loop_with_tracker._check_protective_sells({"AAPL"})
+
+        # "failed" must not be in sold_symbols so the next cycle can retry
         assert sold == set()
 
     async def test_protective_sell_returns_empty_set_no_triggers(
@@ -1201,29 +1259,12 @@ class TestPhase0HeldSetUpdate:
 
     @pytest.fixture
     def loop_with_tracker(self, mock_adapter, mock_market_data, mock_registry):
-        from data.indicator_service import IndicatorService
-        from strategies.combiner import SignalCombiner
-        from engine.position_tracker import PositionTracker
-
-        risk = RiskManager()
-        order_mgr = OrderManager(adapter=mock_adapter, risk_manager=risk)
-        position_tracker = MagicMock(spec=PositionTracker)
-        position_tracker.tracked_symbols = ["AAPL", "TSLA"]
-        position_tracker._tracked = {}
-
-        loop = EvaluationLoop(
-            adapter=mock_adapter,
-            market_data=mock_market_data,
-            indicator_svc=IndicatorService(),
-            registry=mock_registry,
-            combiner=SignalCombiner(),
-            order_manager=order_mgr,
-            risk_manager=risk,
-            watchlist=["AAPL", "TSLA"],
-            market_state="uptrend",
-            position_tracker=position_tracker,
+        return _make_loop_with_tracker(
+            mock_adapter,
+            mock_market_data,
+            mock_registry,
+            tracked_symbols=["AAPL", "TSLA"],
         )
-        return loop
 
     async def test_held_set_updated_after_phase0_sell(
         self,
@@ -1232,12 +1273,14 @@ class TestPhase0HeldSetUpdate:
         mock_adapter,
         mock_registry,
     ):
-        """STOCK-54: Symbols sold in Phase 0 should not be is_held=True in Phase 1.
+        """STOCK-54: Symbols sold in Phase 0 are skipped entirely in Phase 1.
 
-        When Phase 0 protective sells execute for a symbol, Phase 1 should not
-        treat it as held (no BUY→HOLD remapping, no held_sell_bias).
+        When Phase 0 sells AAPL (filled), Phase 1 must not evaluate it at all
+        — no BUY→HOLD remapping, no held_sell_bias. TSLA (still held) should
+        be the only symbol reaching _combiner.combine, and it must have
+        held_sell_bias applied.
         """
-        # Setup: AAPL is losing, TSLA is winning
+        # Setup: AAPL is losing (will be sold in Phase 0), TSLA is winning (kept)
         mock_market_data.get_positions.return_value = [
             Position(
                 symbol="AAPL", exchange="NASD", quantity=10, avg_price=150.0, current_price=130.0
@@ -1259,20 +1302,19 @@ class TestPhase0HeldSetUpdate:
             )
         )
 
-        # Trigger regime change
+        # Trigger regime change to activate Phase 0 protective sell
         loop_with_tracker.set_market_state("downtrend")
 
-        # Track calls to _combiner.combine to see if held_sell_bias is applied
+        # Intercept combine calls to observe how each symbol is evaluated
         original_combine = loop_with_tracker._combiner.combine
-        combine_calls = []
+        combine_calls: list[dict] = []
 
         def tracking_combine(signals, weights, **kwargs):
-            combine_calls.append(kwargs)
+            combine_calls.append(dict(kwargs))
             return original_combine(signals, weights, **kwargs)
 
         loop_with_tracker._combiner.combine = tracking_combine
 
-        # Make strategies return SELL for both symbols
         mock_registry.get_enabled.return_value[0].analyze = AsyncMock(
             return_value=Signal(
                 signal_type=SignalType.SELL,
@@ -1284,12 +1326,15 @@ class TestPhase0HeldSetUpdate:
 
         await loop_with_tracker._evaluate_all()
 
-        # AAPL was sold in Phase 0 → should NOT have held_sell_bias in Phase 1
-        # TSLA is still held → should have held_sell_bias
-        aapl_calls = [c for c in combine_calls if "held_sell_bias" not in c]
-        tsla_calls = [c for c in combine_calls if "held_sell_bias" in c]
-        # At least TSLA should be evaluated as held
-        assert len(tsla_calls) >= 1, "TSLA should be evaluated with held_sell_bias"
+        # AAPL is completely skipped in Phase 1 (sold_in_phase0).
+        # Only TSLA should reach combine — exactly 1 call, with held_sell_bias.
+        assert len(combine_calls) == 1, (
+            f"Expected 1 combine call (TSLA only), got {len(combine_calls)}. "
+            "AAPL sold in Phase 0 must not reach Phase 1 evaluation."
+        )
+        assert "held_sell_bias" in combine_calls[0], (
+            "TSLA (still held) must be evaluated with held_sell_bias"
+        )
 
     async def test_no_double_sell_after_phase0(
         self,
@@ -1342,28 +1387,12 @@ class TestSellPendingOrderDedup:
 
     @pytest.fixture
     def loop_with_tracker(self, mock_adapter, mock_market_data, mock_registry):
-        from data.indicator_service import IndicatorService
-        from strategies.combiner import SignalCombiner
-        from engine.position_tracker import PositionTracker
-
-        risk = RiskManager()
-        order_mgr = OrderManager(adapter=mock_adapter, risk_manager=risk)
-        tracker = MagicMock(spec=PositionTracker)
-        tracker.tracked_symbols = ["AAPL"]
-        tracker.get_buy_strategy.return_value = "trend_following"
-
-        loop = EvaluationLoop(
-            adapter=mock_adapter,
-            market_data=mock_market_data,
-            indicator_svc=IndicatorService(),
-            registry=mock_registry,
-            combiner=SignalCombiner(),
-            order_manager=order_mgr,
-            risk_manager=risk,
-            watchlist=["AAPL"],
-            position_tracker=tracker,
+        return _make_loop_with_tracker(
+            mock_adapter,
+            mock_market_data,
+            mock_registry,
+            tracked_symbols=["AAPL"],
         )
-        return loop
 
     async def test_sell_skipped_when_pending_sell_exists(
         self,
@@ -1372,14 +1401,15 @@ class TestSellPendingOrderDedup:
         mock_adapter,
     ):
         """STOCK-54: _execute_signal should skip SELL if pending sell order exists."""
-        # Simulate a pending sell order in order_manager
-        loop_with_tracker._order_manager._active_orders["O1"] = OrderResult(
+        # Use ManagedOrder (the correct internal type for _active_orders), not
+        # OrderResult, to avoid a duck-typing mismatch that mypy strict would flag.
+        loop_with_tracker._order_manager._active_orders["O1"] = ManagedOrder(
             order_id="O1",
             symbol="AAPL",
             side="SELL",
-            order_type="limit",
             quantity=10,
             price=150.0,
+            strategy_name="trend_following",
             status="pending",
         )
 
