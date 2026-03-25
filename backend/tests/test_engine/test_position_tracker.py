@@ -484,7 +484,7 @@ async def test_execute_sell_passes_exchange_kr(adapter, risk, order_mgr):
 
 @pytest.mark.asyncio
 async def test_execute_sell_passes_exchange_us(adapter, risk, order_mgr):
-    """US position tracker passes exchange='NASD' to place_sell on SL/TP."""
+    """US position tracker passes resolver-resolved exchange to place_sell on SL/TP."""
     adapter.fetch_positions = AsyncMock(
         return_value=[
             Position(
@@ -510,19 +510,68 @@ async def test_execute_sell_passes_exchange_us(adapter, risk, order_mgr):
         )
     )
 
-    tracker = PositionTracker(adapter, risk, order_mgr, market="US")
+    resolver = MagicMock()
+    resolver.resolve = MagicMock(return_value="NASD")
+    tracker = PositionTracker(adapter, risk, order_mgr, market="US", exchange_resolver=resolver)
     tracker.track("AAPL", 150.0, 10)
 
     triggered = await tracker.check_all()
     assert len(triggered) == 1
     assert triggered[0]["reason"] == "stop_loss"
 
-    # Verify place_sell was called with exchange="NASD"
+    # Verify place_sell was called with exchange="NASD" (from resolver)
     sell_call = adapter.create_sell_order.call_args
     assert sell_call is not None
     assert sell_call.kwargs.get("exchange") == "NASD" or (
         len(sell_call.args) > 4 and sell_call.args[4] == "NASD"
     )
+    resolver.resolve.assert_called_with("AAPL")
+
+
+@pytest.mark.asyncio
+async def test_execute_sell_passes_nyse_exchange(adapter, risk, order_mgr):
+    """NYSE stock SL sell uses correct exchange code via ExchangeResolver."""
+    adapter.fetch_positions = AsyncMock(
+        return_value=[
+            Position(
+                symbol="JPM",
+                exchange="NYSE",
+                quantity=5,
+                avg_price=200.0,
+                current_price=180.0,  # -10% < -8% SL
+            ),
+        ]
+    )
+    from exchange.base import OrderResult
+
+    adapter.create_sell_order = AsyncMock(
+        return_value=OrderResult(
+            order_id="sell_nyse1",
+            symbol="JPM",
+            side="SELL",
+            order_type="market",
+            quantity=5,
+            status="filled",
+            filled_price=180.0,
+        )
+    )
+
+    resolver = MagicMock()
+    resolver.resolve = MagicMock(return_value="NYSE")
+    tracker = PositionTracker(adapter, risk, order_mgr, market="US", exchange_resolver=resolver)
+    tracker.track("JPM", 200.0, 5)
+
+    triggered = await tracker.check_all()
+    assert len(triggered) == 1
+    assert triggered[0]["reason"] == "stop_loss"
+
+    # Verify place_sell was called with exchange="NYSE"
+    sell_call = adapter.create_sell_order.call_args
+    assert sell_call is not None
+    assert sell_call.kwargs.get("exchange") == "NYSE" or (
+        len(sell_call.args) > 4 and sell_call.args[4] == "NYSE"
+    )
+    resolver.resolve.assert_called_with("JPM")
 
 
 @pytest.mark.asyncio
@@ -534,11 +583,33 @@ async def test_resolve_exchange_kr(adapter, risk, order_mgr):
 
 
 @pytest.mark.asyncio
-async def test_resolve_exchange_us(adapter, risk, order_mgr):
-    """_resolve_exchange returns 'NASD' for US market."""
+async def test_resolve_exchange_us_with_resolver(adapter, risk, order_mgr):
+    """_resolve_exchange delegates to ExchangeResolver for US market."""
+    resolver = MagicMock()
+    exchange_map = {"AAPL": "NASD", "JPM": "NYSE", "XLE": "AMEX"}
+    resolver.resolve = MagicMock(side_effect=lambda s: exchange_map[s])
+    tracker = PositionTracker(adapter, risk, order_mgr, market="US", exchange_resolver=resolver)
+    assert tracker._resolve_exchange("AAPL") == "NASD"
+    assert tracker._resolve_exchange("JPM") == "NYSE"
+    assert tracker._resolve_exchange("XLE") == "AMEX"
+    assert resolver.resolve.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_resolve_exchange_us_without_resolver(adapter, risk, order_mgr):
+    """_resolve_exchange falls back to 'NASD' when no resolver is provided."""
     tracker = PositionTracker(adapter, risk, order_mgr, market="US")
     assert tracker._resolve_exchange("AAPL") == "NASD"
-    assert tracker._resolve_exchange("NVDA") == "NASD"
+    assert tracker._resolve_exchange("JPM") == "NASD"
+
+
+@pytest.mark.asyncio
+async def test_resolve_exchange_kr_ignores_resolver(adapter, risk, order_mgr):
+    """KR market always returns 'KRX', even when resolver is provided."""
+    resolver = MagicMock()
+    tracker = PositionTracker(adapter, risk, order_mgr, market="KR", exchange_resolver=resolver)
+    assert tracker._resolve_exchange("005930") == "KRX"
+    resolver.resolve.assert_not_called()
 
 
 # ── Paper/Live order separation (STOCK-6) ────────────────────────────
