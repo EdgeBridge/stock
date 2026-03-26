@@ -106,16 +106,34 @@ async def _combined_summary(request: Request) -> dict:
     if _cached_usd_krw <= 0:
         _cached_usd_krw = 1450.0
 
-    # STOCK-53: Total equity for 통합증거금 accounts.
-    # US adapter stores _full_account_usd (uncapped buying power + positions)
-    # which reflects the full account capacity including KRW auto-conversion.
-    # total = KR domestic stocks + full US account value × rate
+    # STOCK-59: Total equity — use tot_asst_krw with market-rate USD re-valuation.
+    # CTRP6504R tot_asst_amt (= _tot_asst_krw) contains the full account value
+    # in KRW at the broker's base rate (pb_rate / _last_exchange_rate).
+    # frcr_evlu_tota (= _usd_deposit_krw) is the USD portion in KRW at the same
+    # broker rate. We extract the actual USD value and re-price at the live market
+    # rate so that exchange-rate drift does not understate total equity.
     adapter = getattr(request.app.state, "adapter", None)
-    full_us_usd = getattr(adapter, "_full_account_usd", 0) if adapter else 0
-    if full_us_usd > 0:
-        kr_stock_value = krw_total - krw_available  # domestic stocks only
-        total_equity = kr_stock_value + full_us_usd * _cached_usd_krw
+
+    # Helper to safely extract numeric values from adapter.
+    # Returns default if the attribute is missing, None, or falsy (e.g., 0).
+    # For this use case, 0 correctly signals 'value unavailable', so we treat it as falsy.
+    def _get_adapter_num(attr: str, default: float = 0.0) -> float:
+        val = getattr(adapter, attr, None) if adapter else None
+        return float(val) if val else default
+
+    tot_asst_krw_val = _get_adapter_num("_tot_asst_krw")
+    usd_deposit_krw_val = _get_adapter_num("_usd_deposit_krw")
+    pb_rate = _get_adapter_num("_last_exchange_rate")
+    # Also read full_us_usd — still needed for available_cash (STOCK-42) below.
+    full_us_usd = _get_adapter_num("_full_account_usd")
+
+    if tot_asst_krw_val > 0 and pb_rate > 0:
+        # Split: KRW-denominated portion + USD portion re-valued at live market rate.
+        krw_portion = tot_asst_krw_val - usd_deposit_krw_val
+        usd_value = usd_deposit_krw_val / pb_rate if usd_deposit_krw_val > 0 else 0.0
+        total_equity = krw_portion + usd_value * _cached_usd_krw
     else:
+        # Fallback: separate KR total + US total at market rate.
         total_equity = krw_total + usd_total * _cached_usd_krw
 
     # STOCK-42: Available cash — prevent double-counting in 통합증거금 accounts.
