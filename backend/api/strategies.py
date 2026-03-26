@@ -1,6 +1,6 @@
 """Strategy API endpoints."""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from api.dependencies import get_registry
 from strategies.registry import StrategyRegistry
@@ -37,7 +37,18 @@ async def get_strategy_params(
 
 
 @router.post("/reload")
-async def reload_config(registry: StrategyRegistry = Depends(get_registry)):
+async def reload_config(
+    request: Request,
+    registry: StrategyRegistry = Depends(get_registry),
+):
     """Hot-reload strategy configuration from YAML."""
     registry.reload_config()
+
+    # STOCK-61: Also reload hard_sl_pct on evaluation loops
+    hard_sl_pct = registry._config_loader.get_hard_sl_pct()
+    if hasattr(request.app.state, "evaluation_loop"):
+        request.app.state.evaluation_loop.reload_hard_sl_pct(hard_sl_pct)
+    if hasattr(request.app.state, "kr_evaluation_loop"):
+        request.app.state.kr_evaluation_loop.reload_hard_sl_pct(hard_sl_pct)
+
     return {"status": "ok", "strategies": registry.get_names()}

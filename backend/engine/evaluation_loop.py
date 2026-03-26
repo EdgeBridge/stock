@@ -171,6 +171,24 @@ class EvaluationLoop:
         """Set Redis cache for persisting sell cooldown data (STOCK-43)."""
         self._cache = cache
 
+    def reload_hard_sl_pct(self, hard_sl_pct: float) -> None:
+        """Update hard_sl_pct from config during hot-reload (STOCK-61).
+
+        Called by StrategyRegistry.reload_config() to propagate config changes
+        to the evaluation loop without restarting the service.
+
+        Args:
+            hard_sl_pct: New hard stop-loss threshold from config (e.g., -0.15).
+        """
+        old_value = self._hard_sl_pct
+        self._hard_sl_pct = hard_sl_pct
+        logger.info(
+            "Updated hard_sl_pct for %s market: %.2f → %.2f",
+            self._market,
+            old_value * 100,
+            hard_sl_pct * 100,
+        )
+
     def register_sell_cooldown(
         self,
         symbol: str,
