@@ -45,6 +45,16 @@ setup_logging(LogConfig())
 logger = logging.getLogger(__name__)
 
 
+def reset_all_daily_risk(us_rm: RiskManager, kr_rm: RiskManager) -> None:
+    """Reset daily PnL counters for both the US and KR risk managers.
+
+    Extracted from task_daily_reset so it can be unit-tested directly
+    (STOCK-56: kr_rm.reset_daily() was previously missing from the reset task).
+    """
+    us_rm.reset_daily()
+    kr_rm.reset_daily()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup/shutdown lifecycle."""
@@ -559,7 +569,7 @@ async def lifespan(app: FastAPI):
         await position_tracker.sync_to_db()
 
     async def task_daily_reset():
-        risk_manager.reset_daily()
+        reset_all_daily_risk(risk_manager, kr_risk_manager)
         logger.info("Daily risk counters reset")
 
     async def task_evaluation_loop():
