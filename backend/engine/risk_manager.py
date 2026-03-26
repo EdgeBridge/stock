@@ -282,7 +282,7 @@ class RiskManager:
         # Check daily loss limit using uncapped portfolio value (STOCK-56).
         # Using the market-capped value here would inflate the loss percentage
         # proportionally to the allocation split and cause premature halts.
-        if self._daily_pnl < 0:
+        if self._daily_pnl < 0 and uncapped_portfolio_value > 0:
             daily_loss_pct = abs(self._daily_pnl) / uncapped_portfolio_value
             if daily_loss_pct >= self._params.daily_loss_limit_pct:
                 return PositionSizeResult(
@@ -402,7 +402,7 @@ class RiskManager:
             return reject
 
         # Check daily loss limit using uncapped portfolio value (STOCK-56).
-        if self._daily_pnl < 0:
+        if self._daily_pnl < 0 and uncapped_portfolio_value > 0:
             daily_loss_pct = abs(self._daily_pnl) / uncapped_portfolio_value
             if daily_loss_pct >= self._params.daily_loss_limit_pct:
                 return PositionSizeResult(

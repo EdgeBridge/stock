@@ -1409,27 +1409,67 @@ class TestDailyLossLimitUncapped:
         assert result.allowed is False
         assert "Daily loss" in result.reason
 
+    # --- KR market path (primary failure surface for STOCK-56) ---
+
+    def test_kr_loss_below_limit_allows_trade_with_market_cap(self):
+        """KR market: 1.5% actual loss should NOT trigger 3% daily loss limit.
+
+        KR was the primary failure surface: its daily reset was missing entirely,
+        but even if reset, the capped portfolio value would double the apparent
+        loss and falsely halt trading.  This test exercises the KR path to
+        confirm the uncapped denominator fix is symmetric.
+        """
+        rm = self._make_rm(loss_limit=0.03)
+        rm.update_daily_pnl(-1_500)
+        result = rm.calculate_position_size(
+            symbol="005930",
+            price=100.0,
+            portfolio_value=100_000,
+            cash_available=100_000,
+            current_positions=0,
+            market="KR",  # cap = 50% → capped_portfolio = 50,000
+        )
+        # 1,500 / 100,000 = 1.5% < 3% limit → should be allowed
+        assert result.allowed is True, (
+            f"Expected allowed=True but got reason: {result.reason}"
+        )
+
+    def test_kr_loss_at_limit_blocks_trade_with_market_cap(self):
+        """KR market: 3.5% actual loss SHOULD trigger 3% daily loss limit."""
+        rm = self._make_rm(loss_limit=0.03)
+        rm.update_daily_pnl(-3_500)
+        result = rm.calculate_position_size(
+            symbol="005930",
+            price=100.0,
+            portfolio_value=100_000,
+            cash_available=100_000,
+            current_positions=0,
+            market="KR",
+        )
+        assert result.allowed is False
+        assert "Daily loss" in result.reason
+
 
 class TestTaskDailyReset:
-    """STOCK-56: task_daily_reset must reset both US and KR risk managers."""
+    """STOCK-56: reset_all_daily_risk (called by task_daily_reset) must reset both managers."""
 
     def test_both_risk_managers_are_reset(self) -> None:
-        """Verify that reset_daily() is called on both risk manager instances."""
-        us_rm = RiskManager(RiskParams(daily_loss_limit_pct=0.03))
-        kr_rm = RiskManager(RiskParams(daily_loss_limit_pct=0.03))
+        """reset_all_daily_risk() calls reset_daily() on both US and KR managers.
 
-        us_rm.update_daily_pnl(-2_000)
-        kr_rm.update_daily_pnl(-1_500)
+        Tests the extracted module-level function that task_daily_reset in main.py
+        delegates to (STOCK-56 fix). If kr_rm.reset_daily() is accidentally removed
+        from that function, this mock-based assertion will catch it immediately.
+        """
+        from unittest.mock import MagicMock
+        from main import reset_all_daily_risk
 
-        assert us_rm.daily_pnl == -2_000
-        assert kr_rm.daily_pnl == -1_500
+        us_rm = MagicMock()
+        kr_rm = MagicMock()
 
-        # Simulate what task_daily_reset should now do (both managers reset)
-        us_rm.reset_daily()
-        kr_rm.reset_daily()
+        reset_all_daily_risk(us_rm, kr_rm)
 
-        assert us_rm.daily_pnl == 0.0
-        assert kr_rm.daily_pnl == 0.0
+        us_rm.reset_daily.assert_called_once()
+        kr_rm.reset_daily.assert_called_once()
 
     def test_kr_risk_manager_reset_prevents_stale_accumulation(self) -> None:
         """KR daily PnL must not accumulate across reset boundaries.
@@ -1452,7 +1492,7 @@ class TestTaskDailyReset:
         kr_rm.update_daily_pnl(-1_000)
 
         # After proper reset, day-2 loss is 1% — well within 3% limit.
-        # Use a low price so allocation is > 0 (no market cap applied here).
+        # No market= param → _apply_market_cap is a no-op; uncapped_portfolio_value == portfolio_value.
         result = kr_rm.calculate_position_size(
             symbol="005930",
             price=100.0,
