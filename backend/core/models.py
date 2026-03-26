@@ -2,19 +2,19 @@
 
 from datetime import datetime
 
+from sqlalchemy import JSON as JSONB  # Use generic JSON for SQLite compatibility
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Column,
     DateTime,
     Float,
+    Index,
     Integer,
     String,
     Text,
-    BigInteger,
-    Index,
     UniqueConstraint,
 )
-from sqlalchemy import JSON as JSONB  # Use generic JSON for SQLite compatibility
 from sqlalchemy.orm import DeclarativeBase
 
 
@@ -72,6 +72,10 @@ class PositionRecord(Base):
     take_profit = Column(Float)
     trailing_stop = Column(Float)
     strategy_name = Column(String(50))
+    # STOCK-58: Highest price reached for trailing stop recovery
+    highest_price = Column(Float)
+    # STOCK-58: Prevent duplicate partial sells on restart
+    partial_profit_taken = Column(Boolean, nullable=False, default=False)
     opened_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -93,7 +97,10 @@ class PortfolioSnapshot(Base):
     unrealized_pnl = Column(Float)
     daily_pnl = Column(Float)
     drawdown_pct = Column(Float)
-    cash_flow = Column(Float, default=0.0)  # STOCK-46: detected deposit/withdrawal amount
+    # STOCK-46: detected deposit/withdrawal amount
+    cash_flow = Column(Float, default=0.0)
+    # STOCK-58: USD/KRW rate at snapshot time for accurate historical returns
+    usd_krw_rate = Column(Float)
     recorded_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (Index("idx_snapshots_recorded", "recorded_at"),)
