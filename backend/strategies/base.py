@@ -50,13 +50,13 @@ class BaseStrategy(ABC):
         "sell_confidence_boost_min_pnl": 0.02,
         "sell_confidence_boost_factor": 0.5,
         "sell_confidence_boost_max": 0.15,
-        "profit_take_min_pnl": 0.08,
+        "profit_take_min_pnl": 0.05,
         "profit_take_base_confidence": 0.65,
         "profit_take_weakness_required": 1,
         "rsi_overbought": 70.0,
         "volume_weakness_ratio": 0.8,
         # STOCK-34: High-profit auto-sell — sell without weakness at very high PnL
-        "high_profit_auto_sell_pnl": 0.15,  # 15%+ PnL → auto-SELL on HOLD
+        "high_profit_auto_sell_pnl": 0.10,  # 10%+ PnL → auto-SELL on HOLD
         "high_profit_auto_sell_confidence": 0.70,
     }
 

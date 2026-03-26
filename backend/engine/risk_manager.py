@@ -27,10 +27,10 @@ class RiskParams:
     market_allocations: dict[str, float] | None = None  # e.g. {"US": 0.5, "KR": 0.5}
     # Profit-taking: sell a portion of position at intermediate gain levels
     profit_taking_enabled: bool = True
-    profit_taking_threshold_pct: float = 0.10  # 10% gain triggers partial sell
+    profit_taking_threshold_pct: float = 0.06  # 6% gain triggers partial sell
     profit_taking_sell_ratio: float = 0.50  # sell 50% of remaining position
     # Default trailing stop (used when strategy config doesn't specify)
-    default_trailing_activation_pct: float = 0.06  # activate after 6% gain
+    default_trailing_activation_pct: float = 0.04  # activate after 4% gain
     default_trailing_stop_pct: float = 0.03  # trail 3% from peak
     # Tiered trailing stop: tighter trail at higher gain levels (STOCK-24)
     # List of (gain_threshold, trail_pct) tuples, sorted by gain ascending.

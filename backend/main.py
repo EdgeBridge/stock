@@ -179,7 +179,7 @@ async def lifespan(app: FastAPI):
         max_position_pct=0.08,  # 8% per position (diversified, backtest optimal)
         max_positions=20,  # More positions, better diversification
         default_stop_loss_pct=0.12,  # Wider SL: more room for volatility
-        default_take_profit_pct=0.50,  # Wide TP: let winners run
+        default_take_profit_pct=0.20,  # Realistic TP: capture gains before reversal
         tiered_trailing_tiers=tiered_tiers,
         breakeven_stop_enabled=be_enabled,
         breakeven_stop_activation_ratio=be_activation,
@@ -192,7 +192,7 @@ async def lifespan(app: FastAPI):
     kr_risk_params = RiskParams(
         market_allocations=market_allocs,
         default_stop_loss_pct=0.12,  # 12% (wider for KR volatility)
-        default_take_profit_pct=0.25,  # 25% (allow larger moves)
+        default_take_profit_pct=0.20,  # 20% (aligned with US, capture gains)
         tiered_trailing_tiers=tiered_tiers,
         breakeven_stop_enabled=be_enabled,
         breakeven_stop_activation_ratio=be_activation,

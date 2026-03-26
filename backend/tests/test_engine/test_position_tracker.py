@@ -157,6 +157,7 @@ async def test_trailing_stop_triggered(adapter, risk, order_mgr):
     # Enable trailing stop for this test
     tracker._tracked["GOOG"].trailing_activation_pct = 0.05
     tracker._tracked["GOOG"].trailing_stop_pct = 0.03
+    tracker._tracked["GOOG"].partial_profit_taken = True  # skip profit_taking check
     # Simulate that price had gone to 115 before
     tracker._tracked["GOOG"].highest_price = 115.0
     # Drop from 115 to 108 = ~6.1% > 3% trail
@@ -1677,6 +1678,7 @@ async def test_on_sell_callback_trailing_stop_is_loss_true(adapter, risk, order_
         trailing_activation_pct=0.05,
         trailing_stop_pct=0.05,
     )
+    tracker._tracked["TSLA"].partial_profit_taken = True  # skip profit_taking check
     # Simulate price having reached $115 peak
     tracker._tracked["TSLA"].highest_price = 115.0
 

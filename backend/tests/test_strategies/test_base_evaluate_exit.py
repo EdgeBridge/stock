@@ -262,7 +262,7 @@ class TestProfitTakeSell:
             strategy_name="test_strategy",
             reason="neutral",
         )
-        ctx = _make_context(pnl_pct=0.12)
+        ctx = _make_context(pnl_pct=0.07)  # Above profit_take_min_pnl (5%), below auto_sell (10%)
         df = _make_df_with_indicators(rsi=75, macd_declining=True, volume_weak=True)
 
         result = strategy.evaluate_exit(signal, ctx, df)
@@ -278,7 +278,7 @@ class TestProfitTakeSell:
             strategy_name="test_strategy",
             reason="neutral",
         )
-        ctx = _make_context(pnl_pct=0.12)
+        ctx = _make_context(pnl_pct=0.07)  # Above profit_take_min_pnl (5%), below auto_sell (10%)
         # No technical weakness
         df = _make_df_with_indicators(rsi=50, macd_declining=False, volume_weak=False)
 
@@ -295,7 +295,7 @@ class TestProfitTakeSell:
             strategy_name="test_strategy",
             reason="neutral",
         )
-        ctx = _make_context(pnl_pct=0.03)  # Below 8% default
+        ctx = _make_context(pnl_pct=0.03)  # Below 5% default
         df = _make_df_with_indicators(rsi=75, macd_declining=True, volume_weak=True)
 
         result = strategy.evaluate_exit(signal, ctx, df)
@@ -494,7 +494,7 @@ class TestProfitExitParams:
             strategy_name="test_strategy",
             reason="neutral",
         )
-        ctx = _make_context(pnl_pct=0.12)
+        ctx = _make_context(pnl_pct=0.07)  # Above profit_take_min_pnl, below auto_sell
         # Only 1 weakness signal (RSI overbought)
         df = _make_df_with_indicators(rsi=80, macd_declining=False, volume_weak=False)
 
@@ -535,7 +535,7 @@ class TestProfitExitParams:
             strategy_name="test_strategy",
             reason="neutral",
         )
-        ctx = _make_context(pnl_pct=0.10)
+        ctx = _make_context(pnl_pct=0.07)  # Above profit_take_min_pnl, below auto_sell
         # No weakness at all
         df = _make_df_with_indicators(rsi=50, macd_declining=False, volume_weak=False)
 
@@ -609,14 +609,14 @@ class TestHighProfitAutoSell:
         assert "high_profit_auto_sell" in result.reason
 
     def test_hold_below_high_profit_threshold_no_auto_sell(self, strategy):
-        """Below 15% PnL, auto-sell should NOT fire (falls back to weakness check)."""
+        """Below 10% PnL, auto-sell should NOT fire (falls back to weakness check)."""
         signal = Signal(
             signal_type=SignalType.HOLD,
             confidence=0.50,
             strategy_name="test_strategy",
             reason="neutral",
         )
-        ctx = _make_context(pnl_pct=0.14)  # Just below 15%
+        ctx = _make_context(pnl_pct=0.09)  # Just below 10%
         # No weakness → Scenario 2b won't fire either
         df = _make_df_with_indicators(rsi=50, macd_declining=False, volume_weak=False)
 
