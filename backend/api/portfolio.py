@@ -287,8 +287,13 @@ async def portfolio_returns(request: Request):
             new_equity = 0.0
 
             if us_old and us_new:
-                old_equity += us_old.total_value_usd * _cached_usd_krw
-                new_equity += us_new.total_value_usd * _cached_usd_krw
+                # STOCK-58: Use historical exchange rate for each snapshot
+                # This ensures exchange rate changes are properly captured in returns
+                # Use saved rate, fall back to current if not available
+                old_rate = us_old.usd_krw_rate or _cached_usd_krw
+                new_rate = us_new.usd_krw_rate or _cached_usd_krw
+                old_equity += us_old.total_value_usd * old_rate
+                new_equity += us_new.total_value_usd * new_rate
             if kr_old and kr_new:
                 old_equity += kr_old.total_value_usd
                 new_equity += kr_new.total_value_usd
@@ -325,8 +330,9 @@ async def portfolio_returns(request: Request):
 
 async def _get_oldest_snapshot(session, since, market: str):
     """Get the oldest snapshot after a given time for a market."""
-    from core.models import PortfolioSnapshot
     from sqlalchemy import select
+
+    from core.models import PortfolioSnapshot
 
     stmt = (
         select(PortfolioSnapshot)
@@ -341,8 +347,9 @@ async def _get_oldest_snapshot(session, since, market: str):
 
 async def _get_latest_snapshot(session, market: str):
     """Get the most recent snapshot for a market."""
+    from sqlalchemy import desc, select
+
     from core.models import PortfolioSnapshot
-    from sqlalchemy import select, desc
 
     stmt = (
         select(PortfolioSnapshot)
@@ -418,8 +425,10 @@ def _build_equity_timeline(
     events: list[tuple[datetime, str, float, float]] = []
 
     for s in us_snapshots:
-        equity = s.total_value_usd * usd_krw
-        cf = (getattr(s, "cash_flow", 0.0) or 0.0) * usd_krw
+        # STOCK-58: Use historical exchange rate stored at snapshot time
+        rate = s.usd_krw_rate or usd_krw  # Use saved rate, fall back to current
+        equity = s.total_value_usd * rate
+        cf = (getattr(s, "cash_flow", 0.0) or 0.0) * rate
         events.append((s.recorded_at, "US", equity, cf))
 
     for s in kr_snapshots:

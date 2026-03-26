@@ -171,6 +171,16 @@ class PortfolioManager:
                     "[%s] Cash flow detected: %.2f (%s)", self._market, cash_flow, action
                 )
 
+        # STOCK-58: Capture exchange rate at snapshot time for accurate historical conversions
+        usd_krw_rate = None
+        if self._market == "US":
+            try:
+                usd_krw_rate = await self._market_data.get_exchange_rate()
+                if usd_krw_rate <= 0:
+                    usd_krw_rate = None
+            except Exception as e:
+                logger.debug("[%s] Failed to fetch exchange rate for snapshot: %s", self._market, e)
+
         snapshot = PortfolioSnapshot(
             market=self._market,
             total_value_usd=total_equity,
@@ -179,6 +189,7 @@ class PortfolioManager:
             unrealized_pnl=unrealized_pnl,
             daily_pnl=daily_pnl,
             cash_flow=cash_flow,
+            usd_krw_rate=usd_krw_rate,
             recorded_at=datetime.utcnow(),
         )
 
