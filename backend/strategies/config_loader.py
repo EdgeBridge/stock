@@ -100,5 +100,14 @@ class StrategyConfigLoader:
         """
         return self.global_config.get("breakeven_stop", {})
 
+    def get_hard_sl_pct(self) -> float:
+        """Get hard stop-loss threshold that bypasses min_hold.
+
+        Returns the hard_sl_pct from global config, or -0.15 as default.
+        When P&L drops below this, position is sold immediately even if
+        it hasn't been held for the minimum hold period (4 hours).
+        """
+        return float(self.global_config.get("hard_sl_pct", -0.15))
+
     def get_screening_config(self) -> dict:
         return self._config.get("screening", {})

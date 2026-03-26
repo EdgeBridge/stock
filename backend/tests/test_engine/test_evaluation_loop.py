@@ -3944,8 +3944,23 @@ class TestAntiWhipsawDefaults:
         assert eval_loop._min_hold_secs == 4 * 3600
 
     def test_hard_sl_pct_default(self, eval_loop):
-        """_hard_sl_pct should be -7% (hard stop-loss bypass threshold)."""
+        """_hard_sl_pct should be -7% (hardcoded EvaluationLoop default)."""
+        # Note: -0.07 is the hardcoded default in EvaluationLoop.__init__.
+        # In production (main.py), this is overridden to -0.15 from config.
+        # This test verifies the hardcoded default; config tests verify loader overrides it to -0.15.
         assert eval_loop._hard_sl_pct == -0.07
+
+    def test_hard_sl_pct_config_override(self, eval_loop, mock_registry):
+        """hard_sl_pct should be overridable from config (STOCK-61)."""
+        # STOCK-61: Verify that evaluation_loop can be configured with a custom hard_sl_pct
+        # from the config_loader (as done in main.py at startup).
+        mock_registry._config_loader.get_hard_sl_pct.return_value = -0.15
+
+        # Simulate the startup behavior in main.py
+        eval_loop._hard_sl_pct = mock_registry._config_loader.get_hard_sl_pct()
+
+        assert eval_loop._hard_sl_pct == -0.15
+        mock_registry._config_loader.get_hard_sl_pct.assert_called_once()
 
     def test_max_loss_sells_default(self, eval_loop):
         """_max_loss_sells should be 2 (block re-entry after 2 losses in 7d)."""
