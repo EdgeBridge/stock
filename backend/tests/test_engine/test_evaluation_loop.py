@@ -3944,7 +3944,9 @@ class TestAntiWhipsawDefaults:
         assert eval_loop._min_hold_secs == 4 * 3600
 
     def test_hard_sl_pct_default(self, eval_loop):
-        """_hard_sl_pct should be -7% (hard stop-loss bypass threshold)."""
+        """_hard_sl_pct should be -7% (hard stop-loss bypass threshold, from CLAUDE.md config_loader comment)."""
+        # Note: -0.07 is the hardcoded default, but config can override it.
+        # This test verifies the hardcoded value, config tests verify loading.
         assert eval_loop._hard_sl_pct == -0.07
 
     def test_max_loss_sells_default(self, eval_loop):

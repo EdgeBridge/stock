@@ -42,6 +42,10 @@ global:
   # When all strategies say HOLD but unrealized gain is very high,
   # generate SELL to prevent unrealized gains from evaporating.
   profit_protection_pct: 0.10             # 10%+ unrealized gain → force SELL
+  # STOCK-61: Hard stop-loss threshold that bypasses min_hold (4 hours)
+  # When P&L drops below this, position is sold immediately even if not held 4h yet.
+  # Set to -15% to only trigger on genuine crashes, not normal 5-7% dips.
+  hard_sl_pct: -0.15                      # -15% hard SL that bypasses min_hold
   # Default trailing stop for strategies without explicit config
   trailing_stop_defaults:
     activation_pct: 0.04   # activate after 4% gain

@@ -406,6 +406,8 @@ async def lifespan(app: FastAPI):
     evaluation_loop._daily_buy_limit = config.trading.daily_buy_limit
     # STOCK-43: Apply config cooldown + Redis persistence + PositionTracker callback
     evaluation_loop._sell_cooldown_secs = config.trading.cooldown_after_sell_sec
+    # STOCK-61: Load hard_sl_pct from config (default -15%, was -7%)
+    evaluation_loop._hard_sl_pct = registry._config_loader.get_hard_sl_pct()
     evaluation_loop.set_cache(cache)
     position_tracker.register_on_sell(evaluation_loop.register_sell_cooldown)
     app.state.evaluation_loop = evaluation_loop
@@ -1478,6 +1480,8 @@ async def lifespan(app: FastAPI):
     kr_evaluation_loop._daily_buy_limit = config.trading.daily_buy_limit
     # STOCK-43: Apply config cooldown + Redis persistence + PositionTracker callback
     kr_evaluation_loop._sell_cooldown_secs = config.trading.cooldown_after_sell_sec
+    # STOCK-61: Load hard_sl_pct from config (default -15%, was -7%)
+    kr_evaluation_loop._hard_sl_pct = registry._config_loader.get_hard_sl_pct()
     kr_evaluation_loop.set_cache(cache)
     kr_position_tracker.register_on_sell(kr_evaluation_loop.register_sell_cooldown)
     app.state.kr_evaluation_loop = kr_evaluation_loop
