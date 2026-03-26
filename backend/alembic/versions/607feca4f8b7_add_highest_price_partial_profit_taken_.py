@@ -34,7 +34,7 @@ def upgrade() -> None:
             'partial_profit_taken',
             sa.Boolean(),
             nullable=False,
-            server_default=False,
+            server_default='false',
         ),
     )
 
