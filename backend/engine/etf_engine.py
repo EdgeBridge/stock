@@ -363,7 +363,7 @@ class ETFEngine:
 
                     if sib in exit_etfs:
                         # Exit loop already tried to sell this sibling.
-                        # If it's still in held_symbols, the sell was blocked (min_hold).
+                        # Still in held_symbols → sell did not complete (min_hold blocked or order failed).
                         logger.info(
                             "ETF Engine: SKIP BUY %s — sibling %s still held "
                             "(exit sell did not complete)",
@@ -791,6 +791,12 @@ class ETFEngine:
                             created_at = created_at.replace(tzinfo=timezone.utc)
                         self._last_sell_times[sym] = created_at.timestamp()
                         seeded.append(sym)
+                    else:
+                        logger.warning(
+                            "ETF Engine restore: unexpected created_at type %s for %s"
+                            " — cooldown not seeded",
+                            type(created_at).__name__, sym,
+                        )
 
                 if seeded:
                     logger.info(

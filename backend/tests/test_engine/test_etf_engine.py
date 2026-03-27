@@ -465,11 +465,14 @@ class TestMinHoldConstraint:
             "Energy": {"symbol": "XLE", "return_1w": -3.0, "return_1m": -6.0, "return_3m": -10.0},
             "Financials": {"symbol": "XLF", "return_1w": 2.0, "return_1m": 5.0, "return_3m": 12.0},
         }
+        before_sell = time.time()
         actions = await engine._manage_sector_etfs(sector_data)
 
         # XLE should be sold because min_hold is satisfied
         assert any("SELL" in a and "XLE" in a for a in actions)
         assert mock_order_manager.place_sell.called
+        assert "XLE" in engine._last_sell_times, "sector ETF sell must record cooldown timestamp"
+        assert engine._last_sell_times["XLE"] >= before_sell
 
 
 class TestSellCooldownConstraint:
@@ -648,6 +651,7 @@ class TestHoldLimits:
         # Simulate successful sell order
         mock_order_manager.place_sell.return_value = MagicMock()
 
+        before_sell = time.time()
         actions = await engine._check_hold_limits()
 
         assert mock_order_manager.place_sell.called
@@ -655,6 +659,9 @@ class TestHoldLimits:
         assert "TQQQ" in actions[0]
         # Tracking removed after successful sell
         assert "TQQQ" not in engine._managed_positions
+        # Cooldown timestamp must be recorded so rapid rebuy is blocked
+        assert "TQQQ" in engine._last_sell_times
+        assert engine._last_sell_times["TQQQ"] >= before_sell
 
 
 class TestExposureLimits:
@@ -795,10 +802,15 @@ def _make_sell_order_mock(symbol: str, created_at: datetime | None = None):
 def _mock_sell_session_factory(sell_orders=None):
     """Create a mock async session factory for cooldown-seeding tests.
 
-    Returns None for BUY entry queries (scalar_one_or_none) and
-    the given list for SELL cooldown queries (scalars().all()).
+    Discriminates between the BUY-entry query (first factory call per restore
+    invocation) and the SELL-cooldown query (second factory call) using factory
+    call count — avoiding fragile SQL string/dialect-dependent inspection.
+
+    First factory call  → session whose execute() returns scalar_one_or_none()=None
+    Second factory call → session whose execute() returns scalars().all()=sell_orders
     """
     sell_orders = sell_orders or []
+    call_count = [0]  # list so it is mutable inside the closure
 
     class _FakeScalars:
         def __init__(self, orders):
@@ -807,35 +819,38 @@ def _mock_sell_session_factory(sell_orders=None):
         def all(self):
             return self._orders
 
-    class _FakeResult:
-        def __init__(self, orders, is_sell_query):
-            self._orders = orders
-            self._is_sell = is_sell_query
-
+    class _BuyResult:
         def scalar_one_or_none(self):
-            return None
+            return None  # no BUY order on record → restore uses inferred defaults
 
+    class _SellResult:
         def scalars(self):
-            return _FakeScalars(self._orders if self._is_sell else [])
+            return _FakeScalars(sell_orders)
 
-    class _FakeSession:
-        async def execute(self, stmt):
-            compiled = stmt.compile(compile_kwargs={"literal_binds": True})
-            stmt_str = str(compiled)
-            assert "is_paper" in stmt_str, (
-                "Query missing is_paper filter — live/paper isolation required."
-            )
-            is_sell = "'SELL'" in stmt_str
-            return _FakeResult(sell_orders, is_sell)
+    def _make_session(is_sell: bool):
+        result_cls = _SellResult if is_sell else _BuyResult
 
-        async def __aenter__(self):
-            return self
+        class _Session:
+            async def execute(self, stmt):
+                compiled = stmt.compile(compile_kwargs={"literal_binds": True})
+                assert "is_paper" in str(compiled), (
+                    "Query missing is_paper filter — live/paper isolation required."
+                )
+                return result_cls()
 
-        async def __aexit__(self, *args):
-            pass
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+        return _Session()
 
     def factory():
-        return _FakeSession()
+        call_count[0] += 1
+        # First factory call: per-position BUY entry-info block.
+        # Second (and later) calls: SELL cooldown-seeding block.
+        return _make_session(is_sell=call_count[0] > 1)
 
     return factory
 
