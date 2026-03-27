@@ -203,7 +203,7 @@ class OrderManager:
                 filled_quantity=filled_qty,
                 filled_price=result.filled_price,
                 slippage=slippage,
-                created_at=datetime.now().isoformat(),
+                created_at=datetime.utcnow().isoformat(),
                 exchange=exchange,
             )
             self._active_orders[result.order_id] = order
@@ -345,7 +345,7 @@ class OrderManager:
                 filled_quantity=filled_qty,
                 filled_price=result.filled_price,
                 slippage=slippage,
-                created_at=datetime.now().isoformat(),
+                created_at=datetime.utcnow().isoformat(),
                 exchange=exchange,
             )
             self._active_orders[result.order_id] = order
@@ -574,7 +574,7 @@ class OrderManager:
         if not self._active_orders or ttl_minutes <= 0:
             return []
 
-        now = datetime.now()
+        now = datetime.utcnow()
         cutoff = now - timedelta(minutes=ttl_minutes)
         cancelled = []
 

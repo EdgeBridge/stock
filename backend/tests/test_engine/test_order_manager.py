@@ -569,7 +569,7 @@ class TestStaleOrderCancel:
         )
         # Backdate created_at to 20 minutes ago
         om._active_orders["ORD001"].created_at = (
-            datetime.now() - timedelta(minutes=20)
+            datetime.utcnow() - timedelta(minutes=20)
         ).isoformat()
 
         cancelled = await om.cancel_stale_orders(ttl_minutes=15)
@@ -619,7 +619,7 @@ class TestStaleOrderCancel:
         )
         # Backdate but status is "filled"
         order_manager._active_orders["ORD001"].created_at = (
-            datetime.now() - timedelta(minutes=60)
+            datetime.utcnow() - timedelta(minutes=60)
         ).isoformat()
 
         cancelled = await order_manager.cancel_stale_orders(ttl_minutes=15)
@@ -654,7 +654,7 @@ class TestStaleOrderCancel:
             current_positions=0,
             strategy_name="test",
         )
-        om._active_orders["ORD001"].created_at = (datetime.now() - timedelta(hours=2)).isoformat()
+        om._active_orders["ORD001"].created_at = (datetime.utcnow() - timedelta(hours=2)).isoformat()
 
         cancelled = await om.cancel_stale_orders(ttl_minutes=0)
         assert len(cancelled) == 0
@@ -688,7 +688,7 @@ class TestStaleOrderCancel:
 
         # Backdate and cancel
         om._active_orders["ORD001"].created_at = (
-            datetime.now() - timedelta(minutes=20)
+            datetime.utcnow() - timedelta(minutes=20)
         ).isoformat()
         await om.cancel_stale_orders(ttl_minutes=15)
 
