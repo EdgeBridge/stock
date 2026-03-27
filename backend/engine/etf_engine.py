@@ -11,7 +11,7 @@ Uses MarketStateDetector for regime signals and SectorAnalyzer for sector rotati
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pandas as pd
@@ -185,9 +185,12 @@ class ETFEngine:
         pos = self._managed_positions.get(symbol)
         if not pos:
             # Position exists on broker but not tracked in-memory (e.g. after restart
-            # before restore_managed_positions runs). Log so operators can detect the gap.
+            # before restore_managed_positions runs). Allow the sell but warn so
+            # operators can detect the gap and investigate.
             logger.warning(
-                "ETF Engine: _can_sell_etf: %s not in _managed_positions — skipping min_hold",
+                "ETF Engine: _can_sell_etf: %s not in _managed_positions — "
+                "allowing sell without min_hold check (may have restarted before "
+                "restore_managed_positions ran)",
                 symbol,
             )
             return True, ""
@@ -219,7 +222,7 @@ class ETFEngine:
             (can_buy, reason) tuple. reason is empty if can_buy=True.
         """
         last_sell_time = self._last_sell_times.get(symbol)
-        if not last_sell_time:
+        if last_sell_time is None:
             return True, ""
 
         now = time.time()
@@ -339,6 +342,7 @@ class ETFEngine:
                         continue
                     self._last_sell_times[sym] = time.time()
                     self._managed_positions.pop(sym, None)
+                    held_symbols.discard(sym)  # keep set current so sibling check is accurate
                     actions.append(f"SELL {sym} (regime={regime.value})")
                     logger.info("ETF Engine: SELL %s on regime %s", sym, regime.value)
 
@@ -738,6 +742,53 @@ class ETFEngine:
             except Exception as e:
                 logger.warning(
                     "ETF Engine restore: DB lookup failed, will use defaults: %s", e,
+                )
+
+        # Seed _last_sell_times from same-day SELL orders so cooldowns survive restarts.
+        # Only seeds cooldowns that are still active (sold within the last
+        # sell_cooldown_hours window) to avoid blocking buys for old sells.
+        if session_factory:
+            try:
+                from core.models import Order  # noqa: F811 (already imported above)
+                cutoff = datetime.now(timezone.utc) - timedelta(
+                    hours=self._risk.sell_cooldown_hours,
+                )
+                async with session_factory() as session:
+                    stmt = (
+                        select(Order)
+                        .where(
+                            Order.symbol.in_(list(all_etf_symbols)),
+                            Order.side == "SELL",
+                            Order.strategy_name.like("etf_engine_%"),
+                            Order.status.in_(["filled", "submitted"]),
+                            Order.is_paper == False,  # noqa: E712
+                            Order.created_at >= cutoff,
+                        )
+                        .order_by(desc(Order.created_at))
+                    )
+                    result = await session.execute(stmt)
+                    sell_orders = result.scalars().all()
+
+                seeded: list[str] = []
+                for order in sell_orders:
+                    sym = order.symbol
+                    if sym in self._last_sell_times:
+                        continue  # already have a more recent sell time
+                    created_at = order.created_at
+                    if isinstance(created_at, datetime):
+                        if created_at.tzinfo is None:
+                            created_at = created_at.replace(tzinfo=timezone.utc)
+                        self._last_sell_times[sym] = created_at.timestamp()
+                        seeded.append(sym)
+
+                if seeded:
+                    logger.info(
+                        "ETF Engine restore: seeded sell_cooldown for %d symbol(s): %s",
+                        len(seeded), seeded,
+                    )
+            except Exception as e:
+                logger.warning(
+                    "ETF Engine restore: sell-cooldown seeding failed (non-fatal): %s", e,
                 )
 
         # Pre-compute sector mapping (invariant across positions)

@@ -257,6 +257,10 @@ class TestMutualExclusivity:
         tqqq_sells = [a for a in actions if "SELL" in a and "TQQQ" in a]
         assert len(tqqq_sells) == 1
 
+        # After TQQQ is cleared, SQQQ buy should proceed (exit sell must not block it)
+        sqqq_buys = [a for a in actions if "BUY" in a and "SQQQ" in a]
+        assert len(sqqq_buys) == 1, "SQQQ should be bought after TQQQ sibling is sold"
+
     @pytest.mark.asyncio
     async def test_skip_buy_when_sibling_min_hold_blocks_sell(
         self, engine, mock_order_manager, mock_market_data, mock_etf_universe,
