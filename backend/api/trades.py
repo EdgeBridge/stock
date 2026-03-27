@@ -184,6 +184,7 @@ def _merge_trade_entry(existing: dict, new: dict) -> None:
     Rules:
     - PnL/pnl_pct: never overwrite a real value with None
     - status: never downgrade from 'filled'
+    - created_at: never overwrite a real timestamp with empty string
     - All other fields: overwrite with new value if provided
     """
     for key, value in new.items():
@@ -191,6 +192,8 @@ def _merge_trade_entry(existing: dict, new: dict) -> None:
             continue  # Don't overwrite real PnL with None
         if key == "status" and existing.get("status") == "filled" and value != "filled":
             continue  # Don't downgrade from filled
+        if key == "created_at" and not value and existing.get("created_at"):
+            continue  # Don't overwrite real timestamp with empty string
         existing[key] = value
 
 

@@ -671,6 +671,30 @@ class TestRecordTradeDedup:
         # filled_price updated from reconciliation
         assert _trade_log[0]["filled_price"] == 5012.0
 
+    def test_merge_preserves_created_at(self):
+        """Reconciliation with empty created_at must not overwrite real timestamp."""
+        record_trade({
+            "order_id": "BUY999",
+            "symbol": "AAPL",
+            "side": "BUY",
+            "status": "pending",
+            "created_at": "2026-03-27T09:01:31.222000",
+        })
+        # Reconciliation detects fill — passes empty created_at
+        record_trade({
+            "order_id": "BUY999",
+            "symbol": "AAPL",
+            "side": "BUY",
+            "status": "filled",
+            "filled_price": 155.0,
+            "created_at": "",
+        })
+        assert len(_trade_log) == 1
+        assert _trade_log[0]["status"] == "filled"
+        assert _trade_log[0]["filled_price"] == 155.0
+        # created_at must be preserved from the original recording
+        assert _trade_log[0]["created_at"] == "2026-03-27T09:01:31.222000"
+
 
 class TestRestoreTradeLogDedup:
     """STOCK-33: restore_trade_log should deduplicate DB rows by order_id."""
