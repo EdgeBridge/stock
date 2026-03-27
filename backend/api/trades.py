@@ -6,10 +6,13 @@ On startup, the trade log is restored from DB so history survives restarts.
 """
 
 import logging
+from datetime import datetime, timezone, timedelta
 
 from data.stock_name_service import get_name
 from db.trade_repository import TradeRepository
 from fastapi import APIRouter, Query, Request
+
+_KST = timezone(timedelta(hours=9))
 
 router = APIRouter(prefix="/trades", tags=["trades"])
 logger = logging.getLogger(__name__)
@@ -270,9 +273,21 @@ def _order_to_dict(o) -> dict:
         "is_paper": getattr(o, "is_paper", False),
         "market": getattr(o, "market", "US"),
         "session": getattr(o, "session", "regular") or "regular",
-        "created_at": str(o.created_at) if o.created_at else "",
+        "created_at": _utc_to_local(o.created_at),
         "db_id": o.id,
     }
+
+
+def _utc_to_local(dt) -> str:
+    """Convert a DB timestamp (UTC) to local KST ISO string."""
+    if not dt:
+        return ""
+    if isinstance(dt, str):
+        return dt
+    # DB stores naive UTC — attach UTC then convert to KST
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_KST).strftime("%Y-%m-%dT%H:%M:%S.%f")
 
 
 async def restore_trade_log(exclude_paper: bool = True) -> int:

@@ -485,6 +485,30 @@ class OrderManager:
             # existing filled_price/filled_quantity with None/0. The order may
             # have been filled but KIS API can't find it (date boundary issue).
             if result.status == "not_found":
+                # BUY not_found: check if we actually hold the stock — if so,
+                # the order was filled despite KIS API not finding it.
+                if order.side == "BUY" and self._market_data:
+                    try:
+                        positions = await self._market_data.get_positions()
+                        if any(p.symbol == order.symbol and p.quantity > 0 for p in positions):
+                            logger.info(
+                                "Order %s BUY %s: not_found but stock is held — treating as filled",
+                                order_id,
+                                order.symbol,
+                            )
+                            result = OrderResult(
+                                order_id=result.order_id,
+                                symbol=result.symbol,
+                                side=result.side,
+                                order_type=result.order_type,
+                                quantity=result.quantity,
+                                status="filled",
+                                filled_price=order.price,
+                                filled_quantity=order.quantity,
+                            )
+                    except Exception:
+                        pass  # Fall through to not_found handling below
+
                 # Preserve any existing fill data on the ManagedOrder
                 if result.filled_price is None and order.filled_price is not None:
                     result = OrderResult(
