@@ -65,13 +65,48 @@ DEFAULT_UNIVERSE = [
     "DIS", "NFLX", "PYPL", "V", "MA", "BRK-B",
 ]
 
+# Default KR universe (KOSPI/KOSDAQ major stocks, yfinance format)
+DEFAULT_KR_UNIVERSE = [
+    # KOSPI 대형주
+    "005930.KS", "000660.KS", "373220.KS", "207940.KS", "005935.KS",
+    "006400.KS", "051910.KS", "005380.KS", "000270.KS",
+    # IT/플랫폼
+    "035420.KS", "035720.KS",
+    # 바이오/헬스
+    "068270.KS", "207940.KS",
+    # 금융
+    "105560.KS", "055550.KS", "086790.KS", "032830.KS",
+    # 자동차/부품
+    "012330.KS",
+    # 전자/소재
+    "066570.KS", "003550.KS", "009150.KS", "003670.KS",
+    # 에너지/산업
+    "034020.KS", "015760.KS", "010130.KS", "011200.KS",
+    # 소비/통신
+    "033780.KS", "017670.KS", "028260.KS", "018260.KS",
+    # KOSDAQ
+    "247540.KQ", "086520.KQ", "263750.KQ", "196170.KQ",
+    "403870.KQ", "352820.KQ", "058470.KQ", "357780.KQ",
+    "036930.KQ", "039030.KQ", "145020.KQ",
+]
+
+
+def _default_universe_for_market(market: str) -> list[str]:
+    """Return the default universe for the given market."""
+    if market == "KR":
+        return list(DEFAULT_KR_UNIVERSE)
+    return list(DEFAULT_UNIVERSE)
+
 
 @dataclass
 class PipelineConfig:
     """Configuration for full pipeline backtest."""
+    # Market
+    market: str = "US"  # "US" or "KR"
+
     # Universe
-    universe: list[str] = field(default_factory=lambda: list(DEFAULT_UNIVERSE))
-    spy_symbol: str = "SPY"
+    universe: list[str] | None = None  # None = auto from market
+    regime_symbol: str | None = None  # None = auto (SPY or 069500.KS)
 
     # Simulation
     initial_equity: float = 100_000.0
@@ -243,6 +278,14 @@ class FullPipelineBacktest:
 
     def __init__(self, config: PipelineConfig | None = None):
         self._config = config or PipelineConfig()
+
+        # Resolve market-dependent defaults
+        cfg = self._config
+        if cfg.universe is None:
+            cfg.universe = _default_universe_for_market(cfg.market)
+        if cfg.regime_symbol is None:
+            cfg.regime_symbol = "069500.KS" if cfg.market == "KR" else "SPY"
+
         self._data_loader = BacktestDataLoader()
         self._indicator_svc = IndicatorService()
         self._screener = IndicatorScreener(min_grade=self._config.min_screen_grade)
@@ -323,26 +366,29 @@ class FullPipelineBacktest:
         cfg = self._config
 
         # 1. Load all data upfront
+        regime_sym = cfg.regime_symbol
         logger.info(
-            "Loading data for %d universe symbols + SPY...",
-            len(cfg.universe),
+            "Loading data for %d universe symbols + %s (%s market)...",
+            len(cfg.universe), regime_sym, cfg.market,
         )
         # Include leveraged ETF symbols in data load
         etf_symbols = []
         if cfg.enable_leveraged_etf:
             etf_symbols = [cfg.etf_symbol, cfg.etf_inverse_symbol]
         all_symbols = list(dict.fromkeys(
-            [cfg.spy_symbol] + cfg.universe + etf_symbols
+            [regime_sym] + cfg.universe + etf_symbols
         ))
         all_data = self._data_loader.load_multiple(
             all_symbols, period=period,
         )
 
-        if cfg.spy_symbol not in all_data:
-            raise ValueError(f"Failed to load SPY data (required for market state)")
+        if regime_sym not in all_data:
+            raise ValueError(
+                f"Failed to load {regime_sym} data (required for market state)"
+            )
 
-        spy_data = all_data[cfg.spy_symbol]
-        stock_data = {s: d for s, d in all_data.items() if s != cfg.spy_symbol}
+        spy_data = all_data[regime_sym]
+        stock_data = {s: d for s, d in all_data.items() if s != regime_sym}
 
         if not stock_data:
             raise ValueError("No stock data loaded")

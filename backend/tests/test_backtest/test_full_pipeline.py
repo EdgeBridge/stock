@@ -57,7 +57,9 @@ class TestPipelineConfig:
         assert config.max_position_pct == 0.10
         assert config.screen_interval == 20
         assert config.dynamic_sl_tp is True
-        assert len(config.universe) > 0
+        assert config.market == "US"
+        # universe resolved to default in FullPipelineBacktest.__init__
+        assert config.universe is None  # None = auto from market
 
     def test_custom_config(self):
         config = PipelineConfig(
