@@ -2,14 +2,21 @@
 
 Uses the Supertrend indicator for trend direction with confirmation.
 
-Buy: Supertrend direction flips bullish (direction changes from -1 to 1) with confirmation
-Sell: Supertrend direction flips bearish
+Buy: Supertrend direction flips bullish (direction changes from -1 to 1)
+     with confirmation
+Sell: Supertrend direction flips bearish, with dynamic confidence
+      based on distance below supertrend + ADX gradient
+
+Additional signals:
+- ADX gradient: adjusts confidence based on ADX trend direction
+- RSI overbought exit: reduces buy confidence when RSI > 75 as
+  an early warning of potential reversal
 """
 
 import pandas as pd
 
-from strategies.base import BaseStrategy, Signal
 from core.enums import SignalType
+from strategies.base import BaseStrategy, Signal
 
 
 class SupertrendStrategy(BaseStrategy):
@@ -22,8 +29,12 @@ class SupertrendStrategy(BaseStrategy):
     def __init__(self, params: dict | None = None):
         p = params or {}
         self._confirmation_bars = p.get("confirmation_bars", 2)
+        self._rsi_overbought = p.get("rsi_overbought", 75)
+        self._adx_lookback = p.get("adx_lookback", 3)
 
-    async def analyze(self, df: pd.DataFrame, symbol: str) -> Signal:
+    async def analyze(
+        self, df: pd.DataFrame, symbol: str
+    ) -> Signal:
         if len(df) < self.min_candles_required:
             return self._hold("Insufficient data")
 
@@ -38,34 +49,82 @@ class SupertrendStrategy(BaseStrategy):
         if st_dir is None or pd.isna(st_dir):
             return self._hold("Supertrend not ready")
 
+        adx_grad = self._calc_adx_gradient(df)
+        rsi_ob = self._is_rsi_overbought(rsi)
+
         indicators = {
-            "supertrend": float(supertrend) if supertrend and not pd.isna(supertrend) else 0,
+            "supertrend": (
+                float(supertrend)
+                if supertrend and not pd.isna(supertrend)
+                else 0
+            ),
             "supertrend_direction": float(st_dir),
-            "adx": float(adx) if adx and not pd.isna(adx) else 0,
-            "rsi": float(rsi) if rsi and not pd.isna(rsi) else 50,
+            "adx": (
+                float(adx)
+                if adx and not pd.isna(adx)
+                else 0
+            ),
+            "rsi": (
+                float(rsi)
+                if rsi and not pd.isna(rsi)
+                else 50
+            ),
+            "adx_gradient": adx_grad,
+            "rsi_overbought": rsi_ob,
         }
 
-        # Check confirmation: direction consistent for N bars
-        confirmed_bull = self._check_confirmation(df, bullish=True)
-        confirmed_bear = self._check_confirmation(df, bullish=False)
+        confirmed_bull = self._check_confirmation(
+            df, bullish=True
+        )
+        confirmed_bear = self._check_confirmation(
+            df, bullish=False
+        )
 
         # BUY: bullish supertrend confirmed
-        if st_dir > 0 and confirmed_bull and price > supertrend:
-            confidence = self._calc_confidence(adx, rsi, price, supertrend)
+        if (
+            st_dir > 0
+            and confirmed_bull
+            and price > supertrend
+        ):
+            confidence = self._calc_confidence(
+                adx, rsi, price, supertrend
+            )
+            confidence = self._apply_adx_gradient(
+                confidence, adx_grad
+            )
+            reason = (
+                f"Supertrend bullish "
+                f"(confirmed {self._confirmation_bars} bars)"
+            )
+
+            # RSI overbought warning: reduce confidence
+            if rsi_ob:
+                confidence *= 0.80
+                reason += " [RSI overbought warning]"
+
+            confidence = max(0.1, min(confidence, 0.95))
+
             return Signal(
                 signal_type=SignalType.BUY,
                 confidence=confidence,
                 strategy_name=self.name,
-                reason=f"Supertrend bullish (confirmed {self._confirmation_bars} bars)",
+                reason=reason,
                 suggested_price=price,
                 indicators=indicators,
             )
 
         # SELL: bearish supertrend confirmed
-        if st_dir < 0 and confirmed_bear and price < supertrend:
+        if (
+            st_dir < 0
+            and confirmed_bear
+            and price < supertrend
+        ):
+            confidence = self._calc_sell_confidence(
+                price, supertrend, adx_grad
+            )
             return Signal(
                 signal_type=SignalType.SELL,
-                confidence=0.7,
+                confidence=confidence,
                 strategy_name=self.name,
                 reason="Supertrend bearish",
                 suggested_price=price,
@@ -74,31 +133,147 @@ class SupertrendStrategy(BaseStrategy):
 
         return self._hold("No supertrend signal")
 
-    def _check_confirmation(self, df: pd.DataFrame, bullish: bool = True) -> bool:
-        """Check if supertrend direction is consistent for N bars."""
+    def _check_confirmation(
+        self, df: pd.DataFrame, bullish: bool = True
+    ) -> bool:
+        """Check supertrend direction consistent for N bars."""
         if len(df) < self._confirmation_bars + 1:
             return False
 
-        recent = df.iloc[-self._confirmation_bars:]
+        recent = df.iloc[-self._confirmation_bars :]
         directions = recent.get("supertrend_direction")
         if directions is None:
             return False
 
         if bullish:
-            return all(not pd.isna(d) and d > 0 for d in directions)
-        return all(not pd.isna(d) and d < 0 for d in directions)
+            return all(
+                not pd.isna(d) and d > 0 for d in directions
+            )
+        return all(
+            not pd.isna(d) and d < 0 for d in directions
+        )
 
-    def _calc_confidence(self, adx, rsi, price, supertrend) -> float:
+    def _calc_confidence(
+        self, adx, rsi, price, supertrend
+    ) -> float:
         conf = 0.55
         if adx and not pd.isna(adx) and adx > 25:
             conf += 0.15
         if rsi and not pd.isna(rsi) and 40 < rsi < 70:
             conf += 0.10
-        if supertrend and not pd.isna(supertrend) and supertrend > 0:
-            gap_pct = (price - supertrend) / supertrend * 100
+        if (
+            supertrend
+            and not pd.isna(supertrend)
+            and supertrend > 0
+        ):
+            gap_pct = (
+                (price - supertrend) / supertrend * 100
+            )
             if 1 < gap_pct < 5:
                 conf += 0.10
         return min(conf, 0.95)
+
+    def _calc_sell_confidence(
+        self,
+        price: float,
+        supertrend: float,
+        adx_gradient: float,
+    ) -> float:
+        """Dynamic sell confidence based on distance below
+        supertrend and ADX gradient.
+
+        - Base confidence: 0.55
+        - Distance bonus: up to +0.25 based on how far price
+          is below supertrend (0-8% range mapped linearly)
+        - ADX gradient adjustment: rising ADX in bearish trend
+          increases sell confidence (trend strengthening)
+        """
+        base = 0.55
+
+        # Distance-based scaling
+        if supertrend and supertrend > 0:
+            gap_pct = (
+                (supertrend - price) / supertrend * 100
+            )
+            # Map 0-8% gap to 0-0.25 bonus (clamped)
+            distance_bonus = min(
+                max(gap_pct / 8.0 * 0.25, 0.0), 0.25
+            )
+            base += distance_bonus
+
+        # ADX gradient: rising ADX = stronger trend = more
+        # confident sell
+        base = self._apply_adx_gradient(
+            base, adx_gradient, for_sell=True
+        )
+
+        return max(0.3, min(base, 0.95))
+
+    def _calc_adx_gradient(
+        self, df: pd.DataFrame
+    ) -> float:
+        """Calculate ADX gradient (rate of change) over
+        recent bars.
+
+        Returns positive value if ADX is increasing (trend
+        strengthening), negative if decreasing (trend
+        weakening). Returns 0.0 if insufficient data.
+        """
+        lookback = self._adx_lookback
+        if len(df) < lookback + 1:
+            return 0.0
+
+        recent = df.iloc[-(lookback + 1) :]
+        adx_vals = recent.get("adx")
+        if adx_vals is None:
+            return 0.0
+
+        valid = [
+            float(v)
+            for v in adx_vals
+            if v is not None and not pd.isna(v)
+        ]
+        if len(valid) < 2:
+            return 0.0
+
+        # Average per-bar change over lookback
+        gradient = (valid[-1] - valid[0]) / len(valid)
+        return round(gradient, 4)
+
+    def _apply_adx_gradient(
+        self,
+        confidence: float,
+        adx_gradient: float,
+        for_sell: bool = False,
+    ) -> float:
+        """Adjust confidence based on ADX gradient.
+
+        For buy: rising ADX boosts, falling ADX reduces
+        For sell: rising ADX boosts (trend strengthening =
+        more confident bearish), falling ADX reduces
+        """
+        if abs(adx_gradient) < 0.5:
+            return confidence
+
+        # Normalize gradient effect: cap at ±0.10
+        adjustment = min(
+            max(adx_gradient / 5.0, -0.10), 0.10
+        )
+
+        if for_sell:
+            # For sell: rising ADX = stronger bearish trend
+            confidence += adjustment
+        else:
+            # For buy: rising ADX = stronger bullish trend
+            confidence += adjustment
+
+        return confidence
+
+    def _is_rsi_overbought(self, rsi) -> bool:
+        """Check if RSI indicates overbought condition."""
+        if rsi is None or pd.isna(rsi):
+            return False
+        return float(rsi) > self._rsi_overbought
 
     def _hold(self, reason: str) -> Signal:
         return Signal(
@@ -109,7 +284,19 @@ class SupertrendStrategy(BaseStrategy):
         )
 
     def get_params(self) -> dict:
-        return {"confirmation_bars": self._confirmation_bars}
+        return {
+            "confirmation_bars": self._confirmation_bars,
+            "rsi_overbought": self._rsi_overbought,
+            "adx_lookback": self._adx_lookback,
+        }
 
     def set_params(self, params: dict) -> None:
-        self._confirmation_bars = params.get("confirmation_bars", self._confirmation_bars)
+        self._confirmation_bars = params.get(
+            "confirmation_bars", self._confirmation_bars
+        )
+        self._rsi_overbought = params.get(
+            "rsi_overbought", self._rsi_overbought
+        )
+        self._adx_lookback = params.get(
+            "adx_lookback", self._adx_lookback
+        )
