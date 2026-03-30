@@ -169,6 +169,13 @@ class PipelineConfig:
     min_hold_days: int = 1  # Minimum holding period in trading days
     hard_sl_pct: float = 0.15  # Hard SL bypasses min hold (e.g. -15%)
 
+    # Held position evaluation (matching live STOCK-7 / STOCK-47)
+    # Disabled by default — A/B testing showed these hurt KR returns
+    held_sell_bias: float = 0.0  # Boost sell signals for held positions (0=disabled)
+    held_min_confidence: float = 0.50  # Lower threshold for held exits (=min_confidence → no effect)
+    stale_pnl_threshold: float = 0.0  # Sell on indifference below this PnL (<=0 disables)
+    profit_protection_pct: float = 0.0  # Secure gains above this PnL (0=disabled)
+
     # Extended hours simulation (backtest-optimized)
     extended_hours_enabled: bool = False
     extended_hours_max_position_pct: float = 0.05  # 5% per position
@@ -549,14 +556,61 @@ class FullPipelineBacktest:
                         if gated in weights:
                             weights[gated] *= 0.5
 
-                # Combine signals
-                combined = self._combiner.combine(
-                    signals, weights, min_confidence=cfg.min_confidence,
-                )
+                # Combine signals — different thresholds for held vs new
+                is_held = symbol in self._positions
+                if is_held:
+                    combined = self._combiner.combine(
+                        signals, weights,
+                        min_confidence=cfg.held_min_confidence,
+                        min_active_ratio=cfg.min_active_ratio,
+                        held_sell_bias=cfg.held_sell_bias,
+                    )
+                else:
+                    combined = self._combiner.combine(
+                        signals, weights, min_confidence=cfg.min_confidence,
+                    )
+
+                # Sell on indifference: losing held position + no strategy signal
+                if (
+                    is_held
+                    and combined.signal_type == SignalType.HOLD
+                    and cfg.stale_pnl_threshold < 0
+                ):
+                    pos = self._positions[symbol]
+                    data = stock_data[symbol]
+                    if date_idx < len(data.df):
+                        cur_price = float(data.df.iloc[date_idx]["close"])
+                        pnl_pct = (cur_price - pos.avg_price) / pos.avg_price
+                        if pnl_pct < cfg.stale_pnl_threshold:
+                            combined = Signal(
+                                signal_type=SignalType.SELL,
+                                confidence=0.50,
+                                strategy_name="position_cleanup",
+                                reason=f"Sell on indifference: P&L={pnl_pct:.1%}",
+                            )
+
+                # Profit protection: secure gains above threshold
+                if (
+                    is_held
+                    and combined.signal_type == SignalType.HOLD
+                    and cfg.profit_protection_pct > 0
+                ):
+                    pos = self._positions[symbol]
+                    data = stock_data[symbol]
+                    if date_idx < len(data.df):
+                        cur_price = float(data.df.iloc[date_idx]["close"])
+                        pnl_pct = (cur_price - pos.avg_price) / pos.avg_price
+                        if pnl_pct >= cfg.profit_protection_pct:
+                            combined = Signal(
+                                signal_type=SignalType.SELL,
+                                confidence=0.60,
+                                strategy_name="profit_protection",
+                                reason=f"Profit protection: P&L={pnl_pct:.1%}",
+                            )
 
                 # Execute SELLs immediately
                 if combined.signal_type == SignalType.SELL:
-                    if cfg.paired_strategy_sells and symbol in self._positions:
+                    if cfg.paired_strategy_sells and is_held:
                         # Paired mode: only sell if the BUY strategy votes SELL
                         buy_strat = self._positions[symbol].strategy_name
                         buy_strat_sells = any(
@@ -572,7 +626,8 @@ class FullPipelineBacktest:
                         self._execute_sell(
                             symbol, stock_data, date_idx, date, combined,
                         )
-                elif combined.signal_type == SignalType.BUY:
+                elif combined.signal_type == SignalType.BUY and not is_held:
+                    # Only buy if not already held (BUY→HOLD remapping)
                     buy_candidates.append((combined.confidence, symbol, combined))
 
             # Execute BUYs ranked by confidence (highest first)
