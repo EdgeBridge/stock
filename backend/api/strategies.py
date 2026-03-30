@@ -59,7 +59,7 @@ async def reload_config(
     # min_confidence, and min_active_ratio stay in sync with the reloaded YAML.
     if hasattr(request.app.state, "apply_kr_eval_overrides"):
         request.app.state.apply_kr_eval_overrides()
-        logger.warning(
+        logger.info(
             "KR eval-loop config reloaded; KR risk params (kelly_fraction, "
             "dynamic_sl_tp, etc.) require a restart to take effect — they are "
             "NOT updated by hot-reload."

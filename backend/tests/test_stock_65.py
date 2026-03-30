@@ -776,6 +776,26 @@ class TestApplyKrEvalOverrides:
         _apply_kr_eval_overrides(loop, loader)
         assert loop._min_confidence == pytest.approx(0.30)
 
+    def test_min_confidence_cleared_when_key_removed_on_reload(self):
+        """If min_confidence is removed from YAML, hot-reload must clear the override."""
+        from unittest.mock import MagicMock
+
+        from main import _apply_kr_eval_overrides
+
+        loop = self._make_loop()
+        loader = MagicMock()
+
+        # First reload — sets the override
+        loader.get_market_evaluation_loop_config.return_value = {"min_confidence": 0.30}
+        loader.get_market_disabled_strategies.return_value = []
+        _apply_kr_eval_overrides(loop, loader)
+        assert loop._min_confidence == pytest.approx(0.30)
+
+        # Second reload — key removed from YAML
+        loader.get_market_evaluation_loop_config.return_value = {}  # min_confidence absent
+        _apply_kr_eval_overrides(loop, loader)
+        assert loop._min_confidence is None  # override must be cleared
+
     def test_min_active_ratio_null_sets_none(self):
         """YAML null (None) should call set_min_active_ratio(None), not float(None)."""
         from unittest.mock import MagicMock
