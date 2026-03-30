@@ -171,6 +171,33 @@ class EvaluationLoop:
         self._min_active_ratio = value
         logger.info("Market %s: min_active_ratio = %s", self._market, value)
 
+    def set_sell_cooldown_secs(self, value: int) -> None:
+        """Set the sell-cooldown duration for this market instance.
+
+        STOCK-65: Replaces direct private-attribute assignment with a validated
+        setter, matching the set_min_confidence / set_min_active_ratio pattern.
+        """
+        if value < 0:
+            raise ValueError(f"sell_cooldown_secs must be >= 0, got {value}")
+        self._sell_cooldown_secs = value
+        logger.info("Market %s: sell_cooldown_secs=%d", self._market, value)
+
+    def set_max_loss_sells(self, value: int) -> None:
+        """Set the whipsaw loss-sell limit for this market instance."""
+        if value < 0:
+            raise ValueError(f"max_loss_sells must be >= 0, got {value}")
+        self._max_loss_sells = value
+        logger.info("Market %s: max_loss_sells=%d", self._market, value)
+
+    def set_min_hold_secs(self, value: int) -> None:
+        """Set the minimum hold period for this market instance."""
+        if value < 0:
+            raise ValueError(f"min_hold_secs must be >= 0, got {value}")
+        self._min_hold_secs = value
+        logger.info(
+            "Market %s: min_hold_secs=%d (%.2fh)", self._market, value, value / 3600
+        )
+
     def _get_active_strategies(self) -> list[BaseStrategy]:
         """Return enabled strategies minus the market-specific disabled list.
 

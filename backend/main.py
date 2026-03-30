@@ -58,37 +58,41 @@ def reset_all_daily_risk(us_rm: RiskManager, kr_rm: RiskManager) -> None:
 def _apply_kr_eval_overrides(
     kr_loop: "EvaluationLoop",
     config_loader: "StrategyConfigLoader",
+    default_cooldown_secs: int = 24 * 3600,   # matches EvaluationLoop.__init__ default
+    default_max_loss_sells: int = 2,           # matches EvaluationLoop.__init__ default
+    default_min_hold_secs: int = 4 * 3600,    # matches EvaluationLoop.__init__ default
 ) -> None:
     """Apply KR market-specific evaluation-loop overrides from strategies.yaml.
 
     STOCK-65: Called at startup AND after every hot-reload so that runtime
     config changes to markets.KR.evaluation_loop take effect immediately.
 
+    Every attribute is always written via a setter so that *removing* a YAML key
+    between hot-reloads resets the attribute to its system default, matching the
+    behaviour of min_confidence / min_active_ratio (no stale-override drift).
+
     NOTE: KR *risk* params (kelly_fraction, max_position_pct, dynamic_sl_tp,
     default_stop_loss_pct, etc.) are set once at startup from the YAML and are
     NOT updated by hot-reload.  Changes to markets.KR.risk require a full
     service restart to take effect.
     """
+    # get_market_evaluation_loop_config always returns a dict (possibly empty).
     kr_eval_cfg = config_loader.get_market_evaluation_loop_config("KR")
-    if kr_eval_cfg is not None:
-        if "sell_cooldown_days" in kr_eval_cfg and kr_eval_cfg["sell_cooldown_days"] is not None:
-            kr_loop._sell_cooldown_secs = int(kr_eval_cfg["sell_cooldown_days"] * 86400)
-        if "whipsaw_max_losses" in kr_eval_cfg and kr_eval_cfg["whipsaw_max_losses"] is not None:
-            kr_loop._max_loss_sells = int(kr_eval_cfg["whipsaw_max_losses"])
-        if "min_hold_days" in kr_eval_cfg and kr_eval_cfg["min_hold_days"] is not None:
-            min_hold_secs = int(kr_eval_cfg["min_hold_days"] * 86400)
-            kr_loop._min_hold_secs = min_hold_secs
-            logger.info(
-                "KR EvalLoop: min_hold_secs=%d (%g days, default was 14400)",
-                min_hold_secs,
-                kr_eval_cfg["min_hold_days"],
-            )
-        # Always call setters (even when key is absent) so that removing a key
-        # from YAML on hot-reload correctly clears the override to None.
-        v = kr_eval_cfg.get("min_confidence")
-        kr_loop.set_min_confidence(float(v) if v is not None else None)
-        v = kr_eval_cfg.get("min_active_ratio")
-        kr_loop.set_min_active_ratio(float(v) if v is not None else None)
+
+    v = kr_eval_cfg.get("sell_cooldown_days")
+    kr_loop.set_sell_cooldown_secs(int(v * 86400) if v is not None else default_cooldown_secs)
+
+    v = kr_eval_cfg.get("whipsaw_max_losses")
+    kr_loop.set_max_loss_sells(int(v) if v is not None else default_max_loss_sells)
+
+    v = kr_eval_cfg.get("min_hold_days")
+    kr_loop.set_min_hold_secs(int(v * 86400) if v is not None else default_min_hold_secs)
+
+    v = kr_eval_cfg.get("min_confidence")
+    kr_loop.set_min_confidence(float(v) if v is not None else None)
+
+    v = kr_eval_cfg.get("min_active_ratio")
+    kr_loop.set_min_active_ratio(float(v) if v is not None else None)
 
     kr_disabled = config_loader.get_market_disabled_strategies("KR")
     kr_loop.set_disabled_strategies(kr_disabled)

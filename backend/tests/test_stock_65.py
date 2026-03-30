@@ -163,11 +163,12 @@ class TestDynamicSlTpStaticMode:
         """When dynamic_sl_tp=True (default), ATR-based calculation proceeds."""
         params = RiskParams(dynamic_sl_tp=True, default_stop_loss_pct=0.08)
         rm = RiskManager(params=params)
-        # High ATR should widen SL beyond the configured default
-        sl_high_atr, _ = rm.calculate_dynamic_sl_tp(100.0, 8.0)
+        # ATR=10 → atr_pct=0.10 → formula gives sl=0.15 (above 15% US cap), well above
+        # the 0.08 default — ensures the two values can never coincidentally be equal.
+        sl_high_atr, _ = rm.calculate_dynamic_sl_tp(100.0, 10.0)
         # Zero ATR falls back to the configured default (atr <= 0 guard)
         sl_zero_atr, _ = rm.calculate_dynamic_sl_tp(100.0, 0.0)
-        assert sl_high_atr != pytest.approx(0.08), "Dynamic mode should widen SL vs default"
+        assert sl_high_atr > 0.08, "Dynamic mode should give SL > static default for high ATR"
         assert sl_zero_atr == pytest.approx(0.08), "Zero-ATR should fall back to default"
 
 
@@ -441,6 +442,36 @@ class TestEvaluationLoopDisabledStrategies:
         with pytest.raises(ValueError, match="min_active_ratio must be in"):
             loop.set_min_active_ratio(-0.1)
 
+    def test_set_sell_cooldown_secs(self):
+        loop = self._make_evaluation_loop()
+        loop.set_sell_cooldown_secs(7200)
+        assert loop._sell_cooldown_secs == 7200
+
+    def test_set_sell_cooldown_secs_negative_raises(self):
+        loop = self._make_evaluation_loop()
+        with pytest.raises(ValueError, match="sell_cooldown_secs must be >= 0"):
+            loop.set_sell_cooldown_secs(-1)
+
+    def test_set_max_loss_sells(self):
+        loop = self._make_evaluation_loop()
+        loop.set_max_loss_sells(5)
+        assert loop._max_loss_sells == 5
+
+    def test_set_max_loss_sells_negative_raises(self):
+        loop = self._make_evaluation_loop()
+        with pytest.raises(ValueError, match="max_loss_sells must be >= 0"):
+            loop.set_max_loss_sells(-1)
+
+    def test_set_min_hold_secs(self):
+        loop = self._make_evaluation_loop()
+        loop.set_min_hold_secs(86400)
+        assert loop._min_hold_secs == 86400
+
+    def test_set_min_hold_secs_negative_raises(self):
+        loop = self._make_evaluation_loop()
+        with pytest.raises(ValueError, match="min_hold_secs must be >= 0"):
+            loop.set_min_hold_secs(-1)
+
     @pytest.mark.asyncio
     async def test_min_confidence_forwarded_to_combiner_combine(self):
         """Verify min_confidence is forwarded through the real evaluate_symbol path."""
@@ -459,16 +490,17 @@ class TestEvaluationLoopDisabledStrategies:
             captured_kwargs.update(kwargs)
             return original_combine(signals, weights, **kwargs)
 
-        loop._combiner.combine = spy_combine  # type: ignore[method-assign]
-
-        # Minimal non-empty DataFrame so evaluate_symbol doesn't short-circuit
+        # Use patch.object so the spy is safe regardless of SignalCombiner internals
         df = pd.DataFrame({"close": [100.0, 101.0]}, index=pd.RangeIndex(2))
         loop._market_data.get_ohlcv = AsyncMock(return_value=df)
         # Ensure add_all_indicators passes the real df through so evaluate_symbol
         # does not short-circuit on a MagicMock before reaching self._combiner.combine
         loop._indicator_svc.add_all_indicators = MagicMock(return_value=df)
 
-        with patch.object(loop, "_maybe_classify"):
+        with (
+            patch.object(loop._combiner, "combine", side_effect=spy_combine),
+            patch.object(loop, "_maybe_classify"),
+        ):
             await loop.evaluate_symbol("005930")
 
         # The real evaluate_symbol code path must have forwarded min_confidence
@@ -492,13 +524,14 @@ class TestEvaluationLoopDisabledStrategies:
             captured_kwargs.update(kwargs)
             return original_combine(signals, weights, **kwargs)
 
-        loop._combiner.combine = spy_combine  # type: ignore[method-assign]
-
         df = pd.DataFrame({"close": [100.0, 101.0]}, index=pd.RangeIndex(2))
         loop._market_data.get_ohlcv = AsyncMock(return_value=df)
         loop._indicator_svc.add_all_indicators = MagicMock(return_value=df)
 
-        with patch.object(loop, "_maybe_classify"):
+        with (
+            patch.object(loop._combiner, "combine", side_effect=spy_combine),
+            patch.object(loop, "_maybe_classify"),
+        ):
             await loop.evaluate_symbol("005930", is_held=True)
 
         # min_active_ratio override must take precedence over the held-position 0.15 default
@@ -851,7 +884,63 @@ class TestApplyKrEvalOverrides:
         loader.get_market_evaluation_loop_config.return_value = {"min_hold_days": None}
         loader.get_market_disabled_strategies.return_value = []
         _apply_kr_eval_overrides(loop, loader)  # must not raise
-        assert loop._min_hold_secs == original  # unchanged
+        assert loop._min_hold_secs == original  # unchanged (null → reset to default = initial)
+
+    def test_sell_cooldown_days_reverts_to_default_when_key_removed(self):
+        """Removing sell_cooldown_days from YAML on hot-reload resets to system default."""
+        from unittest.mock import MagicMock
+
+        from main import _apply_kr_eval_overrides
+
+        loop = self._make_loop()
+        loader = MagicMock()
+        loader.get_market_disabled_strategies.return_value = []
+
+        # First reload — set to 2 days
+        loader.get_market_evaluation_loop_config.return_value = {"sell_cooldown_days": 2}
+        _apply_kr_eval_overrides(loop, loader)
+        assert loop._sell_cooldown_secs == 2 * 86400
+
+        # Second reload — key removed; must revert to EvaluationLoop default (24h)
+        loader.get_market_evaluation_loop_config.return_value = {}
+        _apply_kr_eval_overrides(loop, loader)
+        assert loop._sell_cooldown_secs == 24 * 3600
+
+    def test_whipsaw_max_losses_reverts_to_default_when_key_removed(self):
+        """Removing whipsaw_max_losses from YAML on hot-reload resets to system default."""
+        from unittest.mock import MagicMock
+
+        from main import _apply_kr_eval_overrides
+
+        loop = self._make_loop()
+        loader = MagicMock()
+        loader.get_market_disabled_strategies.return_value = []
+
+        loader.get_market_evaluation_loop_config.return_value = {"whipsaw_max_losses": 5}
+        _apply_kr_eval_overrides(loop, loader)
+        assert loop._max_loss_sells == 5
+
+        loader.get_market_evaluation_loop_config.return_value = {}
+        _apply_kr_eval_overrides(loop, loader)
+        assert loop._max_loss_sells == 2  # EvaluationLoop default
+
+    def test_min_hold_days_reverts_to_default_when_key_removed(self):
+        """Removing min_hold_days from YAML on hot-reload resets to system default."""
+        from unittest.mock import MagicMock
+
+        from main import _apply_kr_eval_overrides
+
+        loop = self._make_loop()
+        loader = MagicMock()
+        loader.get_market_disabled_strategies.return_value = []
+
+        loader.get_market_evaluation_loop_config.return_value = {"min_hold_days": 3}
+        _apply_kr_eval_overrides(loop, loader)
+        assert loop._min_hold_secs == 3 * 86400
+
+        loader.get_market_evaluation_loop_config.return_value = {}
+        _apply_kr_eval_overrides(loop, loader)
+        assert loop._min_hold_secs == 4 * 3600  # EvaluationLoop default
 
 
 # ---------------------------------------------------------------------------
