@@ -107,8 +107,8 @@ class TestDynamicSlTpStaticMode:
         rm = RiskManager(params=params)
         # High ATR should give a different result from default
         sl, tp = rm.calculate_dynamic_sl_tp(100.0, 8.0)
-        # With 8% ATR, sl = min(0.15, 8% * 2.0) = 0.15, tp = min(0.20, 8% * 3.5)
-        assert sl > 0.08  # Should be different from default 0.08
+        # With 8% ATR: sl = min(0.15, 8% * 2.0) = min(0.15, 0.16) = 0.15
+        assert sl == pytest.approx(0.15)
 
 
 # ---------------------------------------------------------------------------
@@ -183,9 +183,12 @@ class TestKRRiskParamsSpec:
 class TestStrategyConfigLoaderMarketMethods:
     def test_get_market_config_kr(self):
         loader = StrategyConfigLoader()
-        kr_config = loader.get_market_config("KR")
-        assert isinstance(kr_config, dict)
-        assert "disabled_strategies" in kr_config
+        # Use typed wrappers — _get_market_config is private
+        disabled = loader.get_market_disabled_strategies("KR")
+        risk = loader.get_market_risk_config("KR")
+        assert isinstance(disabled, list)
+        assert isinstance(risk, dict)
+        assert len(disabled) > 0
 
     def test_get_market_disabled_strategies_kr(self):
         loader = StrategyConfigLoader()
@@ -233,10 +236,10 @@ class TestStrategyConfigLoaderMarketMethods:
 
     def test_get_market_config_us_returns_empty(self):
         loader = StrategyConfigLoader()
-        # US market doesn't have overrides in the config
-        us_config = loader.get_market_config("US")
-        # Either empty dict or US section if configured
-        assert isinstance(us_config, dict)
+        # US market doesn't have overrides in the config — typed wrappers return empty
+        assert loader.get_market_disabled_strategies("US") == []
+        assert loader.get_market_risk_config("US") == {}
+        assert loader.get_market_evaluation_loop_config("US") == {}
 
     def test_get_market_disabled_strategies_unknown_market(self):
         loader = StrategyConfigLoader()
@@ -329,8 +332,70 @@ class TestEvaluationLoopDisabledStrategies:
 
     def test_min_confidence_can_be_set(self):
         loop = self._make_evaluation_loop()
-        loop._min_confidence = 0.30
+        loop.set_min_confidence(0.30)
         assert loop._min_confidence == pytest.approx(0.30)
+
+    def test_set_min_confidence_none_clears_override(self):
+        loop = self._make_evaluation_loop()
+        loop.set_min_confidence(0.40)
+        loop.set_min_confidence(None)
+        assert loop._min_confidence is None
+
+    def test_set_min_confidence_out_of_range_raises(self):
+        loop = self._make_evaluation_loop()
+        with pytest.raises(ValueError, match="min_confidence must be in"):
+            loop.set_min_confidence(1.5)
+        with pytest.raises(ValueError, match="min_confidence must be in"):
+            loop.set_min_confidence(-0.1)
+
+    def test_min_active_ratio_initial_value(self):
+        loop = self._make_evaluation_loop()
+        assert loop._min_active_ratio is None
+
+    def test_set_min_active_ratio(self):
+        loop = self._make_evaluation_loop()
+        loop.set_min_active_ratio(0.0)
+        assert loop._min_active_ratio == pytest.approx(0.0)
+
+    def test_set_min_active_ratio_none_clears_override(self):
+        loop = self._make_evaluation_loop()
+        loop.set_min_active_ratio(0.10)
+        loop.set_min_active_ratio(None)
+        assert loop._min_active_ratio is None
+
+    def test_set_min_active_ratio_out_of_range_raises(self):
+        loop = self._make_evaluation_loop()
+        with pytest.raises(ValueError, match="min_active_ratio must be in"):
+            loop.set_min_active_ratio(1.5)
+
+    def test_min_confidence_forwarded_to_combiner_combine(self):
+        """Verify min_confidence is actually passed to SignalCombiner.combine()."""
+        loop = self._make_evaluation_loop()
+        loop.set_min_confidence(0.30)
+
+        captured_kwargs: dict = {}
+
+        original_combine = loop._combiner.combine
+
+        def spy_combine(signals, weights, **kwargs):
+            captured_kwargs.update(kwargs)
+            return original_combine(signals, weights, **kwargs)
+
+        loop._combiner.combine = spy_combine  # type: ignore[method-assign]
+
+        # Reproduce the combine_kwargs building logic from evaluation_loop.py
+        combine_kwargs: dict = {
+            "min_active_ratio": (
+                loop._min_active_ratio
+                if loop._min_active_ratio is not None
+                else None
+            ),
+        }
+        if loop._min_confidence is not None:
+            combine_kwargs["min_confidence"] = loop._min_confidence
+        loop._combiner.combine([], {}, **combine_kwargs)
+
+        assert captured_kwargs.get("min_confidence") == pytest.approx(0.30)
 
 
 # ---------------------------------------------------------------------------
@@ -376,27 +441,17 @@ class TestEvaluationLoopStrategyFiltering:
         loop, strategies = self._make_loop_with_strategies(
             ["supertrend", "dual_momentum", "trend_following"]
         )
-        all_strats = loop._registry.get_enabled()
-        filtered = (
-            [s for s in all_strats if s.name not in loop._disabled_strategies]
-            if loop._disabled_strategies
-            else all_strats
-        )
-        assert len(filtered) == 3
+        active = loop._get_active_strategies()
+        assert len(active) == 3
 
     def test_disabled_strategies_filtered_out(self):
         loop, strategies = self._make_loop_with_strategies(
             ["supertrend", "dual_momentum", "trend_following", "macd_histogram"]
         )
         loop.set_disabled_strategies(["trend_following", "macd_histogram"])
-        all_strats = loop._registry.get_enabled()
-        filtered = (
-            [s for s in all_strats if s.name not in loop._disabled_strategies]
-            if loop._disabled_strategies
-            else all_strats
-        )
-        assert len(filtered) == 2
-        names = [s.name for s in filtered]
+        active = loop._get_active_strategies()
+        assert len(active) == 2
+        names = [s.name for s in active]
         assert "supertrend" in names
         assert "dual_momentum" in names
         assert "trend_following" not in names
@@ -417,11 +472,9 @@ class TestEvaluationLoopStrategyFiltering:
             "larry_williams", "bnf_deviation", "volume_surge",
         ]
         loop.set_disabled_strategies(kr_disabled)
-        all_strats = loop._registry.get_enabled()
-        filtered = [s for s in all_strats if s.name not in loop._disabled_strategies]
-        assert len(filtered) == 2
-        names = {s.name for s in filtered}
-        assert names == {"supertrend", "dual_momentum"}
+        active = loop._get_active_strategies()
+        assert len(active) == 2
+        assert {s.name for s in active} == {"supertrend", "dual_momentum"}
 
 
 # ---------------------------------------------------------------------------

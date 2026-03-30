@@ -196,6 +196,14 @@ async def lifespan(app: FastAPI):
 
     # KR-specific risk params: STOCK-65 grid-search optimized settings
     kr_risk_cfg = registry._config_loader.get_market_risk_config("KR")
+    # STOCK-65: log resolved dynamic_sl_tp so startup is auditable;
+    # intentional False default mirrors KR grid-search intent (static SL/TP).
+    kr_dynamic_sl_tp: bool = kr_risk_cfg.get("dynamic_sl_tp", False)
+    logger.info(
+        "KR RiskParams: dynamic_sl_tp=%s (config key present=%s)",
+        kr_dynamic_sl_tp,
+        "dynamic_sl_tp" in kr_risk_cfg,
+    )
     kr_risk_params = RiskParams(
         market_allocations=market_allocs,
         kelly_fraction=kr_risk_cfg.get("kelly_fraction", 0.50),
@@ -204,7 +212,7 @@ async def lifespan(app: FastAPI):
         max_positions=kr_risk_cfg.get("max_positions", 8),
         default_stop_loss_pct=kr_risk_cfg.get("default_stop_loss_pct", 0.10),
         default_take_profit_pct=kr_risk_cfg.get("default_take_profit_pct", 0.15),
-        dynamic_sl_tp=kr_risk_cfg.get("dynamic_sl_tp", False),
+        dynamic_sl_tp=kr_dynamic_sl_tp,
         tiered_trailing_tiers=tiered_tiers,
         breakeven_stop_enabled=be_enabled,
         breakeven_stop_activation_ratio=be_activation,
@@ -1509,11 +1517,9 @@ async def lifespan(app: FastAPI):
         if "min_hold_days" in kr_eval_cfg:
             kr_evaluation_loop._min_hold_secs = int(kr_eval_cfg["min_hold_days"] * 86400)
         if "min_confidence" in kr_eval_cfg:
-            kr_evaluation_loop._min_confidence = float(kr_eval_cfg["min_confidence"])
+            kr_evaluation_loop.set_min_confidence(float(kr_eval_cfg["min_confidence"]))
         if "min_active_ratio" in kr_eval_cfg:
-            kr_evaluation_loop._combiner._min_active_ratio = float(
-                kr_eval_cfg["min_active_ratio"]
-            )
+            kr_evaluation_loop.set_min_active_ratio(float(kr_eval_cfg["min_active_ratio"]))
 
     # STOCK-65: Apply KR market-specific disabled strategies from strategies.yaml
     kr_disabled = registry._config_loader.get_market_disabled_strategies("KR")

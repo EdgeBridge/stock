@@ -109,11 +109,12 @@ class StrategyConfigLoader:
         """
         return float(self.global_config.get("hard_sl_pct", -0.15))
 
-    def get_market_config(self, market: str) -> dict:
-        """Get market-specific override config (e.g. for 'KR' or 'US').
+    def _get_market_config(self, market: str) -> dict:
+        """Get raw market-specific override dict (e.g. for 'KR' or 'US').
 
-        Returns the ``markets.<market>`` section from strategies.yaml.
-        Supports: disabled_strategies, risk, evaluation_loop overrides.
+        Internal helper — callers should use the typed wrapper methods below
+        (get_market_disabled_strategies, get_market_risk_config,
+        get_market_evaluation_loop_config) rather than this raw dict.
         """
         return self._config.get("markets", {}).get(market, {})
 
@@ -123,7 +124,7 @@ class StrategyConfigLoader:
         STOCK-65: KR market only runs supertrend + dual_momentum.
         Returns empty list if no market-specific overrides are set.
         """
-        return list(self.get_market_config(market).get("disabled_strategies", []))
+        return list(self._get_market_config(market).get("disabled_strategies", []))
 
     def get_market_risk_config(self, market: str) -> dict:
         """Get risk parameter overrides for a specific market.
@@ -131,7 +132,7 @@ class StrategyConfigLoader:
         STOCK-65: KR market uses grid-search optimized risk params.
         Returns empty dict if no market-specific overrides are set.
         """
-        return dict(self.get_market_config(market).get("risk", {}))
+        return dict(self._get_market_config(market).get("risk", {}))
 
     def get_market_evaluation_loop_config(self, market: str) -> dict:
         """Get evaluation loop overrides for a specific market.
@@ -139,7 +140,7 @@ class StrategyConfigLoader:
         STOCK-65: KR market uses optimized evaluation loop params.
         Returns empty dict if no market-specific overrides are set.
         """
-        return dict(self.get_market_config(market).get("evaluation_loop", {}))
+        return dict(self._get_market_config(market).get("evaluation_loop", {}))
 
     def get_screening_config(self) -> dict:
         return self._config.get("screening", {})

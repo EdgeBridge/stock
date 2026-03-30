@@ -123,6 +123,8 @@ class EvaluationLoop:
         self._disabled_strategies: frozenset[str] = frozenset()
         # STOCK-65: Per-market min_confidence override (None = use combiner default 0.35)
         self._min_confidence: float | None = None
+        # STOCK-65: Per-market min_active_ratio override (None = use 0.15 for held, else None)
+        self._min_active_ratio: float | None = None
 
     def set_disabled_strategies(self, names: list[str]) -> None:
         """Set market-specific disabled strategy names.
@@ -140,6 +142,45 @@ class EvaluationLoop:
             self._market,
             sorted(self._disabled_strategies),
         )
+
+    def set_min_confidence(self, value: float | None) -> None:
+        """Set per-market minimum confidence threshold for signal combining.
+
+        STOCK-65: Provides a proper setter with validation and audit logging,
+        matching the pattern of set_disabled_strategies().
+
+        Args:
+            value: Confidence floor in [0, 1], or None to use combiner default.
+        """
+        if value is not None and not (0.0 <= value <= 1.0):
+            raise ValueError(f"min_confidence must be in [0, 1], got {value}")
+        self._min_confidence = value
+        logger.info("Market %s: min_confidence = %s", self._market, value)
+
+    def set_min_active_ratio(self, value: float | None) -> None:
+        """Set per-market minimum active signal ratio for signal combining.
+
+        STOCK-65: When set, this overrides the default held-position logic
+        (0.15 for held symbols) unconditionally for all evaluations in this market.
+
+        Args:
+            value: Active ratio floor in [0, 1], or None to use per-call defaults.
+        """
+        if value is not None and not (0.0 <= value <= 1.0):
+            raise ValueError(f"min_active_ratio must be in [0, 1], got {value}")
+        self._min_active_ratio = value
+        logger.info("Market %s: min_active_ratio = %s", self._market, value)
+
+    def _get_active_strategies(self) -> list:
+        """Return enabled strategies minus the market-specific disabled list.
+
+        STOCK-65: Centralises the disabled-strategy filtering so both
+        evaluate_symbol() and tests call the same production code path.
+        """
+        all_strategies = self._registry.get_enabled()
+        if not self._disabled_strategies:
+            return all_strategies
+        return [s for s in all_strategies if s.name not in self._disabled_strategies]
 
     @property
     def running(self) -> bool:
@@ -366,12 +407,7 @@ class EvaluationLoop:
             df = self._indicator_svc.add_all_indicators(df)
 
             # Run all enabled strategies (filter market-specific disabled list)
-            all_strategies = self._registry.get_enabled()
-            strategies = (
-                [s for s in all_strategies if s.name not in self._disabled_strategies]
-                if self._disabled_strategies
-                else all_strategies
-            )
+            strategies = self._get_active_strategies()
             signals: list[Signal] = []
             for strategy in strategies:
                 try:
@@ -423,9 +459,14 @@ class EvaluationLoop:
                     signals = evaluated
 
             # Combine signals with per-stock weights
-            # STOCK-65: Pass market-specific min_confidence if set
+            # STOCK-65: per-market overrides take unconditional precedence;
+            # fall back to global defaults (0.15 for held, None otherwise).
             combine_kwargs: dict = {
-                "min_active_ratio": 0.15 if is_held else None,
+                "min_active_ratio": (
+                    self._min_active_ratio
+                    if self._min_active_ratio is not None
+                    else (0.15 if is_held else None)
+                ),
             }
             if self._min_confidence is not None:
                 combine_kwargs["min_confidence"] = self._min_confidence
