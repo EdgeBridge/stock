@@ -109,5 +109,37 @@ class StrategyConfigLoader:
         """
         return float(self.global_config.get("hard_sl_pct", -0.15))
 
+    def get_market_config(self, market: str) -> dict:
+        """Get market-specific override config (e.g. for 'KR' or 'US').
+
+        Returns the ``markets.<market>`` section from strategies.yaml.
+        Supports: disabled_strategies, risk, evaluation_loop overrides.
+        """
+        return self._config.get("markets", {}).get(market, {})
+
+    def get_market_disabled_strategies(self, market: str) -> list[str]:
+        """Get list of strategy names disabled for a specific market.
+
+        STOCK-65: KR market only runs supertrend + dual_momentum.
+        Returns empty list if no market-specific overrides are set.
+        """
+        return list(self.get_market_config(market).get("disabled_strategies", []))
+
+    def get_market_risk_config(self, market: str) -> dict:
+        """Get risk parameter overrides for a specific market.
+
+        STOCK-65: KR market uses grid-search optimized risk params.
+        Returns empty dict if no market-specific overrides are set.
+        """
+        return dict(self.get_market_config(market).get("risk", {}))
+
+    def get_market_evaluation_loop_config(self, market: str) -> dict:
+        """Get evaluation loop overrides for a specific market.
+
+        STOCK-65: KR market uses optimized evaluation loop params.
+        Returns empty dict if no market-specific overrides are set.
+        """
+        return dict(self.get_market_config(market).get("evaluation_loop", {}))
+
     def get_screening_config(self) -> dict:
         return self._config.get("screening", {})

@@ -10,7 +10,7 @@ Enforces:
 import logging
 from dataclasses import dataclass
 
-from analytics.position_sizing import KellyPositionSizer, KellyResult
+from analytics.position_sizing import KellyPositionSizer
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,11 @@ class RiskParams:
     breakeven_stop_activation_ratio: float = 0.50  # activate at 50% of TP
     breakeven_stop_lock_ratio: float = 0.75  # at 75% of TP, lock 50% of gain
     breakeven_stop_lock_pct: float = 0.50  # lock this fraction of peak gain
+    # Kelly sizing parameters (STOCK-65: market-specific tuning)
+    kelly_fraction: float = 0.40  # Fractional Kelly multiplier (0.40 = 40%)
+    min_position_pct: float = 0.05  # Minimum position size as % of portfolio
+    # Dynamic ATR-based SL/TP (STOCK-65: disable for KR to use static values)
+    dynamic_sl_tp: bool = True  # If False, always use default_stop_loss/take_profit_pct
 
 
 @dataclass
@@ -77,6 +82,8 @@ class RiskManager:
         self._eval_regime: str = "uptrend"  # Current regime for adaptive sizing
         self._kelly = KellyPositionSizer(
             max_position_pct=self._params.max_position_pct,
+            kelly_fraction=self._params.kelly_fraction,
+            min_position_pct=self._params.min_position_pct,
         )
 
     def set_eval_regime(self, regime: str) -> None:
@@ -676,9 +683,15 @@ class RiskManager:
         Uses ATR relative to price to adapt SL/TP to each stock's volatility.
         Higher volatility → wider SL/TP, lower volatility → tighter SL/TP.
 
+        When dynamic_sl_tp is False (STOCK-65: KR static mode), always returns
+        the configured default values regardless of ATR.
+
         Returns:
             (stop_loss_pct, take_profit_pct)
         """
+        if not self._params.dynamic_sl_tp:
+            return self._params.default_stop_loss_pct, self._params.default_take_profit_pct
+
         if price <= 0 or atr <= 0:
             return self._params.default_stop_loss_pct, self._params.default_take_profit_pct
 

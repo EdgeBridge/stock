@@ -424,6 +424,39 @@ strategies:
       Real_Estate: [XLRE]
       Communications: [XLC]
 
+# Market-specific overrides
+# Each market key can override: disabled_strategies, risk, evaluation_loop
+markets:
+  KR:
+    # STOCK-65: Grid-search optimized — only supertrend + dual_momentum for KR
+    disabled_strategies:
+      - trend_following
+      - donchian_breakout
+      - macd_histogram
+      - rsi_divergence
+      - bollinger_squeeze
+      - volume_profile
+      - regime_switch
+      - sector_rotation
+      - cis_momentum
+      - larry_williams
+      - bnf_deviation
+      - volume_surge
+    risk:
+      kelly_fraction: 0.50
+      max_position_pct: 0.20
+      min_position_pct: 0.12
+      max_positions: 8
+      default_stop_loss_pct: 0.10
+      default_take_profit_pct: 0.15
+      dynamic_sl_tp: false
+    evaluation_loop:
+      min_confidence: 0.30
+      min_active_ratio: 0.0
+      sell_cooldown_days: 1
+      whipsaw_max_losses: 2
+      min_hold_days: 1
+
 # Screening pipeline settings
 screening:
   indicator_screener:

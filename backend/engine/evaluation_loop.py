@@ -119,6 +119,27 @@ class EvaluationLoop:
         from collections import deque
 
         self._recent_signals: deque[dict] = deque(maxlen=200)
+        # STOCK-65: Market-specific disabled strategies (e.g. KR only runs supertrend+dual_momentum)
+        self._disabled_strategies: frozenset[str] = frozenset()
+        # STOCK-65: Per-market min_confidence override (None = use combiner default 0.35)
+        self._min_confidence: float | None = None
+
+    def set_disabled_strategies(self, names: list[str]) -> None:
+        """Set market-specific disabled strategy names.
+
+        STOCK-65: Allows per-market strategy filtering without modifying the
+        global StrategyRegistry. Strategies listed here are excluded from
+        evaluation even if globally enabled in strategies.yaml.
+
+        Args:
+            names: List of strategy names to disable for this market.
+        """
+        self._disabled_strategies = frozenset(names)
+        logger.info(
+            "Market %s: disabled strategies = %s",
+            self._market,
+            sorted(self._disabled_strategies),
+        )
 
     @property
     def running(self) -> bool:
@@ -344,8 +365,13 @@ class EvaluationLoop:
             # Add indicators
             df = self._indicator_svc.add_all_indicators(df)
 
-            # Run all enabled strategies
-            strategies = self._registry.get_enabled()
+            # Run all enabled strategies (filter market-specific disabled list)
+            all_strategies = self._registry.get_enabled()
+            strategies = (
+                [s for s in all_strategies if s.name not in self._disabled_strategies]
+                if self._disabled_strategies
+                else all_strategies
+            )
             signals: list[Signal] = []
             for strategy in strategies:
                 try:
@@ -397,11 +423,13 @@ class EvaluationLoop:
                     signals = evaluated
 
             # Combine signals with per-stock weights
-            combined = self._combiner.combine(
-                signals,
-                weights,
-                min_active_ratio=0.15 if is_held else None,
-            )
+            # STOCK-65: Pass market-specific min_confidence if set
+            combine_kwargs: dict = {
+                "min_active_ratio": 0.15 if is_held else None,
+            }
+            if self._min_confidence is not None:
+                combine_kwargs["min_confidence"] = self._min_confidence
+            combined = self._combiner.combine(signals, weights, **combine_kwargs)
 
             # Log weight selection
             category = self._adaptive.get_category(symbol)

@@ -194,11 +194,17 @@ async def lifespan(app: FastAPI):
     )
     risk_manager = RiskManager(params=risk_params)
 
-    # KR-specific risk params: wider SL for ±30% daily limit, tighter TP
+    # KR-specific risk params: STOCK-65 grid-search optimized settings
+    kr_risk_cfg = registry._config_loader.get_market_risk_config("KR")
     kr_risk_params = RiskParams(
         market_allocations=market_allocs,
-        default_stop_loss_pct=0.12,  # 12% (wider for KR volatility)
-        default_take_profit_pct=0.20,  # 20% (aligned with US, capture gains)
+        kelly_fraction=kr_risk_cfg.get("kelly_fraction", 0.50),
+        max_position_pct=kr_risk_cfg.get("max_position_pct", 0.20),
+        min_position_pct=kr_risk_cfg.get("min_position_pct", 0.12),
+        max_positions=kr_risk_cfg.get("max_positions", 8),
+        default_stop_loss_pct=kr_risk_cfg.get("default_stop_loss_pct", 0.10),
+        default_take_profit_pct=kr_risk_cfg.get("default_take_profit_pct", 0.15),
+        dynamic_sl_tp=kr_risk_cfg.get("dynamic_sl_tp", False),
         tiered_trailing_tiers=tiered_tiers,
         breakeven_stop_enabled=be_enabled,
         breakeven_stop_activation_ratio=be_activation,
@@ -1490,6 +1496,30 @@ async def lifespan(app: FastAPI):
     kr_evaluation_loop._hard_sl_pct = registry._config_loader.get_hard_sl_pct()
     kr_evaluation_loop.set_cache(cache)
     kr_position_tracker.register_on_sell(kr_evaluation_loop.register_sell_cooldown)
+
+    # STOCK-65: Apply KR market-specific evaluation loop overrides from strategies.yaml
+    kr_eval_cfg = registry._config_loader.get_market_evaluation_loop_config("KR")
+    if kr_eval_cfg:
+        if "sell_cooldown_days" in kr_eval_cfg:
+            kr_evaluation_loop._sell_cooldown_secs = int(
+                kr_eval_cfg["sell_cooldown_days"] * 86400
+            )
+        if "whipsaw_max_losses" in kr_eval_cfg:
+            kr_evaluation_loop._max_loss_sells = int(kr_eval_cfg["whipsaw_max_losses"])
+        if "min_hold_days" in kr_eval_cfg:
+            kr_evaluation_loop._min_hold_secs = int(kr_eval_cfg["min_hold_days"] * 86400)
+        if "min_confidence" in kr_eval_cfg:
+            kr_evaluation_loop._min_confidence = float(kr_eval_cfg["min_confidence"])
+        if "min_active_ratio" in kr_eval_cfg:
+            kr_evaluation_loop._combiner._min_active_ratio = float(
+                kr_eval_cfg["min_active_ratio"]
+            )
+
+    # STOCK-65: Apply KR market-specific disabled strategies from strategies.yaml
+    kr_disabled = registry._config_loader.get_market_disabled_strategies("KR")
+    if kr_disabled:
+        kr_evaluation_loop.set_disabled_strategies(kr_disabled)
+
     app.state.kr_evaluation_loop = kr_evaluation_loop
 
     # Cross-link market data for combined portfolio allocation (통합증거금)
