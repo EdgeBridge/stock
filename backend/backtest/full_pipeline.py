@@ -871,32 +871,36 @@ class FullPipelineBacktest:
             price = float(row["close"])
             high = float(row["high"]) if "high" in row.index else price
             low = float(row["low"]) if "low" in row.index else price
+            open_price = float(row["open"]) if "open" in row.index else price
 
             # Update highest price for trailing stop
             if high > pos.highest_price:
                 pos.highest_price = high
 
-            # Stop-loss
+            # Stop-loss (gap-through: open below SL → fill at open)
             sl_price = pos.avg_price * (1 - pos.stop_loss_pct)
             if low <= sl_price:
-                self._close_position(symbol, sl_price, date, "stop_loss")
+                fill = open_price if open_price <= sl_price else sl_price
+                self._close_position(symbol, fill, date, "stop_loss")
                 continue
 
-            # Take-profit
+            # Take-profit (gap-through: open above TP → fill at open)
             tp_price = pos.avg_price * (1 + pos.take_profit_pct)
             if high >= tp_price:
-                self._close_position(symbol, tp_price, date, "take_profit")
+                fill = open_price if open_price >= tp_price else tp_price
+                self._close_position(symbol, fill, date, "take_profit")
                 continue
 
-            # Trailing stop
+            # Trailing stop (gap-through: open below trail → fill at open)
             cfg = self._config
             if cfg.trailing_activation_pct > 0 and cfg.trailing_trail_pct > 0:
                 gain = (pos.highest_price - pos.avg_price) / pos.avg_price
                 if gain >= cfg.trailing_activation_pct:
                     trail_price = pos.highest_price * (1 - cfg.trailing_trail_pct)
                     if low <= trail_price:
+                        fill = open_price if open_price <= trail_price else trail_price
                         self._close_position(
-                            symbol, trail_price, date, "trailing_stop",
+                            symbol, fill, date, "trailing_stop",
                         )
 
     # ------------------------------------------------------------------

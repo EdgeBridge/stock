@@ -87,8 +87,10 @@ class BacktestSimulator:
             high = float(row["high"]) if "high" in row.index else price
             low = float(row["low"]) if "low" in row.index else price
 
+            open_price = float(row["open"]) if "open" in row.index else price
+
             # Check SL/TP/trailing stop on existing positions
-            self._check_risk_exits(symbol, low, high, price, date)
+            self._check_risk_exits(symbol, open_price, low, high, price, date)
 
             signal = signals.get(i)
             if signal:
@@ -103,9 +105,15 @@ class BacktestSimulator:
             self._update_equity(price, symbol, date)
 
     def _check_risk_exits(
-        self, symbol: str, low: float, high: float, close: float, date
+        self, symbol: str, open_price: float, low: float, high: float,
+        close: float, date,
     ) -> None:
-        """Check stop-loss, take-profit, and trailing stop triggers."""
+        """Check stop-loss, take-profit, and trailing stop triggers.
+
+        Models gap-through: if the bar opens beyond the SL/TP level,
+        the fill is at the open price (worse for SL, better for TP),
+        matching real-market gap behavior.
+        """
         pos = self._positions.get(symbol)
         if not pos:
             return
@@ -116,14 +124,18 @@ class BacktestSimulator:
         if cfg.stop_loss_pct > 0:
             sl_price = pos.avg_price * (1 - cfg.stop_loss_pct)
             if low <= sl_price:
-                self._close_position(symbol, sl_price, date)
+                # Gap-through: open below SL → fill at open (worse)
+                fill = open_price if open_price <= sl_price else sl_price
+                self._close_position(symbol, fill, date)
                 return
 
         # Take-profit: triggered if high breaches TP level
         if cfg.take_profit_pct > 0:
             tp_price = pos.avg_price * (1 + cfg.take_profit_pct)
             if high >= tp_price:
-                self._close_position(symbol, tp_price, date)
+                # Gap-through: open above TP → fill at open (bonus)
+                fill = open_price if open_price >= tp_price else tp_price
+                self._close_position(symbol, fill, date)
                 return
 
         # Trailing stop
@@ -133,7 +145,8 @@ class BacktestSimulator:
             if gain_from_entry >= cfg.trailing_stop_activation_pct:
                 trail_price = peak * (1 - cfg.trailing_stop_trail_pct)
                 if low <= trail_price:
-                    self._close_position(symbol, trail_price, date)
+                    fill = open_price if open_price <= trail_price else trail_price
+                    self._close_position(symbol, fill, date)
                     return
 
     def _process_signal(

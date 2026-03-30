@@ -340,6 +340,92 @@ class TestStopLossTakeProfit:
         assert sim.trades[0].pnl < 0  # Stopped out at a loss
 
 
+class TestGapThrough:
+    """Gap-through fill modeling: when bar opens beyond SL/TP, fill at open."""
+
+    def test_sl_gap_through_fills_at_open(self):
+        """Bar opens below SL → fill at open price (worse than SL)."""
+        config = SimConfig(
+            initial_equity=100_000, slippage_pct=0.0,
+            stop_loss_pct=0.08, max_position_pct=0.95,
+        )
+        sim = BacktestSimulator(config)
+
+        # Entry at 100, SL at 92. Bar 5 gaps down: open=85 (below SL)
+        prices = [100.0] * 5 + [85.0] * 5
+        dates = pd.bdate_range("2021-01-01", periods=10)
+        df = pd.DataFrame({
+            "open": prices,
+            "high": [p + 1 for p in prices],
+            "low": [p - 1 for p in prices],
+            "close": prices,
+            "volume": [1_000_000.0] * 10,
+        }, index=dates)
+
+        signals = {1: _buy_signal()}
+        sim.run(df, signals, "AAPL")
+
+        assert len(sim.trades) == 1
+        trade = sim.trades[0]
+        # Should fill at open (85), not at SL price (92)
+        assert trade.exit_price == 85.0
+
+    def test_sl_intraday_fills_at_sl_price(self):
+        """Bar opens above SL but low breaches it → fill at SL price."""
+        config = SimConfig(
+            initial_equity=100_000, slippage_pct=0.0,
+            stop_loss_pct=0.10, max_position_pct=0.95,
+        )
+        sim = BacktestSimulator(config)
+
+        # Entry at 100, SL at 90. Bar 5: open=95, low=88 (breaches SL intraday)
+        opens = [100.0] * 5 + [95.0] * 5
+        closes = [100.0] * 5 + [93.0] * 5
+        lows = [99.0] * 5 + [88.0] + [93.0] * 4
+        dates = pd.bdate_range("2021-01-01", periods=10)
+        df = pd.DataFrame({
+            "open": opens, "high": [max(o, c) + 1 for o, c in zip(opens, closes)],
+            "low": lows, "close": closes,
+            "volume": [1_000_000.0] * 10,
+        }, index=dates)
+
+        signals = {1: _buy_signal()}
+        sim.run(df, signals, "AAPL")
+
+        assert len(sim.trades) == 1
+        trade = sim.trades[0]
+        # Open=95 > SL=90, so fill at SL price (90)
+        assert trade.exit_price == 90.0
+
+    def test_tp_gap_through_fills_at_open(self):
+        """Bar opens above TP → fill at open price (bonus)."""
+        config = SimConfig(
+            initial_equity=100_000, slippage_pct=0.0,
+            take_profit_pct=0.10, max_position_pct=0.95,
+        )
+        sim = BacktestSimulator(config)
+
+        # Entry at 100, TP at 110. Bar 5 gaps up: open=115
+        opens = [100.0] * 5 + [115.0] * 5
+        closes = [100.0] * 5 + [117.0] * 5
+        dates = pd.bdate_range("2021-01-01", periods=10)
+        df = pd.DataFrame({
+            "open": opens,
+            "high": [max(o, c) + 1 for o, c in zip(opens, closes)],
+            "low": [min(o, c) - 1 for o, c in zip(opens, closes)],
+            "close": closes,
+            "volume": [1_000_000.0] * 10,
+        }, index=dates)
+
+        signals = {1: _buy_signal()}
+        sim.run(df, signals, "AAPL")
+
+        assert len(sim.trades) == 1
+        trade = sim.trades[0]
+        # Should fill at open (115), not at TP price (110) — bonus
+        assert trade.exit_price == 115.0
+
+
 class TestSimConfig:
     def test_defaults(self):
         c = SimConfig()
