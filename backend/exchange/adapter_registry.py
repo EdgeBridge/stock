@@ -11,7 +11,7 @@ Usage::
 """
 
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from config.accounts import DEFAULT_ACCOUNT_ID, AccountConfig, load_accounts
 from exchange.kis_adapter import KISAdapter
@@ -31,20 +31,24 @@ class AdapterRegistry:
         accounts: List of :class:`~config.accounts.AccountConfig` objects.
                   If *None*, :func:`~config.accounts.load_accounts` is called
                   automatically (accounts.yaml or env-var fallback).
-        redis_client: Optional async Redis client forwarded to each
+        redis_client: Async Redis client forwarded to each
                       :class:`~exchange.kis_auth.KISAuth` instance for token caching.
+                      Typed as ``Any`` because :class:`~exchange.kis_auth.KISAuth`
+                      does not annotate its own ``redis_client`` parameter; pass
+                      an ``aioredis.Redis`` / ``redis.asyncio.Redis`` instance or
+                      ``None`` to disable Redis token caching.
     """
 
     def __init__(
         self,
         accounts: Optional[list[AccountConfig]] = None,
-        redis_client: Optional[object] = None,
+        redis_client: Any = None,
     ) -> None:
         if accounts is None:
             accounts = load_accounts()
         self._accounts: dict[str, AccountConfig] = {acc.account_id: acc for acc in accounts}
         self._adapters: dict[str, KISAdapter] = {}
-        self._redis = redis_client
+        self._redis: Any = redis_client
         logger.info(
             "AdapterRegistry initialised with %d account(s): %s",
             len(self._accounts),

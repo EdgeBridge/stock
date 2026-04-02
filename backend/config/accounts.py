@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,18 @@ class AccountConfig(BaseModel):
         default_factory=lambda: [MARKET_US, MARKET_KR],
         description="Markets this account may trade: 'US', 'KR', or both",
     )
+
+    @field_validator("markets")
+    @classmethod
+    def validate_markets(cls, v: list[str]) -> list[str]:
+        """Reject unknown or empty market identifiers at load time."""
+        allowed = {MARKET_US, MARKET_KR}
+        invalid = set(v) - allowed
+        if invalid:
+            raise ValueError(f"Unknown market identifier(s): {invalid}. Allowed: {allowed}")
+        if not v:
+            raise ValueError("markets must contain at least one market identifier")
+        return v
 
     @property
     def is_paper(self) -> bool:
@@ -129,18 +141,39 @@ def load_accounts(config_path: Optional[Path] = None) -> list[AccountConfig]:
 
     if config_path.exists():
         try:
+            # Synchronous file I/O is intentional: load_accounts() is called only
+            # during application startup (AdapterRegistry.__init__), before the
+            # async event loop begins accepting requests.  The file is tiny
+            # (typically < 1 KB) so blocking time is negligible.
             with open(config_path) as fh:
                 data = yaml.safe_load(fh)
             accounts_data = (data or {}).get("accounts", [])
             if accounts_data:
-                accounts = [AccountConfig(**acc) for acc in accounts_data]
-                logger.info(
-                    "Loaded %d account(s) from %s",
-                    len(accounts),
-                    config_path,
-                )
-                return accounts
-            logger.warning("accounts.yaml exists but contains no accounts — using env vars")
+                accounts: list[AccountConfig] = []
+                parse_errors: list[tuple[str, Exception]] = []
+                for acc in accounts_data:
+                    try:
+                        accounts.append(AccountConfig(**acc))
+                    except Exception as exc:
+                        aid = (
+                            acc.get("account_id", "<unknown>")
+                            if isinstance(acc, dict)
+                            else repr(acc)
+                        )
+                        parse_errors.append((aid, exc))
+                if parse_errors:
+                    logger.warning(
+                        "Skipped %d malformed account(s) in %s: %s",
+                        len(parse_errors),
+                        config_path,
+                        [(aid, str(e)) for aid, e in parse_errors],
+                    )
+                if accounts:
+                    logger.info("Loaded %d account(s) from %s", len(accounts), config_path)
+                    return accounts
+                logger.warning("accounts.yaml contains no valid accounts — using env vars")
+            else:
+                logger.warning("accounts.yaml exists but contains no accounts — using env vars")
         except Exception as exc:
             logger.warning(
                 "Failed to load accounts.yaml (%s): %s — falling back to env vars",

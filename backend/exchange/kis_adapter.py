@@ -117,7 +117,11 @@ class KISAdapter(ExchangeAdapter):
     async def initialize(self) -> None:
         self._session = aiohttp.ClientSession()
         await self._auth.initialize()
-        logger.info("KIS adapter initialized (mode=%s)", "paper" if self._is_paper else "live")
+        logger.info(
+            "KIS adapter initialized (account=%s, mode=%s)",
+            self._account_id,
+            "paper" if self._is_paper else "live",
+        )
 
     async def close(self) -> None:
         if self._session:

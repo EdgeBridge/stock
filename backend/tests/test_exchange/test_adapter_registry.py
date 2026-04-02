@@ -125,6 +125,30 @@ class TestAccountConfig:
     def test_default_account_id_constant(self) -> None:
         assert DEFAULT_ACCOUNT_ID == "ACC001"
 
+    def test_markets_validator_rejects_unknown(self) -> None:
+        """Unknown market identifier should raise ValidationError at construction."""
+        with pytest.raises(Exception, match="Unknown market identifier"):
+            AccountConfig(account_id="X001", markets=["us"])  # lowercase rejected
+
+    def test_markets_validator_rejects_typo(self) -> None:
+        with pytest.raises(Exception, match="Unknown market identifier"):
+            AccountConfig(account_id="X001", markets=["United States"])
+
+    def test_markets_validator_rejects_empty(self) -> None:
+        with pytest.raises(Exception, match="at least one market"):
+            AccountConfig(account_id="X001", markets=[])
+
+    def test_markets_validator_accepts_valid(self) -> None:
+        """Both MARKET_US and MARKET_KR are accepted individually and combined."""
+        acc_both = AccountConfig(account_id="X001", markets=[MARKET_US, MARKET_KR])
+        assert set(acc_both.markets) == {MARKET_US, MARKET_KR}
+
+        acc_us = AccountConfig(account_id="X002", markets=[MARKET_US])
+        assert acc_us.markets == [MARKET_US]
+
+        acc_kr = AccountConfig(account_id="X003", markets=[MARKET_KR])
+        assert acc_kr.markets == [MARKET_KR]
+
 
 # ---------------------------------------------------------------------------
 # load_accounts — YAML loading
@@ -209,6 +233,58 @@ class TestLoadAccountsFromYaml:
 
         assert len(accounts) == 1
         assert accounts[0].account_id == DEFAULT_ACCOUNT_ID
+
+    def test_single_malformed_entry_preserves_valid_entries(self, tmp_path: Path) -> None:
+        """A malformed YAML entry is skipped; valid entries in the same file are kept."""
+        yaml_content = textwrap.dedent(
+            """
+            accounts:
+              - account_id: ACC001
+                name: Good Account
+                app_key: GOODKEY
+                app_secret: GOODSECRET
+                account_no: "11111111"
+                base_url: "https://openapivts.koreainvestment.com:29443"
+                markets: [US, KR]
+              - account_id: ACC_BAD
+                name: Bad Account
+                app_key: BADKEY
+                app_secret: BADSECRET
+                account_no: "99999999"
+                base_url: "https://openapivts.koreainvestment.com:29443"
+                markets: [invalid_market]
+            """
+        )
+        config_file = tmp_path / "accounts.yaml"
+        config_file.write_text(yaml_content)
+
+        accounts = load_accounts(config_path=config_file)
+
+        # ACC001 should be loaded; ACC_BAD (invalid markets) should be skipped
+        assert len(accounts) == 1
+        assert accounts[0].account_id == "ACC001"
+        assert accounts[0].app_key == "GOODKEY"
+
+    def test_all_malformed_falls_back_to_env(self, tmp_path: Path) -> None:
+        """When all entries are malformed, falls back to env-var ACC001."""
+        yaml_content = textwrap.dedent(
+            """
+            accounts:
+              - account_id: BAD1
+                markets: [INVALID]
+              - account_id: BAD2
+                markets: [ALSO_INVALID]
+            """
+        )
+        config_file = tmp_path / "accounts.yaml"
+        config_file.write_text(yaml_content)
+
+        with patch.dict(os.environ, {"KIS_APP_KEY": "ENVFALLBACK"}, clear=False):
+            accounts = load_accounts(config_path=config_file)
+
+        assert len(accounts) == 1
+        assert accounts[0].account_id == DEFAULT_ACCOUNT_ID
+        assert accounts[0].app_key == "ENVFALLBACK"
 
 
 # ---------------------------------------------------------------------------
