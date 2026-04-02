@@ -135,21 +135,20 @@ async def _combined_summary(request: Request) -> dict:
         # Fallback: separate KR total + US total at market rate.
         total_equity = krw_total + usd_total * _cached_usd_krw
 
-    # STOCK-42: Available cash — prevent double-counting in 통합증거금 accounts.
-    # In 통합증거금, US adapter's frcr_ord_psbl_amt1 (stored as _full_available_usd)
-    # already includes KRW auto-conversion. Adding krw_available on top would
-    # double-count the same cash pool. Use _full_available_usd * rate directly.
-    full_available_usd = getattr(adapter, "_full_available_usd", 0) if adapter else 0
-    if full_available_usd > 0 and full_us_usd > 0:
-        # 통합증거금 mode: US available already includes KRW conversion
-        available_cash = full_available_usd * _cached_usd_krw
-    else:
-        # Fallback: separate accounts, sum KRW + USD
-        available_cash = krw_available + usd_available * _cached_usd_krw
-
-    # Safety cap: available_cash should never exceed total_equity
-    if available_cash > total_equity:
-        available_cash = total_equity
+    # Available cash = total_equity - total_position_value.
+    # Previous STOCK-42 approach used US adapter's _full_available_usd * rate,
+    # but this overstates available cash in 통합증거금 because:
+    #   - US frcr_ord_psbl_amt1 assumes ALL KRW can convert to USD
+    #   - KR positions already occupy part of that shared deposit pool
+    # Deriving from equity - positions avoids this cross-market mismatch.
+    kr_position_value = sum(
+        p.current_price * p.quantity for p in kr_positions if p.current_price > 0
+    )
+    us_position_value = sum(
+        p.current_price * p.quantity for p in us_positions if p.current_price > 0
+    )
+    total_position_value = kr_position_value + us_position_value * _cached_usd_krw
+    available_cash = max(0.0, total_equity - total_position_value)
 
     all_positions = kr_positions + us_positions
     total_unrealized_pnl_krw = sum(p.unrealized_pnl for p in kr_positions)

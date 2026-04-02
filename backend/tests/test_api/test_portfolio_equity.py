@@ -4,7 +4,7 @@ Validates:
 - total_equity = kr_tot_evlu_amt + us_tot_asst_amt - shared_deposit (통합증거금)
 - Fallback: krw_total + usd_total * rate
 - No double-counting of shared deposit
-- available_cash = full_available_usd * rate (통합증거금)
+- available_cash = total_equity - total_position_value (current market value)
 - Exchange rate fallback chain
 """
 
@@ -268,9 +268,10 @@ class TestResponseStructure:
 
 
 class TestUnifiedMarginAvailableCash:
-    """STOCK-42: available_cash must not double-count KRW in 통합증거금 accounts."""
+    """available_cash = total_equity - total_position_value (current market value)."""
 
-    def test_unified_margin_uses_full_available_usd(self):
+    def test_available_cash_equals_equity_minus_positions(self):
+        """No positions → available_cash == total_equity."""
         kr_bal = Balance(currency="KRW", total=10_000_000, available=8_000_000, locked=2_000_000)
         us_bal = Balance(currency="USD", total=5000, available=3000, locked=2000)
         app = _make_app(
@@ -280,30 +281,59 @@ class TestUnifiedMarginAvailableCash:
         )
         client = TestClient(app)
         data = client.get("/api/v1/portfolio/summary").json()
-        expected = 9000 * 1400
-        assert data["available_cash"] == expected
+        # No positions, so available_cash == total_equity
+        assert data["available_cash"] == data["total_equity"]
 
-    def test_available_cash_capped_at_total_equity(self):
-        kr_bal = Balance(currency="KRW", total=1_000_000, available=500_000, locked=500_000)
-        us_bal = Balance(currency="USD", total=2000, available=1500, locked=500)
+    def test_positions_reduce_available_cash(self):
+        """Positions at current market value reduce available_cash."""
+        kr_bal = Balance(currency="KRW", total=10_000_000, available=6_000_000, locked=4_000_000)
+        us_bal = Balance(currency="USD", total=5000, available=3000, locked=2000)
+        kr_positions = [
+            Position(symbol="005930", exchange="KRX", quantity=10,
+                     avg_price=70000, current_price=72000, unrealized_pnl=20000,
+                     unrealized_pnl_pct=2.86),
+        ]
+        us_positions = [
+            Position(symbol="AAPL", exchange="NASD", quantity=5,
+                     avg_price=180, current_price=190, unrealized_pnl=50,
+                     unrealized_pnl_pct=5.56),
+        ]
+        # 통합증거금 path
+        kr_tot_evlu = 10_000_000
+        us_tot_asst = 12_000_000
+        us_tot_dncl = 5_000_000
         app = _make_app(
             kr_balance=kr_bal, us_balance=us_bal,
+            kr_positions=kr_positions, us_positions=us_positions,
+            tot_asst_krw=us_tot_asst, tot_dncl_krw=us_tot_dncl,
+            kr_tot_evlu_amt=kr_tot_evlu,
             last_exchange_rate=1400.0,
-            full_account_usd=5000, full_available_usd=15000,
+            full_account_usd=5000, full_available_usd=3000,
         )
         client = TestClient(app)
         data = client.get("/api/v1/portfolio/summary").json()
-        assert data["available_cash"] <= data["total_equity"]
+        total_equity = kr_tot_evlu + us_tot_asst - us_tot_dncl  # 17,000,000
+        kr_pos_val = 10 * 72000  # 720,000
+        us_pos_val = 5 * 190  # 950 USD → 950 * 1400 = 1,330,000
+        expected = total_equity - kr_pos_val - us_pos_val * 1400
+        assert abs(data["available_cash"] - expected) < 1.0
 
-    def test_fallback_path_unchanged(self):
-        kr_bal = Balance(currency="KRW", total=5_000_000, available=3_000_000, locked=2_000_000)
-        us_bal = Balance(currency="USD", total=5000, available=3000, locked=2000)
+    def test_available_cash_never_negative(self):
+        """available_cash is floored at 0."""
+        kr_bal = Balance(currency="KRW", total=1_000_000, available=0, locked=1_000_000)
+        us_bal = Balance(currency="USD", total=2000, available=0, locked=2000)
+        # Positions worth more than equity (underwater)
+        us_positions = [
+            Position(symbol="AAPL", exchange="NASD", quantity=100,
+                     avg_price=200, current_price=200, unrealized_pnl=0,
+                     unrealized_pnl_pct=0),
+        ]
         app = _make_app(
             kr_balance=kr_bal, us_balance=us_bal,
+            us_positions=us_positions,
             last_exchange_rate=1400.0,
             full_account_usd=0, full_available_usd=0,
         )
         client = TestClient(app)
         data = client.get("/api/v1/portfolio/summary").json()
-        expected = 3_000_000 + 3000 * 1400
-        assert data["available_cash"] == expected
+        assert data["available_cash"] >= 0
