@@ -313,6 +313,8 @@ async def ensure_indexes(engine: AsyncEngine) -> list[str]:
                 if index_name in existing_indexes:
                     continue
 
+                # ``column`` may be a comma-separated list (e.g. "a, b, c").
+                # Raw SQL handles this correctly — the string is valid inside ON(...).
                 ddl = f"CREATE INDEX IF NOT EXISTS {index_name} ON {table}({column})"
                 sync_conn.execute(text(ddl))
                 created.append(index_name)

@@ -42,7 +42,9 @@ def upgrade() -> None:
         ["account_id", "market", "symbol"],
     )
 
-    # Add account_id to positions table
+    # Add account_id to positions table and widen unique constraint to include it.
+    # batch_alter_table is used for SQLite compatibility (constraint changes require
+    # table recreation on SQLite; PostgreSQL uses ALTER TABLE directly).
     op.add_column(
         "positions",
         sa.Column(
@@ -57,6 +59,13 @@ def upgrade() -> None:
         "positions",
         ["account_id", "market", "symbol"],
     )
+    # Widen the unique constraint so multiple accounts can hold the same symbol.
+    with op.batch_alter_table("positions") as batch_op:
+        batch_op.drop_constraint("uq_positions_market_symbol", type_="unique")
+        batch_op.create_unique_constraint(
+            "uq_positions_account_market_symbol",
+            ["account_id", "market", "symbol"],
+        )
 
     # Add account_id to portfolio_snapshots table
     op.add_column(
@@ -103,7 +112,13 @@ def downgrade() -> None:
     op.drop_index("idx_snapshots_account_market", table_name="portfolio_snapshots")
     op.drop_column("portfolio_snapshots", "account_id")
 
-    # positions
+    # positions — restore old (market, symbol) unique constraint before dropping column
+    with op.batch_alter_table("positions") as batch_op:
+        batch_op.drop_constraint("uq_positions_account_market_symbol", type_="unique")
+        batch_op.create_unique_constraint(
+            "uq_positions_market_symbol",
+            ["market", "symbol"],
+        )
     op.drop_index("idx_positions_account_market_symbol", table_name="positions")
     op.drop_column("positions", "account_id")
 

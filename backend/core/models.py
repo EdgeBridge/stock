@@ -26,7 +26,7 @@ class Order(Base):
     __tablename__ = "orders"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    account_id = Column(String(20), nullable=False, default="ACC001")  # STOCK-83
+    account_id = Column(String(20), nullable=False, default="ACC001")
     market = Column(String(2), nullable=False, default="US")  # US or KR
     symbol = Column(String(20), nullable=False)
     exchange = Column(String(10), nullable=False, default="NASD")
@@ -55,7 +55,7 @@ class Order(Base):
         Index("idx_orders_status", "status"),
         Index("idx_orders_is_paper", "is_paper"),
         Index("idx_orders_kis_order_id", "kis_order_id"),
-        Index("idx_orders_account_market_symbol", "account_id", "market", "symbol"),  # STOCK-83
+        Index("idx_orders_account_market_symbol", "account_id", "market", "symbol"),
     )
 
 
@@ -63,7 +63,7 @@ class PositionRecord(Base):
     __tablename__ = "positions"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    account_id = Column(String(20), nullable=False, default="ACC001")  # STOCK-83
+    account_id = Column(String(20), nullable=False, default="ACC001")
     market = Column(String(2), nullable=False, default="US")
     symbol = Column(String(20), nullable=False)
     exchange = Column(String(10), nullable=False, default="NASD")
@@ -83,9 +83,11 @@ class PositionRecord(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     __table_args__ = (
-        UniqueConstraint("market", "symbol", name="uq_positions_market_symbol"),
+        UniqueConstraint(
+            "account_id", "market", "symbol", name="uq_positions_account_market_symbol"
+        ),
         Index("idx_positions_symbol", "symbol"),
-        Index("idx_positions_account_market_symbol", "account_id", "market", "symbol"),  # STOCK-83
+        Index("idx_positions_account_market_symbol", "account_id", "market", "symbol"),
     )
 
 
@@ -93,7 +95,7 @@ class PortfolioSnapshot(Base):
     __tablename__ = "portfolio_snapshots"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    account_id = Column(String(20), nullable=False, default="ACC001")  # STOCK-83
+    account_id = Column(String(20), nullable=False, default="ACC001")
     market = Column(String(2), nullable=False, default="US")
     total_value_usd = Column(Float, nullable=False)
     cash_usd = Column(Float, nullable=False)
@@ -110,7 +112,7 @@ class PortfolioSnapshot(Base):
 
     __table_args__ = (
         Index("idx_snapshots_recorded", "recorded_at"),
-        Index("idx_snapshots_account_market", "account_id", "market"),  # STOCK-83
+        Index("idx_snapshots_account_market", "account_id", "market"),
     )
 
 
@@ -118,7 +120,7 @@ class StrategyLog(Base):
     __tablename__ = "strategy_logs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    account_id = Column(String(20), nullable=False, default="ACC001")  # STOCK-83
+    account_id = Column(String(20), nullable=False, default="ACC001")
     strategy_name = Column(String(50), nullable=False)
     symbol = Column(String(20), nullable=False)
     signal_type = Column(String(10), nullable=False)
@@ -129,7 +131,7 @@ class StrategyLog(Base):
 
     __table_args__ = (
         Index("idx_strategy_logs_created", "created_at"),
-        Index("idx_strategy_logs_account_symbol", "account_id", "symbol"),  # STOCK-83
+        Index("idx_strategy_logs_account_symbol", "account_id", "symbol"),
     )
 
 

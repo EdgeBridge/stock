@@ -1163,3 +1163,48 @@ async def test_run_alembic_upgrade_stock83_stamps_at_latest_sentinel(
         assert calls[1] == ["upgrade", "head"]
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_positions_unique_constraint_widened_to_include_account_id():
+    """New schema allows two accounts to hold the same (market, symbol) position.
+
+    Before STOCK-83: UniqueConstraint(market, symbol) — only one row per symbol.
+    After  STOCK-83: UniqueConstraint(account_id, market, symbol) — per-account isolation.
+    """
+    from core.models import Base
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        # Insert two positions with same (market, symbol) but different account_ids
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO positions "
+                    "(account_id, market, symbol, exchange, quantity, avg_price, "
+                    "partial_profit_taken) VALUES "
+                    "('ACC001', 'US', 'AAPL', 'NASD', 10, 150.0, 0), "
+                    "('ACC002', 'US', 'AAPL', 'NASD', 5, 155.0, 0)"
+                )
+            )
+        # Both rows inserted without IntegrityError — constraint allows different accounts
+        async with engine.connect() as conn:
+            result = await conn.execute(text("SELECT COUNT(*) FROM positions WHERE symbol='AAPL'"))
+            assert result.scalar() == 2
+
+        # Same account_id + same (market, symbol) must still be rejected
+        with pytest.raises(Exception):
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "INSERT INTO positions "
+                        "(account_id, market, symbol, exchange, quantity, avg_price, "
+                        "partial_profit_taken) VALUES "
+                        "('ACC001', 'US', 'AAPL', 'NASD', 3, 160.0, 0)"
+                    )
+                )
+    finally:
+        await engine.dispose()

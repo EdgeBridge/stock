@@ -299,7 +299,7 @@ class TradeRepository:
     ) -> list[Watchlist]:
         stmt = select(Watchlist).order_by(Watchlist.added_at)
         if active_only:
-            stmt = stmt.where(Watchlist.is_active == True)  # noqa: E712
+            stmt = stmt.where(Watchlist.is_active == True)
         if market:
             stmt = stmt.where(Watchlist.market == market)
         result = await self._session.execute(stmt)
