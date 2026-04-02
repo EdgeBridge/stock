@@ -204,6 +204,9 @@ class PipelineConfig:
         default_factory=lambda: ["strong_uptrend", "uptrend"],
     )
 
+    # Sector concentration limit
+    max_sector_pct: float = 1.0  # Max portfolio % in any single sector (1.0 = no cap)
+
     # Strategy config path
     strategy_config_path: str | None = None
 
@@ -221,6 +224,7 @@ class _Position:
     take_profit_pct: float
     session: str = "regular"  # "regular" or "extended"
     entry_day_count: int = 0  # day_count at entry (for min hold check)
+    sector: str = ""  # GICS sector for concentration tracking
 
 
 @dataclass
@@ -353,6 +357,9 @@ class FullPipelineBacktest:
         # Daily buy limit tracking
         self._daily_buy_count: int = 0
         self._daily_buy_date: str = ""
+
+        # Sector concentration tracking
+        self._sector_cache: dict[str, str] = {}  # symbol → sector
 
     async def run(
         self,
@@ -1348,6 +1355,20 @@ class FullPipelineBacktest:
     # Execution
     # ------------------------------------------------------------------
 
+    def _get_sector(self, symbol: str) -> str:
+        """Look up GICS sector for a symbol (cached)."""
+        if symbol in self._sector_cache:
+            return self._sector_cache[symbol]
+        try:
+            import yfinance as yf
+            info = yf.Ticker(symbol).info
+            sector = info.get("sector", "")
+            self._sector_cache[symbol] = sector
+            return sector
+        except Exception:
+            self._sector_cache[symbol] = ""
+            return ""
+
     def _effective_slippage(self, volume: float, quantity: int) -> float:
         """Return slippage pct adjusted by participation rate if enabled."""
         base = self._config.slippage_pct
@@ -1444,6 +1465,19 @@ class FullPipelineBacktest:
         if cost > self._cash:
             return
 
+        # Sector concentration check
+        if cfg.max_sector_pct < 1.0:
+            sector = self._get_sector(symbol)
+            if sector:
+                sector_value = sum(
+                    p.quantity * p.avg_price
+                    for p in self._positions.values()
+                    if p.sector == sector
+                    and p.strategy_name not in {"cash_parking", "etf_leverage", "etf_inverse"}
+                )
+                if (sector_value + cost) / equity > cfg.max_sector_pct:
+                    return
+
         # Determine dynamic SL/TP
         if cfg.dynamic_sl_tp:
             atr_col = None
@@ -1476,6 +1510,7 @@ class FullPipelineBacktest:
             stop_loss_pct=sl_pct,
             take_profit_pct=tp_pct,
             entry_day_count=self._day_count,
+            sector=self._get_sector(symbol) if cfg.max_sector_pct < 1.0 else "",
         )
 
     def _execute_sell(
