@@ -21,13 +21,15 @@ from strategies.combiner import SignalCombiner
 def _make_df(n=50):
     np.random.seed(42)
     close = 100 * np.cumprod(1 + np.random.normal(0.001, 0.01, n))
-    return pd.DataFrame({
-        "open": close * 0.999,
-        "high": close * 1.01,
-        "low": close * 0.99,
-        "close": close,
-        "volume": np.random.randint(100_000, 500_000, n).astype(float),
-    })
+    return pd.DataFrame(
+        {
+            "open": close * 0.999,
+            "high": close * 1.01,
+            "low": close * 0.99,
+            "close": close,
+            "volume": np.random.randint(100_000, 500_000, n).astype(float),
+        }
+    )
 
 
 def _make_loop(disabled=None, min_confidence=None, min_active_ratio=None):
@@ -46,16 +48,24 @@ def _make_loop(disabled=None, min_confidence=None, min_active_ratio=None):
 
     # Create mock strategies
     strategies = []
-    for name in ["sector_rotation", "volume_profile", "volume_surge",
-                  "supertrend", "dual_momentum", "trend_following"]:
+    for name in [
+        "sector_rotation",
+        "volume_profile",
+        "volume_surge",
+        "supertrend",
+        "dual_momentum",
+        "trend_following",
+    ]:
         s = AsyncMock()
         s.name = name
-        s.analyze = AsyncMock(return_value=Signal(
-            signal_type=SignalType.HOLD,
-            confidence=0.0,
-            strategy_name=name,
-            reason="test",
-        ))
+        s.analyze = AsyncMock(
+            return_value=Signal(
+                signal_type=SignalType.HOLD,
+                confidence=0.0,
+                strategy_name=name,
+                reason="test",
+            )
+        )
         strategies.append(s)
 
     registry = MagicMock()
@@ -106,15 +116,25 @@ class TestDisabledStrategies:
         assert isinstance(loop._disabled_strategies, frozenset)
         assert "supertrend" in loop._disabled_strategies
 
-    def test_us_optimal_only_3_strategies(self):
-        """STOCK-66 US grid search optimal: only sector_rotation + volume_profile + volume_surge."""
+    def test_us_optimal_only_2_strategies(self):
+        """STOCK-79 US enabled set: only dual_momentum + volume_surge (supersedes STOCK-66)."""
         _all = [
-            "trend_following", "donchian_breakout", "supertrend", "macd_histogram",
-            "dual_momentum", "rsi_divergence", "bollinger_squeeze", "volume_profile",
-            "regime_switch", "sector_rotation", "cis_momentum", "larry_williams",
-            "bnf_deviation", "volume_surge",
+            "trend_following",
+            "donchian_breakout",
+            "supertrend",
+            "macd_histogram",
+            "dual_momentum",
+            "rsi_divergence",
+            "bollinger_squeeze",
+            "volume_profile",
+            "regime_switch",
+            "sector_rotation",
+            "cis_momentum",
+            "larry_williams",
+            "bnf_deviation",
+            "volume_surge",
         ]
-        _us_enabled = {"sector_rotation", "volume_profile", "volume_surge"}
+        _us_enabled = {"dual_momentum", "volume_surge"}
         disabled = frozenset(s for s in _all if s not in _us_enabled)
         loop = _make_loop(disabled=list(disabled))
         active = loop._get_active_strategies()
@@ -146,8 +166,12 @@ class TestCombinerOverrides:
         loop._combiner = combiner_spy
 
         signals = [
-            Signal(signal_type=SignalType.BUY, confidence=0.35,
-                   strategy_name="sector_rotation", reason="test"),
+            Signal(
+                signal_type=SignalType.BUY,
+                confidence=0.35,
+                strategy_name="sector_rotation",
+                reason="test",
+            ),
         ]
         weights = {"sector_rotation": 1.0}
 
@@ -162,8 +186,12 @@ class TestCombinerOverrides:
         loop._combiner = combiner_spy
 
         signals = [
-            Signal(signal_type=SignalType.BUY, confidence=0.50,
-                   strategy_name="sector_rotation", reason="test"),
+            Signal(
+                signal_type=SignalType.BUY,
+                confidence=0.50,
+                strategy_name="sector_rotation",
+                reason="test",
+            ),
         ]
         weights = {"sector_rotation": 1.0}
 
@@ -196,27 +224,27 @@ class TestUSRiskParams:
 
 class TestIntegrationEvaluateSymbol:
     async def test_evaluate_uses_active_strategies_only(self):
-        """evaluate_symbol should only run strategies not in disabled set."""
+        """evaluate_symbol should only run strategies not in disabled set (STOCK-79 config)."""
         loop = _make_loop(
-            disabled=["supertrend", "dual_momentum", "trend_following"],
+            disabled=["supertrend", "sector_rotation", "trend_following", "volume_profile"],
             min_confidence=0.30,
             min_active_ratio=0.0,
         )
-        # Set BUY signal for sector_rotation
+        # Set BUY signal for dual_momentum (active under STOCK-79)
         for s in loop._registry.get_enabled.return_value:
-            if s.name == "sector_rotation":
+            if s.name == "dual_momentum":
                 s.analyze.return_value = Signal(
                     signal_type=SignalType.BUY,
                     confidence=0.80,
-                    strategy_name="sector_rotation",
-                    reason="strong sector momentum",
+                    strategy_name="dual_momentum",
+                    reason="strong momentum signal",
                 )
 
         await loop.evaluate_symbol("AAPL")
 
         # Only active strategies should have analyze() called
         for s in loop._registry.get_enabled.return_value:
-            if s.name in {"supertrend", "dual_momentum", "trend_following"}:
+            if s.name in {"supertrend", "sector_rotation", "trend_following", "volume_profile"}:
                 s.analyze.assert_not_called()
-            elif s.name in {"sector_rotation", "volume_profile", "volume_surge"}:
+            elif s.name in {"dual_momentum", "volume_surge"}:
                 s.analyze.assert_called_once()
