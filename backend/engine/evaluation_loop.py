@@ -84,6 +84,7 @@ class EvaluationLoop:
         self._exchange_resolver = exchange_resolver or ExchangeResolver()
         self._position_tracker = position_tracker
         self._market = market
+        # Phase 4 will use account_id for multi-account order routing and logging
         self._account_id = account_id
         self._event_calendar = event_calendar
         self._other_market_data: MarketDataService | None = None

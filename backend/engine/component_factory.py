@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from data.market_data_service import MarketDataService
 from engine.order_manager import OrderManager
@@ -52,9 +52,6 @@ from exchange.adapter_registry import AdapterRegistry
 from exchange.base import ExchangeAdapter
 from services.exchange_resolver import ExchangeResolver
 from services.rate_limiter import RateLimiter
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +118,8 @@ class EngineComponentFactory:
         self._default_risk_params = default_risk_params or RiskParams()
         # Cache: (account_id, market) -> EngineComponents
         self._cache: dict[str, EngineComponents] = {}
+        # Shared RateLimiter per account (same KIS API key across US+KR markets)
+        self._rate_limiters: dict[str, RateLimiter] = {}
         logger.info(
             "EngineComponentFactory initialised (accounts=%s)",
             [acc.account_id for acc in adapter_registry.list_accounts()],
@@ -156,6 +155,16 @@ class EngineComponentFactory:
         """
         cache_key = f"{account_id}:{market}"
         if cache_key in self._cache:
+            if risk_params is not None:
+                cached = self._cache[cache_key]
+                if risk_params is not cached.risk_manager._params:
+                    logger.warning(
+                        "EngineComponentFactory.create() called with risk_params for "
+                        "already-cached account=%s market=%s — cached params are "
+                        "returned unchanged. Call before first create() to take effect.",
+                        account_id,
+                        market,
+                    )
             return self._cache[cache_key]
 
         components = self._build(account_id, market, risk_params)
@@ -202,10 +211,13 @@ class EngineComponentFactory:
                 f"market={market!r}. Supported markets: {account.markets}"
             )
 
-        # Rate limiter: paper = 5 req/sec, live = 20 req/sec
+        # Rate limiter: shared per account (same KIS API key for US+KR)
+        # paper = 5 req/sec, live = 20 req/sec
         is_paper = account.is_paper if account is not None else True
-        rate_limit = _RATE_LIMIT_PAPER if is_paper else _RATE_LIMIT_LIVE
-        rate_limiter = RateLimiter(max_per_second=rate_limit)
+        if account_id not in self._rate_limiters:
+            rate_limit = _RATE_LIMIT_PAPER if is_paper else _RATE_LIMIT_LIVE
+            self._rate_limiters[account_id] = RateLimiter(max_per_second=rate_limit)
+        rate_limiter = self._rate_limiters[account_id]
 
         market_data = MarketDataService(
             adapter=adapter,
