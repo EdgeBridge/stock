@@ -2,10 +2,12 @@
 
 import logging
 from datetime import date, datetime, timedelta
+from typing import Optional
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 
+from api.accounts import validate_account_id_or_404
 from data.stock_name_service import get_name, resolve_names
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
@@ -25,15 +27,30 @@ def init_portfolio(session_factory):
 
 
 @router.get("/summary")
-async def portfolio_summary(request: Request, market: str = "ALL"):
+async def portfolio_summary(
+    request: Request,
+    market: str = "ALL",
+    account_id: Optional[str] = Depends(validate_account_id_or_404),
+) -> dict:
     """Get portfolio summary: balance + positions + PnL.
 
     market=ALL returns unified view with total_equity in KRW (USD converted).
+    account_id is validated against configured accounts; unknown IDs return 404.
+    account_id omitted → all-accounts summary (current single-adapter behaviour).
+    NOTE: per-account data isolation requires multi-adapter support (future work);
+    until then account_id is accepted for validation only — the returned data
+    reflects all accounts regardless of which account_id is provided.
     """
+    if account_id is not None:
+        logger.warning(
+            "account_id=%s provided to /portfolio/summary but per-account "
+            "filtering is not yet implemented; returning all-accounts view.",
+            account_id,
+        )
     if market == "ALL":
         return await _combined_summary(request)
 
-    md = _get_market_data(request, market)
+    md = get_market_data(request, market)
     if not md:
         return {"error": f"Market {market} not configured"}
 
@@ -189,31 +206,47 @@ async def _combined_summary(request: Request) -> dict:
 
 
 @router.get("/positions")
-async def list_positions(request: Request, market: str = "ALL"):
-    """List all current positions. market=ALL returns both US and KR."""
+async def list_positions(
+    request: Request,
+    market: str = "ALL",
+    account_id: Optional[str] = Depends(validate_account_id_or_404),
+):
+    """List all current positions. market=ALL returns both US and KR.
+
+    account_id is validated against configured accounts; unknown IDs return 404.
+    NOTE: per-account data isolation requires multi-adapter support (future work);
+    until then account_id is accepted for validation only — the returned data
+    reflects all accounts regardless of which account_id is provided.
+    """
+    if account_id is not None:
+        logger.warning(
+            "account_id=%s provided to /portfolio/positions but per-account "
+            "filtering is not yet implemented; returning all-accounts view.",
+            account_id,
+        )
     if market == "ALL":
         results = []
         for m in ("US", "KR"):
-            md = _get_market_data(request, m)
+            md = get_market_data(request, m)
             if not md:
                 continue
             try:
                 positions = await md.get_positions()
-                results.extend(await _enrich_positions(positions, m, request))
+                results.extend(await enrich_positions(positions, m, request))
             except Exception as e:
                 logger.warning("Position fetch failed for %s market: %s", m, e)
                 continue
         return results
 
-    md = _get_market_data(request, market)
+    md = get_market_data(request, market)
     if not md:
         return []
 
     positions = await md.get_positions()
-    return await _enrich_positions(positions, market, request)
+    return await enrich_positions(positions, market, request)
 
 
-async def _enrich_positions(positions, market: str, request: Request) -> list[dict]:
+async def enrich_positions(positions, market: str, request: Request) -> list[dict]:
     """Build position dicts with names and SL/TP info from position tracker."""
     # Resolve missing names in background
     unknown = [p.symbol for p in positions if not get_name(p.symbol, market)]
@@ -692,7 +725,7 @@ def _empty_summary():
     }
 
 
-def _get_market_data(request: Request, market: str = "US"):
+def get_market_data(request: Request, market: str = "US"):
     """Get market data service for the specified market."""
     if market == "KR":
         return getattr(request.app.state, "kr_market_data", None)

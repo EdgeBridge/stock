@@ -1,0 +1,68 @@
+"""Positions API endpoint — account-scoped live positions.
+
+GET /positions?account_id=X&market=ALL
+
+- account_id: optional; if provided must match a configured account (→ 404 if not)
+- market: "US" | "KR" | "ALL" (default "ALL")
+
+For the current single-adapter deployment, all configured accounts share the
+same market-data adapters, so the live position data returned is identical
+regardless of account_id.  The parameter is validated for correctness and
+kept for future per-account adapter routing.
+"""
+
+import logging
+from typing import Literal, Optional
+
+from fastapi import APIRouter, Depends, Request
+
+from api.accounts import validate_account_id_or_404
+from api.portfolio import enrich_positions, get_market_data
+
+router = APIRouter(prefix="/positions", tags=["positions"])
+logger = logging.getLogger(__name__)
+
+
+@router.get("/")
+async def get_positions(
+    request: Request,
+    market: Literal["US", "KR", "ALL"] = "ALL",
+    account_id: Optional[str] = Depends(validate_account_id_or_404),
+) -> list[dict]:
+    """Return live positions, optionally filtered by account and market.
+
+    account_id is validated against configured accounts; unknown IDs return 404.
+    market=ALL returns combined US + KR positions.
+    NOTE: per-account data isolation requires multi-adapter support (future work);
+    until then account_id is accepted for validation only — the returned data
+    reflects all accounts regardless of which account_id is provided.
+    """
+    if account_id is not None:
+        logger.warning(
+            "account_id=%s provided to GET /positions but per-account "
+            "filtering is not yet implemented; returning all-accounts view.",
+            account_id,
+        )
+    if market == "ALL":
+        results: list[dict] = []
+        for m in ("US", "KR"):
+            md = get_market_data(request, m)
+            if not md:
+                continue
+            try:
+                positions = await md.get_positions()
+                results.extend(await enrich_positions(positions, m, request))
+            except Exception as e:
+                logger.warning("Position fetch failed for %s market: %s", m, e)
+        return results
+
+    md = get_market_data(request, market)
+    if not md:
+        return []
+
+    try:
+        positions = await md.get_positions()
+        return await enrich_positions(positions, market, request)
+    except Exception as e:
+        logger.warning("Position fetch failed for %s market: %s", market, e)
+        return []

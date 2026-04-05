@@ -134,6 +134,7 @@ class TradeRepository:
         symbol: str | None = None,
         exclude_paper: bool = False,
         account_id: str | None = None,
+        market: str | None = None,
     ) -> list[Order]:
         stmt = select(Order).order_by(desc(Order.created_at))
         if symbol:
@@ -142,6 +143,8 @@ class TradeRepository:
             stmt = stmt.where(Order.is_paper == False)  # noqa: E712
         if account_id is not None:
             stmt = stmt.where(Order.account_id == account_id)
+        if market is not None:
+            stmt = stmt.where(Order.market == market)
         stmt = stmt.offset(offset).limit(limit)
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
