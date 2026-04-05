@@ -206,8 +206,24 @@ async def _combined_summary(request: Request) -> dict:
 
 
 @router.get("/positions")
-async def list_positions(request: Request, market: str = "ALL"):
-    """List all current positions. market=ALL returns both US and KR."""
+async def list_positions(
+    request: Request,
+    market: str = "ALL",
+    account_id: Optional[str] = Depends(validate_account_id_or_404),
+):
+    """List all current positions. market=ALL returns both US and KR.
+
+    account_id is validated against configured accounts; unknown IDs return 404.
+    NOTE: per-account data isolation requires multi-adapter support (future work);
+    until then account_id is accepted for validation only — the returned data
+    reflects all accounts regardless of which account_id is provided.
+    """
+    if account_id is not None:
+        logger.warning(
+            "account_id=%s provided to /portfolio/positions but per-account "
+            "filtering is not yet implemented; returning all-accounts view.",
+            account_id,
+        )
     if market == "ALL":
         results = []
         for m in ("US", "KR"):

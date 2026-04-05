@@ -124,23 +124,20 @@ class TestIsValidAccountId:
 
 
 class TestValidateAccountIdOrDefault:
-    @pytest.mark.asyncio
-    async def test_none_returns_none(self):
-        result = await validate_account_id_or_404(account_id=None)
+    def test_none_returns_none(self):
+        result = validate_account_id_or_404(account_id=None)
         assert result is None
 
-    @pytest.mark.asyncio
-    async def test_valid_account_id_returned(self):
+    def test_valid_account_id_returned(self):
         with patch("api.accounts.load_accounts", return_value=MOCK_ACCOUNTS):
-            result = await validate_account_id_or_404(account_id="ACC001")
+            result = validate_account_id_or_404(account_id="ACC001")
         assert result == "ACC001"
 
-    @pytest.mark.asyncio
-    async def test_unknown_account_raises_404(self):
+    def test_unknown_account_raises_404(self):
         from fastapi import HTTPException
 
         with patch("api.accounts.load_accounts", return_value=MOCK_ACCOUNTS):
             with pytest.raises(HTTPException) as exc_info:
-                await validate_account_id_or_404(account_id="UNKNOWN")
+                validate_account_id_or_404(account_id="UNKNOWN")
         assert exc_info.value.status_code == 404
         assert "UNKNOWN" in exc_info.value.detail

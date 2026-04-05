@@ -33,7 +33,16 @@ async def get_positions(
 
     account_id is validated against configured accounts; unknown IDs return 404.
     market=ALL returns combined US + KR positions.
+    NOTE: per-account data isolation requires multi-adapter support (future work);
+    until then account_id is accepted for validation only — the returned data
+    reflects all accounts regardless of which account_id is provided.
     """
+    if account_id is not None:
+        logger.warning(
+            "account_id=%s provided to GET /positions but per-account "
+            "filtering is not yet implemented; returning all-accounts view.",
+            account_id,
+        )
     if market == "ALL":
         results: list[dict] = []
         for m in ("US", "KR"):

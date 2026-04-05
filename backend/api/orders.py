@@ -1,13 +1,16 @@
 """Orders API endpoint — account-scoped order/trade history from DB.
 
-GET /orders?account_id=X&market=ALL&limit=50&offset=0
+GET /orders?account_id=X&market=US|KR|ALL&limit=50&offset=0
 
 - account_id: optional; if provided must match a configured account (→ 404 if not)
-- market: "US" | "KR" | "ALL" (default "ALL")
+- market: "US" | "KR" | "ALL" (default None = all markets)
 - limit/offset: pagination (default 50, max 200)
 
 Reads directly from the DB via TradeRepository. Borrows the session factory
 from api.trades (set by main.py lifespan via init_trades()).
+
+Market filter is pushed down to the DB query so that limit/offset pagination
+applies to the already-filtered set (not to the full mixed-market result set).
 """
 
 import logging
@@ -33,7 +36,8 @@ async def get_orders(
     """Return order history from DB, optionally filtered by account and market.
 
     account_id is validated against configured accounts; unknown IDs return 404.
-    market filter applies post-query (Python-level) on dict representation.
+    market filter is applied at DB level so limit/offset paginate the filtered set.
+    Omitting market (or passing "ALL") returns orders for all markets.
     """
     from api.trades import _session_factory
 
@@ -44,6 +48,9 @@ async def get_orders(
         )
         return []
 
+    # Normalise "ALL" to None so the repository returns all markets
+    db_market = market if market and market != "ALL" else None
+
     try:
         async with _session_factory() as session:
             repo = TradeRepository(session)
@@ -51,18 +58,13 @@ async def get_orders(
                 limit=limit,
                 offset=offset,
                 account_id=account_id,
+                market=db_market,
             )
             # Materialise to plain dicts while the session is still open.
             # SQLAlchemy async ORM objects become detached after session close;
             # accessing attributes outside the session raises MissingGreenlet
             # for any lazily-loaded column or relationship.
-            order_dicts = [order_to_dict(o) for o in orders]
-
-        # Apply optional market filter on plain dicts (safe after session close)
-        if market and market != "ALL":
-            order_dicts = [o for o in order_dicts if o.get("market") == market]
-
-        return order_dicts
+            return [order_to_dict(o) for o in orders]
     except Exception as e:
-        logger.warning("Failed to fetch orders from DB: %s", e)
+        logger.error("Failed to fetch orders from DB: %s", e)
         return []

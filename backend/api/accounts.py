@@ -8,7 +8,7 @@ portfolio.py to validate account_id parameters.
 """
 
 import logging
-from typing import Optional
+from typing import Optional, TypedDict
 
 from fastapi import APIRouter, HTTPException
 
@@ -17,25 +17,35 @@ from config.accounts import load_accounts
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 logger = logging.getLogger(__name__)
 
+
+class AccountInfo(TypedDict):
+    """Public account metadata (no credentials)."""
+
+    account_id: str
+    name: str
+    markets: list[str]
+    is_paper: bool
+
+
 # Module-level cache — accounts config is static for the lifetime of the process.
 # TODO: if hot-reload of accounts.yaml is ever required (similar to strategies.yaml),
 #   expose a cache-invalidation hook (e.g. reset_accounts_cache()) and call it from
 #   the reload signal handler so that new accounts become visible without restart.
-_accounts_cache: list[dict] | None = None
+_accounts_cache: list[AccountInfo] | None = None
 
 
-def _get_accounts() -> list[dict]:
+def _get_accounts() -> list[AccountInfo]:
     """Return cached account list (excludes sensitive fields)."""
     global _accounts_cache
     if _accounts_cache is None:
         raw = load_accounts()
         _accounts_cache = [
-            {
-                "account_id": a.account_id,
-                "name": a.name,
-                "markets": a.markets,
-                "is_paper": a.is_paper,
-            }
+            AccountInfo(
+                account_id=a.account_id,
+                name=a.name,
+                markets=a.markets,
+                is_paper=a.is_paper,
+            )
             for a in raw
         ]
     return _accounts_cache
@@ -46,11 +56,12 @@ def is_valid_account_id(account_id: str) -> bool:
     return any(a["account_id"] == account_id for a in _get_accounts())
 
 
-async def validate_account_id_or_404(
+def validate_account_id_or_404(
     account_id: Optional[str] = None,
 ) -> Optional[str]:
     """FastAPI dependency: validate account_id query param.
 
+    Synchronous — all work is a list scan over the in-memory cache, no I/O.
     Raises HTTP 404 when an unknown account_id is provided.
     Returns the account_id unchanged (or None when omitted).
     """
@@ -63,6 +74,6 @@ async def validate_account_id_or_404(
 
 
 @router.get("/")
-async def list_accounts() -> list[dict]:
+async def list_accounts() -> list[AccountInfo]:
     """Return configured accounts (no sensitive credentials)."""
     return _get_accounts()

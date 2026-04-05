@@ -228,6 +228,8 @@ class TestGetOrdersMarketFilter:
         return patches, TestClient(app)
 
     def test_market_us_filter(self, app, mock_orders):
+        """market=US passes market='US' to get_trade_history (DB-level filter)."""
+        us_orders = [mock_orders[0]]  # simulate DB returning only US orders
         mock_sf = MagicMock()
         session_ctx = AsyncMock()
         session_ctx.__aenter__ = AsyncMock(return_value=session_ctx)
@@ -235,7 +237,7 @@ class TestGetOrdersMarketFilter:
         mock_sf.return_value = session_ctx
 
         mock_repo = AsyncMock()
-        mock_repo.get_trade_history = AsyncMock(return_value=mock_orders)
+        mock_repo.get_trade_history = AsyncMock(return_value=us_orders)
 
         with patch("api.accounts.load_accounts", return_value=MOCK_ACCOUNTS):
             with patch("api.trades._session_factory", mock_sf):
@@ -245,9 +247,15 @@ class TestGetOrdersMarketFilter:
 
         assert resp.status_code == 200
         data = resp.json()
-        assert all(d["market"] == "US" for d in data)
+        assert len(data) == 1
+        assert data[0]["market"] == "US"
+        # Verify market filter was pushed to DB
+        call_kwargs = mock_repo.get_trade_history.call_args.kwargs
+        assert call_kwargs.get("market") == "US"
 
     def test_market_kr_filter(self, app, mock_orders):
+        """market=KR passes market='KR' to get_trade_history (DB-level filter)."""
+        kr_orders = [mock_orders[1]]  # simulate DB returning only KR orders
         mock_sf = MagicMock()
         session_ctx = AsyncMock()
         session_ctx.__aenter__ = AsyncMock(return_value=session_ctx)
@@ -255,7 +263,7 @@ class TestGetOrdersMarketFilter:
         mock_sf.return_value = session_ctx
 
         mock_repo = AsyncMock()
-        mock_repo.get_trade_history = AsyncMock(return_value=mock_orders)
+        mock_repo.get_trade_history = AsyncMock(return_value=kr_orders)
 
         with patch("api.accounts.load_accounts", return_value=MOCK_ACCOUNTS):
             with patch("api.trades._session_factory", mock_sf):
@@ -265,9 +273,14 @@ class TestGetOrdersMarketFilter:
 
         assert resp.status_code == 200
         data = resp.json()
-        assert all(d["market"] == "KR" for d in data)
+        assert len(data) == 1
+        assert data[0]["market"] == "KR"
+        # Verify market filter was pushed to DB
+        call_kwargs = mock_repo.get_trade_history.call_args.kwargs
+        assert call_kwargs.get("market") == "KR"
 
     def test_market_all_returns_both(self, app, mock_orders):
+        """market=ALL passes market=None to get_trade_history (no DB filter)."""
         mock_sf = MagicMock()
         session_ctx = AsyncMock()
         session_ctx.__aenter__ = AsyncMock(return_value=session_ctx)
@@ -286,3 +299,6 @@ class TestGetOrdersMarketFilter:
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) == 2
+        # "ALL" normalises to None at DB level (no market WHERE clause)
+        call_kwargs = mock_repo.get_trade_history.call_args.kwargs
+        assert call_kwargs.get("market") is None
