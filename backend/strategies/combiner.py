@@ -132,14 +132,16 @@ class SignalCombiner:
             total_weight += w
 
             if signal.signal_type == SignalType.BUY:
-                weighted_conf = signal.confidence * w
+                # Quadratic confidence weighting: strong signals (0.9) get 4x
+                # more influence than weak ones (0.45), amplifying conviction.
+                weighted_conf = (signal.confidence ** 2) * w
                 buy_score += weighted_conf
                 active_weight += w
                 reasons.append(f"+{signal.strategy_name}({signal.confidence:.0%})")
                 if weighted_conf > top_buy[0]:
                     top_buy = (weighted_conf, signal.strategy_name)
             elif signal.signal_type == SignalType.SELL:
-                weighted_conf = signal.confidence * w
+                weighted_conf = (signal.confidence ** 2) * w
                 sell_score += weighted_conf
                 active_weight += w
                 reasons.append(f"-{signal.strategy_name}({signal.confidence:.0%})")

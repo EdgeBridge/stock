@@ -129,9 +129,9 @@ class TestSignalCombiner:
         ]
         weights = {"a": 0.5, "b": 0.5}
         result = combiner.combine(signals, weights)
-        # HOLD excluded from denominator: buy_norm = 0.4/0.5 = 0.8 → BUY
+        # HOLD excluded: buy_norm = (0.8² * 0.5) / 0.5 = 0.64 → BUY
         assert result.signal_type == SignalType.BUY
-        assert result.confidence == pytest.approx(0.8)
+        assert result.confidence == pytest.approx(0.64)
 
     def test_active_ratio_too_low(self):
         combiner = SignalCombiner(min_active_ratio=0.50)
@@ -154,12 +154,13 @@ class TestConsensusSignalCombiner:
     def test_consensus_disabled_by_default(self):
         """Without consensus config, BUY side with higher weight wins."""
         combiner = SignalCombiner()
-        # BUY weight=0.35 vs SELL weight=0.25 → BUY wins (min_confidence=0.35)
+        # BUY weight=0.35 vs SELL weight=0.25 → BUY wins
+        # With quadratic weighting: 0.85²=0.7225, buy_norm > 0.35 threshold
         signals = [
-            _signal("rsi_divergence", SignalType.BUY, 0.7),
-            _signal("bnf_deviation", SignalType.SELL, 0.7),
-            _signal("bollinger_squeeze", SignalType.BUY, 0.7),
-            _signal("macd_histogram", SignalType.SELL, 0.7),
+            _signal("rsi_divergence", SignalType.BUY, 0.85),
+            _signal("bnf_deviation", SignalType.SELL, 0.85),
+            _signal("bollinger_squeeze", SignalType.BUY, 0.85),
+            _signal("macd_histogram", SignalType.SELL, 0.85),
         ]
         weights = {
             "rsi_divergence": 0.20,
@@ -457,9 +458,10 @@ class TestMinActiveRatioOverride:
         # With min_active_ratio=0.15: active = SELL weight 0.35, total 1.0
         # active_ratio = 0.35 > 0.15 ✓
         # sell_norm = sell_score / 0.35, buy_norm = 0 → SELL wins
+        # With quadratic weighting: 0.7²=0.49, 0.65²=0.4225, 0.6²=0.36
         result = combiner.combine(signals, weights, min_active_ratio=0.15)
         assert result.signal_type == SignalType.SELL
-        assert result.confidence > 0.5
+        assert result.confidence > 0.35
 
     def test_exit_mode_single_sell_blocked_by_active_ratio(self):
         """Single SELL signal should be blocked by exit min_active_ratio.
@@ -531,15 +533,16 @@ class TestMinActiveRatioOverride:
         """
         combiner = SignalCombiner()
         # Realistic scenario: 5 BUY (trend up) vs 3 SELL (exit detected)
+        # High confidence to ensure normalized scores exceed min_confidence
         signals = [
-            _signal("trend_following", SignalType.BUY, 0.8),
-            _signal("dual_momentum", SignalType.BUY, 0.7),
-            _signal("donchian_breakout", SignalType.BUY, 0.7),
-            _signal("cis_momentum", SignalType.BUY, 0.6),
-            _signal("larry_williams", SignalType.BUY, 0.6),
-            _signal("supertrend", SignalType.SELL, 0.7),
-            _signal("rsi_divergence", SignalType.SELL, 0.65),
-            _signal("bnf_deviation", SignalType.SELL, 0.6),
+            _signal("trend_following", SignalType.BUY, 0.90),
+            _signal("dual_momentum", SignalType.BUY, 0.85),
+            _signal("donchian_breakout", SignalType.BUY, 0.85),
+            _signal("cis_momentum", SignalType.BUY, 0.80),
+            _signal("larry_williams", SignalType.BUY, 0.80),
+            _signal("supertrend", SignalType.SELL, 0.85),
+            _signal("rsi_divergence", SignalType.SELL, 0.80),
+            _signal("bnf_deviation", SignalType.SELL, 0.75),
         ]
         weights = {
             "trend_following": 0.15,
@@ -584,17 +587,17 @@ class TestHeldSellBias:
         combiner = SignalCombiner()
         signals = [
             _signal("trend_following", SignalType.HOLD, 0.5),
-            _signal("rsi_divergence", SignalType.SELL, 0.3),
+            _signal("rsi_divergence", SignalType.SELL, 0.5),
         ]
         weights = {"trend_following": 0.15, "rsi_divergence": 0.15}
 
-        # Without bias: SELL conf=0.30 < 0.35 threshold → HOLD
+        # Without bias: SELL conf²=0.25 < 0.35 threshold → HOLD
         result_no_bias = combiner.combine(signals, weights, min_confidence=0.35)
         assert result_no_bias.signal_type == SignalType.HOLD
 
-        # With bias=0.10: sell_norm becomes 0.30+0.10=0.40 ≥ 0.35 → SELL
+        # With bias=0.15: sell_norm becomes 0.25+0.15=0.40 ≥ 0.35 → SELL
         result_bias = combiner.combine(
-            signals, weights, min_confidence=0.35, held_sell_bias=0.10,
+            signals, weights, min_confidence=0.35, held_sell_bias=0.15,
         )
         assert result_bias.signal_type == SignalType.SELL
 
@@ -619,7 +622,7 @@ class TestHeldSellBias:
         signals = [
             _signal("trend_following", SignalType.HOLD, 0.5),
             _signal("supertrend", SignalType.HOLD, 0.5),
-            _signal("rsi_divergence", SignalType.SELL, 0.25),
+            _signal("rsi_divergence", SignalType.SELL, 0.40),
         ]
         weights = {
             "trend_following": 0.15,
@@ -627,11 +630,52 @@ class TestHeldSellBias:
             "rsi_divergence": 0.10,
         }
 
-        # Low SELL conf + bias + low threshold → SELL
+        # SELL conf²=0.16 + bias=0.15 = 0.31 ≥ 0.25 → SELL
         result = combiner.combine(
             signals, weights,
             min_confidence=0.25,
-            held_sell_bias=0.10,
+            held_sell_bias=0.15,
             min_active_ratio=0.15,
         )
         assert result.signal_type == SignalType.SELL
+
+
+class TestQuadraticConvictionWeighting:
+    """Tests for confidence² weighting that amplifies strong signals."""
+
+    def test_high_conf_signal_dominates_low_conf(self):
+        """A single 0.90 confidence BUY should outweigh two 0.50 SELLs."""
+        combiner = SignalCombiner()
+        signals = [
+            _signal("a", SignalType.BUY, 0.90),   # 0.81 quadratic
+            _signal("b", SignalType.SELL, 0.50),   # 0.25 quadratic
+            _signal("c", SignalType.SELL, 0.50),   # 0.25 quadratic
+        ]
+        weights = {"a": 0.40, "b": 0.30, "c": 0.30}
+        result = combiner.combine(signals, weights, min_confidence=0.30)
+        assert result.signal_type == SignalType.BUY
+
+    def test_low_conf_signals_suppressed(self):
+        """Low confidence signals (< 0.6) are heavily suppressed by squaring."""
+        combiner = SignalCombiner()
+        signals = [
+            _signal("a", SignalType.BUY, 0.40),   # 0.16 quadratic
+            _signal("b", SignalType.BUY, 0.45),   # 0.2025 quadratic
+        ]
+        weights = {"a": 0.50, "b": 0.50}
+        result = combiner.combine(signals, weights, min_confidence=0.35)
+        assert result.signal_type == SignalType.HOLD
+
+    def test_quadratic_vs_linear_differentiation(self):
+        """Quadratic weighting creates larger gap between high and low conviction."""
+        combiner = SignalCombiner()
+        high_conf = [_signal("a", SignalType.BUY, 0.90)]
+        low_conf = [_signal("a", SignalType.BUY, 0.50)]
+        weights = {"a": 1.0}
+
+        result_high = combiner.combine(high_conf, weights, min_confidence=0.10)
+        result_low = combiner.combine(low_conf, weights, min_confidence=0.10)
+
+        assert result_high.confidence == pytest.approx(0.81)
+        assert result_low.confidence == pytest.approx(0.25)
+        assert result_high.confidence / result_low.confidence > 3.0
