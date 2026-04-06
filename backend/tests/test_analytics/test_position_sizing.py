@@ -138,3 +138,61 @@ class TestQuantity:
         )
         qty = sizer.calculate_quantity(result, portfolio_value=100000, price=0)
         assert qty == 0
+
+
+class TestDrawdownAdjustment:
+    """Quick Win #3: Kelly sizing reduced during drawdowns."""
+
+    def test_no_drawdown_no_penalty(self, sizer):
+        result = sizer.calculate(
+            win_rate=0.60, avg_win=0.10, avg_loss=0.05,
+            max_drawdown=0.0,
+        )
+        result_dd = sizer.calculate(
+            win_rate=0.60, avg_win=0.10, avg_loss=0.05,
+            max_drawdown=0.0,
+        )
+        assert result.position_pct == result_dd.position_pct
+
+    def test_drawdown_reduces_position(self, sizer):
+        no_dd = sizer.calculate(
+            win_rate=0.60, avg_win=0.10, avg_loss=0.05,
+            max_drawdown=0.0,
+        )
+        with_dd = sizer.calculate(
+            win_rate=0.60, avg_win=0.10, avg_loss=0.05,
+            max_drawdown=0.15,
+        )
+        # 15% drawdown → 15% penalty on base_pct
+        assert with_dd.position_pct < no_dd.position_pct
+
+    def test_drawdown_penalty_capped_at_30pct(self, sizer):
+        dd_30 = sizer.calculate(
+            win_rate=0.60, avg_win=0.10, avg_loss=0.05,
+            max_drawdown=0.30,
+        )
+        dd_50 = sizer.calculate(
+            win_rate=0.60, avg_win=0.10, avg_loss=0.05,
+            max_drawdown=0.50,
+        )
+        # Both should have same penalty (capped at 30%)
+        assert dd_30.position_pct == dd_50.position_pct
+
+    def test_drawdown_proportional(self, sizer):
+        dd_10 = sizer.calculate(
+            win_rate=0.60, avg_win=0.10, avg_loss=0.05,
+            max_drawdown=0.10,
+        )
+        dd_20 = sizer.calculate(
+            win_rate=0.60, avg_win=0.10, avg_loss=0.05,
+            max_drawdown=0.20,
+        )
+        # 20% dd should have smaller position than 10% dd
+        assert dd_20.position_pct < dd_10.position_pct
+
+    def test_negative_kelly_ignores_drawdown(self, sizer):
+        result = sizer.calculate(
+            win_rate=0.30, avg_win=0.05, avg_loss=0.10,
+            max_drawdown=0.20,
+        )
+        assert result.final_allocation_pct == 0

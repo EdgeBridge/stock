@@ -130,7 +130,10 @@ class EvaluationLoop:
         self._min_active_ratio: float | None = None
         # Signal quality dynamic weighting: boost/suppress strategies by live profit factor
         self._quality_weight_enabled: bool = True
-        self._quality_min_trades: int = 10
+        self._quality_min_trades: int = 25
+        # Sector concentration limit (blocks BUY if sector > max_sector_pct of portfolio)
+        self._max_sector_pct: float = 0.40
+        self._sector_cache: dict[str, str] = {}  # symbol -> sector name
 
     def set_disabled_strategies(self, names: list[str]) -> None:
         """Set market-specific disabled strategy names."""
@@ -177,6 +180,53 @@ class EvaluationLoop:
         logger.info(
             "Market %s: min_hold_secs=%d (%.2fh)", self._market, value, value / 3600
         )
+
+    def set_max_sector_pct(self, value: float) -> None:
+        """Set maximum portfolio concentration per sector."""
+        self._max_sector_pct = value
+        logger.info("Market %s: max_sector_pct=%.0f%%", self._market, value * 100)
+
+    def set_sector_cache(self, cache: dict[str, str]) -> None:
+        """Set symbol → sector mapping for sector concentration checks."""
+        self._sector_cache = cache
+
+    def _get_sector(self, symbol: str) -> str:
+        """Look up sector for a symbol (cached)."""
+        return self._sector_cache.get(symbol, "Unknown")
+
+    def _check_sector_limit(
+        self,
+        symbol: str,
+        cost: float,
+        positions: list,
+        portfolio_value: float,
+    ) -> bool:
+        """Check if buying symbol would breach sector concentration limit.
+
+        Returns True if buy is allowed, False if blocked.
+        """
+        if self._max_sector_pct >= 1.0 or portfolio_value <= 0:
+            return True
+
+        sector = self._get_sector(symbol)
+        if sector == "Unknown":
+            return True  # Unknown sector → allow (don't block on missing data)
+
+        # Sum current exposure in this sector
+        sector_value = 0.0
+        for pos in positions:
+            if pos.quantity > 0 and self._get_sector(pos.symbol) == sector:
+                pos_price = getattr(pos, "current_price", 0) or getattr(pos, "avg_price", 0)
+                sector_value += pos_price * pos.quantity
+
+        new_sector_pct = (sector_value + cost) / portfolio_value
+        if new_sector_pct > self._max_sector_pct:
+            logger.info(
+                "Skipping BUY for %s: sector %s at %.1f%% (limit %.1f%%)",
+                symbol, sector, new_sector_pct * 100, self._max_sector_pct * 100,
+            )
+            return False
+        return True
 
     def set_quality_weight_enabled(self, enabled: bool) -> None:
         """Enable/disable signal quality dynamic weighting."""
@@ -1211,6 +1261,11 @@ class EvaluationLoop:
             balance = await self._market_data.get_balance()
             positions = await self._market_data.get_positions()
 
+            # Sector concentration check
+            est_cost = price * 10  # Rough estimate; will be refined by Kelly
+            if not self._check_sector_limit(symbol, est_cost, positions, balance.total):
+                return
+
             # Defense-in-depth: block buy if already holding via exchange
             # positions.  This catches duplicates even when position_tracker
             # is empty (e.g. after restart before restore_from_exchange).
@@ -1278,6 +1333,7 @@ class EvaluationLoop:
                 market=self._market,
                 combined_portfolio_value=combined_pv,
                 existing_position_value=existing_value,
+                max_drawdown=metrics.max_drawdown,
             )
 
             # Macro event sizing reduction (CPI/JOBS day = half size)

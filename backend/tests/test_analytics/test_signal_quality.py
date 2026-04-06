@@ -155,6 +155,42 @@ class TestQualityScore:
         assert metrics.quality_score == 0  # < 3 trades
 
 
+class TestMaxDrawdown:
+    def test_no_drawdown_all_wins(self, tracker):
+        _seed_trades(tracker, "winner", wins=10, losses=0)
+        metrics = tracker.get_metrics("winner")
+        assert metrics.max_drawdown == 0.0
+
+    def test_drawdown_after_losses(self, tracker):
+        # Win then lose: cumulative goes up then down
+        tracker.record_trade("strat", "AAPL", 0.10)  # +10%
+        tracker.record_trade("strat", "AAPL", -0.08)  # -8%
+        tracker.record_trade("strat", "AAPL", -0.05)  # -5%
+        metrics = tracker.get_metrics("strat")
+        assert metrics.max_drawdown > 0.10  # significant drawdown
+
+    def test_drawdown_single_trade(self, tracker):
+        tracker.record_trade("strat", "AAPL", -0.05)
+        metrics = tracker.get_metrics("strat")
+        assert metrics.max_drawdown == 0.0  # < 2 trades → 0
+
+    def test_drawdown_two_losses(self, tracker):
+        tracker.record_trade("strat", "AAPL", -0.05)
+        tracker.record_trade("strat", "AAPL", -0.05)
+        metrics = tracker.get_metrics("strat")
+        # cumulative: 0.95 → 0.9025, peak=1.0, dd = (1.0-0.9025)/1.0 ≈ 0.0975
+        assert metrics.max_drawdown == pytest.approx(0.0975, abs=0.001)
+
+    def test_recovery_resets_peak(self, tracker):
+        tracker.record_trade("strat", "AAPL", 0.20)   # up 20%
+        tracker.record_trade("strat", "AAPL", -0.10)  # down 10%
+        tracker.record_trade("strat", "AAPL", 0.20)   # back up
+        metrics = tracker.get_metrics("strat")
+        # Drawdown should be from peak after first win
+        assert metrics.max_drawdown > 0
+        assert metrics.max_drawdown < 0.15
+
+
 class TestLookback:
     def test_old_trades_excluded(self):
         tracker = SignalQualityTracker(lookback_days=30)

@@ -62,6 +62,7 @@ class KellyPositionSizer:
         signal_confidence: float = 0.5,
         factor_score: float = 0.0,
         portfolio_value: float = 100000,
+        max_drawdown: float = 0.0,
     ) -> KellyResult:
         """Calculate optimal position size.
 
@@ -100,6 +101,12 @@ class KellyPositionSizer:
 
         # Fractional Kelly
         base_pct = kelly * self._kelly_frac
+
+        # Drawdown penalty: reduce sizing during drawdowns
+        # max_drawdown 0% → no penalty, 15% → 15% reduction, 30%+ → 30% cap
+        if max_drawdown > 0:
+            dd_penalty = min(0.30, max_drawdown * 1.0)  # 1:1 ratio, cap 30%
+            base_pct *= (1.0 - dd_penalty)
 
         # Signal confidence boost: higher confidence → larger position
         # conf^exponent scales 0.5→0.25, 0.7→0.49, 0.9→0.81

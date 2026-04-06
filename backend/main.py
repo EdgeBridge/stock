@@ -509,6 +509,13 @@ async def lifespan(app: FastAPI):
     us_disabled = registry.config_loader.get_market_disabled_strategies("US")
     _warn_if_disabled_empty("US", us_disabled)
     evaluation_loop.set_disabled_strategies(us_disabled)
+    # Sector concentration: build sector cache from ETFUniverse top holdings
+    _sector_cache: dict[str, str] = {}
+    for sector_name, sector_etf in etf_universe.get_all_sectors().items():
+        for sym in sector_etf.top_holdings:
+            _sector_cache[sym] = sector_name
+    evaluation_loop.set_sector_cache(_sector_cache)
+    evaluation_loop.set_max_sector_pct(config.risk.max_sector_pct)
     evaluation_loop.set_min_confidence(0.30)
     evaluation_loop.set_min_active_ratio(0.0)
     app.state.evaluation_loop = evaluation_loop
@@ -1158,6 +1165,14 @@ async def lifespan(app: FastAPI):
             kospi_df = await kr_market_data.get_ohlcv("069500", limit=300)
             if spy_df.empty or kospi_df.empty:
                 return
+
+            # Calibrate VIX thresholds from recent history (Quick Win #5)
+            try:
+                vix_df = await market_data.get_ohlcv("^VIX", limit=300)
+                if not vix_df.empty and len(vix_df) >= 60:
+                    market_state_detector.calibrate_vix_thresholds(vix_df["close"])
+            except Exception as e:
+                logger.debug("VIX calibration skipped: %s", e)
 
             alloc = market_allocator.compute(
                 us_prices=spy_df["close"],

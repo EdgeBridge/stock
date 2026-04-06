@@ -363,6 +363,7 @@ class RiskManager:
         combined_portfolio_value: float | None = None,
         existing_position_value: float = 0.0,
         existing_symbol_exposure: float = 0.0,
+        max_drawdown: float = 0.0,
     ) -> PositionSizeResult:
         """Kelly-enhanced position sizing.
 
@@ -435,6 +436,7 @@ class RiskManager:
                 signal_confidence=signal_confidence,
                 factor_score=factor_score,
                 portfolio_value=portfolio_value,
+                max_drawdown=max_drawdown,
             )
 
             if kelly_result.final_allocation_pct > 0:

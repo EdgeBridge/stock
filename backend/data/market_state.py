@@ -11,6 +11,7 @@ import logging
 from dataclasses import dataclass
 from enum import Enum
 
+import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,10 @@ class MarketStateDetector:
         vix_caution_threshold: float = 25.0,
         vix_bear_threshold: float = 30.0,
         confirmation_days: int = 2,
+        use_vix_percentile: bool = False,
+        vix_bull_pctile: float = 20.0,
+        vix_caution_pctile: float = 70.0,
+        vix_bear_pctile: float = 85.0,
     ):
         self._sma_period = sma_period
         self._vix_bull = vix_bull_threshold
@@ -55,6 +60,32 @@ class MarketStateDetector:
         self._last_state: MarketState | None = None
         self._regime_streak = 0
         self._pending_regime: MarketRegime | None = None
+        # VIX percentile-based adaptive thresholds
+        self._use_vix_pctile = use_vix_percentile
+        self._vix_bull_pctile = vix_bull_pctile
+        self._vix_caution_pctile = vix_caution_pctile
+        self._vix_bear_pctile = vix_bear_pctile
+
+    def calibrate_vix_thresholds(self, vix_history: pd.Series) -> None:
+        """Calibrate VIX thresholds from historical percentiles.
+
+        Call once with 1-2 years of VIX daily close data. Subsequent
+        detect() calls will use the calibrated thresholds.
+        """
+        if len(vix_history) < 60:
+            logger.warning("VIX history too short (%d), keeping fixed thresholds", len(vix_history))
+            return
+        values = vix_history.dropna().values
+        self._vix_bull = float(np.percentile(values, self._vix_bull_pctile))
+        self._vix_caution = float(np.percentile(values, self._vix_caution_pctile))
+        self._vix_bear = float(np.percentile(values, self._vix_bear_pctile))
+        self._use_vix_pctile = True
+        logger.info(
+            "VIX thresholds calibrated: bull<%.1f (P%d), caution>%.1f (P%d), bear>%.1f (P%d)",
+            self._vix_bull, int(self._vix_bull_pctile),
+            self._vix_caution, int(self._vix_caution_pctile),
+            self._vix_bear, int(self._vix_bear_pctile),
+        )
 
     def detect(
         self,

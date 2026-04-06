@@ -39,6 +39,7 @@ class StrategyMetrics:
     profit_factor: float = 0.0
     total_trades: int = 0
     quality_score: float = 0.0  # Composite quality metric
+    max_drawdown: float = 0.0   # Maximum cumulative drawdown (0-1)
 
     @property
     def has_edge(self) -> bool:
@@ -122,6 +123,9 @@ class SignalQualityTracker:
         # Range: 0-100
         quality = self._compute_quality(win_rate, profit_factor, returns, total)
 
+        # Max drawdown from cumulative returns
+        max_dd = self._compute_max_drawdown(returns)
+
         return StrategyMetrics(
             strategy=strategy,
             win_rate=round(win_rate, 4),
@@ -130,6 +134,7 @@ class SignalQualityTracker:
             profit_factor=round(profit_factor, 4),
             total_trades=total,
             quality_score=round(quality, 1),
+            max_drawdown=round(max_dd, 4),
         )
 
     def get_all_metrics(self) -> dict[str, StrategyMetrics]:
@@ -179,6 +184,23 @@ class SignalQualityTracker:
             t for t in self._trades.get(strategy, [])
             if t.timestamp >= cutoff or t.timestamp == 0  # 0 = legacy
         ]
+
+    @staticmethod
+    def _compute_max_drawdown(returns: list[float]) -> float:
+        """Compute max drawdown from sequential trade returns."""
+        if len(returns) < 2:
+            return 0.0
+        cumulative = 1.0
+        peak = 1.0
+        max_dd = 0.0
+        for r in returns:
+            cumulative *= (1 + r)
+            if cumulative > peak:
+                peak = cumulative
+            dd = (peak - cumulative) / peak if peak > 0 else 0
+            if dd > max_dd:
+                max_dd = dd
+        return max_dd
 
     @staticmethod
     def _compute_quality(

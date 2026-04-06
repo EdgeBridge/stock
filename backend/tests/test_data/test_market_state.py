@@ -189,3 +189,63 @@ class TestMarketStateDetector:
         # Second day: should switch
         state = detector.detect(df_up, vix_level=15.0)
         assert state.regime == MarketRegime.STRONG_UPTREND
+
+
+class TestVIXPercentileCalibration:
+    """Quick Win #5: VIX percentile-based adaptive thresholds."""
+
+    def test_calibrate_updates_thresholds(self):
+        detector = MarketStateDetector(confirmation_days=0)
+        # Low-vol VIX history: range 10-20
+        vix = pd.Series(np.linspace(10, 20, 252))
+        detector.calibrate_vix_thresholds(vix)
+
+        # 20th percentile of 10-20 ≈ 12, 70th ≈ 17, 85th ≈ 18.5
+        assert detector._vix_bull < 14
+        assert detector._vix_caution < 20
+        assert detector._vix_bear < 20
+
+    def test_calibrate_high_vol_period(self):
+        detector = MarketStateDetector(confirmation_days=0)
+        # High-vol VIX history: range 20-40
+        vix = pd.Series(np.linspace(20, 40, 252))
+        detector.calibrate_vix_thresholds(vix)
+
+        # Thresholds should be higher than defaults
+        assert detector._vix_bull > 18  # default is 18
+        assert detector._vix_caution > 25  # default is 25
+
+    def test_calibrate_short_history_ignored(self):
+        detector = MarketStateDetector(confirmation_days=0)
+        orig_bull = detector._vix_bull
+        vix = pd.Series([15, 20, 25])  # too short
+        detector.calibrate_vix_thresholds(vix)
+        assert detector._vix_bull == orig_bull  # unchanged
+
+    def test_calibrated_regime_detection(self):
+        """Calibrated thresholds change regime classification."""
+        # Create a high-vol environment
+        vix_history = pd.Series(np.linspace(20, 45, 252))
+        detector = MarketStateDetector(confirmation_days=0)
+        detector.calibrate_vix_thresholds(vix_history)
+
+        # VIX 25 in high-vol environment should NOT be bearish
+        # (since calibrated caution threshold is higher)
+        df = _make_spy_df(250, "up")
+        state = detector.detect(df, vix_level=25.0)
+        # In high-vol regime, VIX 25 is normal → still uptrend
+        assert state.regime in (MarketRegime.STRONG_UPTREND, MarketRegime.UPTREND)
+
+    def test_percentile_params_stored(self):
+        detector = MarketStateDetector(
+            vix_bull_pctile=15.0,
+            vix_caution_pctile=65.0,
+            vix_bear_pctile=80.0,
+        )
+        assert detector._vix_bull_pctile == 15.0
+        assert detector._vix_caution_pctile == 65.0
+        assert detector._vix_bear_pctile == 80.0
+
+    def test_use_vix_percentile_flag(self):
+        detector = MarketStateDetector(use_vix_percentile=True)
+        assert detector._use_vix_pctile is True

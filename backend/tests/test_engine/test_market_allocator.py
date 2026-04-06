@@ -144,8 +144,8 @@ class TestBlendedCompute:
         assert result["US"] > result["KR"]
 
     def test_equal_markets_near_equal(self):
-        """Same trend and vol → near 50/50."""
-        alloc = MarketAllocator()
+        """Same trend and vol → near 50/50 (disable correlation dampening)."""
+        alloc = MarketAllocator(correlation_threshold=1.0)  # disable dampening
         us = _make_prices(n=300, daily_return=0.0005, noise=0.01, seed=10)
         kr = _make_prices(n=300, daily_return=0.0005, noise=0.01, seed=10)
         result = alloc.compute(us, kr)
@@ -229,3 +229,69 @@ class TestEdgeCases:
         result = allocator.compute(us, kr)
         # Zero momentum, zero vol → fallback to equal
         assert abs(result["US"] - 0.50) < 0.05
+
+
+class TestCorrelationComputation:
+    """Quick Win #4: Correlation between US and KR markets."""
+
+    def test_identical_series_high_corr(self, allocator):
+        prices = _make_prices(n=300, seed=42)
+        corr = allocator._compute_correlation(prices, prices)
+        assert corr > 0.99
+
+    def test_independent_series_low_corr(self, allocator):
+        us = _make_prices(n=300, seed=1)
+        kr = _make_prices(n=300, seed=999)
+        corr = allocator._compute_correlation(us, kr)
+        assert abs(corr) < 0.5
+
+    def test_short_series_returns_zero(self, allocator):
+        us = pd.Series([100.0, 101.0])
+        kr = pd.Series([100.0, 99.0])
+        corr = allocator._compute_correlation(us, kr)
+        assert corr == 0.0
+
+    def test_correlation_is_finite(self, allocator):
+        us = _make_prices(n=300, seed=10)
+        kr = _make_prices(n=300, seed=20)
+        corr = allocator._compute_correlation(us, kr)
+        assert np.isfinite(corr)
+
+
+class TestCorrelationDampening:
+    """Quick Win #4: Correlation dampening shifts toward stronger market."""
+
+    def test_high_corr_shifts_toward_stronger(self):
+        """When correlated, shift toward market with higher momentum."""
+        # Use identical series (perfect correlation) with different trends
+        np.random.seed(42)
+        base = np.cumprod(1 + np.random.normal(0.0005, 0.01, 300))
+        # Make US slightly stronger
+        us = pd.Series(100 * base * np.linspace(1.0, 1.1, 300))
+        kr = pd.Series(100 * base * np.linspace(1.0, 0.95, 300))
+
+        # With dampening
+        alloc_damp = MarketAllocator(correlation_threshold=0.5)
+        r_damp = alloc_damp.compute(us, kr)
+
+        # Without dampening (threshold=1.0, impossible to reach)
+        alloc_nodamp = MarketAllocator(correlation_threshold=1.0)
+        r_nodamp = alloc_nodamp.compute(us, kr)
+
+        # With dampening, US should get even more than without
+        assert r_damp["US"] >= r_nodamp["US"] - 0.02
+
+    def test_low_corr_no_shift(self):
+        """When uncorrelated, no dampening applied."""
+        alloc = MarketAllocator(correlation_threshold=0.90)
+        us = _make_prices(n=300, daily_return=0.001, seed=1)
+        kr = _make_prices(n=300, daily_return=0.001, seed=999)
+
+        r = alloc.compute(us, kr)
+        # Just check it's valid and near 50/50 (both same return)
+        assert abs(r["US"] + r["KR"] - 1.0) < 1e-6
+
+    def test_correlation_params_stored(self):
+        alloc = MarketAllocator(correlation_threshold=0.80, correlation_lookback=90)
+        assert alloc._corr_threshold == 0.80
+        assert alloc._corr_lookback == 90

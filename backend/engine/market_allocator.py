@@ -28,6 +28,8 @@ class MarketAllocator:
         momentum_weight: float = 0.6,
         min_allocation: float = 0.20,
         max_allocation: float = 0.80,
+        correlation_threshold: float = 0.75,
+        correlation_lookback: int = 60,
     ):
         """
         Args:
@@ -37,6 +39,8 @@ class MarketAllocator:
             momentum_weight: Blend ratio (momentum vs inverse vol). 0.6 = 60% momentum.
             min_allocation: Floor allocation per market.
             max_allocation: Ceiling allocation per market.
+            correlation_threshold: Above this, shift allocation toward stronger market.
+            correlation_lookback: Bars for correlation calculation.
         """
         self._momentum_lookback = momentum_lookback
         self._skip_recent = skip_recent
@@ -44,6 +48,8 @@ class MarketAllocator:
         self._momentum_weight = momentum_weight
         self._min_alloc = min_allocation
         self._max_alloc = max_allocation
+        self._corr_threshold = correlation_threshold
+        self._corr_lookback = correlation_lookback
 
     @property
     def min_bars_required(self) -> int:
@@ -95,7 +101,25 @@ class MarketAllocator:
             + (1 - self._momentum_weight) * vol_alloc["KR"]
         )
 
-        # 6. Clamp and normalize
+        # 6. Correlation dampening: when highly correlated,
+        # shift allocation toward the stronger momentum market
+        corr = self._compute_correlation(us_prices, kr_prices)
+        if corr > self._corr_threshold:
+            # Shift 20% extra toward the stronger market
+            shift = 0.20 * (corr - self._corr_threshold) / (1.0 - self._corr_threshold)
+            if us_mom >= kr_mom:
+                us_raw += shift
+                kr_raw -= shift
+            else:
+                kr_raw += shift
+                us_raw -= shift
+            logger.info(
+                "Correlation dampening: corr=%.2f > %.2f, shift=%.1f%% toward %s",
+                corr, self._corr_threshold, shift * 100,
+                "US" if us_mom >= kr_mom else "KR",
+            )
+
+        # 7. Clamp and normalize
         us_clamped = max(self._min_alloc, min(self._max_alloc, us_raw))
         kr_clamped = max(self._min_alloc, min(self._max_alloc, kr_raw))
         total = us_clamped + kr_clamped
@@ -104,9 +128,9 @@ class MarketAllocator:
 
         logger.info(
             "MarketAllocator: US_mom=%.1f%% KR_mom=%.1f%% "
-            "US_vol=%.1f%% KR_vol=%.1f%% → US=%.0f%% KR=%.0f%%",
+            "US_vol=%.1f%% KR_vol=%.1f%% corr=%.2f → US=%.0f%% KR=%.0f%%",
             us_mom * 100, kr_mom * 100,
-            us_vol * 100, kr_vol * 100,
+            us_vol * 100, kr_vol * 100, corr,
             us_final * 100, kr_final * 100,
         )
 
@@ -176,3 +200,21 @@ class MarketAllocator:
             "US": us_inv / total_inv,
             "KR": kr_inv / total_inv,
         }
+
+    def _compute_correlation(
+        self, us_prices: pd.Series, kr_prices: pd.Series,
+    ) -> float:
+        """Compute rolling correlation between US and KR daily returns."""
+        n = min(self._corr_lookback, len(us_prices) - 1, len(kr_prices) - 1)
+        if n < 10:
+            return 0.0
+        us_ret = us_prices.iloc[-n:].pct_change().dropna()
+        kr_ret = kr_prices.iloc[-n:].pct_change().dropna()
+        min_len = min(len(us_ret), len(kr_ret))
+        if min_len < 10:
+            return 0.0
+        corr = float(np.corrcoef(
+            us_ret.iloc[-min_len:].values,
+            kr_ret.iloc[-min_len:].values,
+        )[0, 1])
+        return corr if np.isfinite(corr) else 0.0
