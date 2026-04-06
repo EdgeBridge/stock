@@ -149,50 +149,56 @@ profiles:
 stock_profiles:
   growth_momentum:
     # High-growth stocks with strong momentum (e.g. NVDA, META)
-    dual_momentum: 0.20
+    dual_momentum: 0.18
     cross_sectional_momentum: 0.12
+    trend_following: 0.16
+    supertrend: 0.12
+    sector_rotation: 0.08
+    donchian_breakout: 0.10
+    volume_surge: 0.08
+    pead_drift: 0.06
     cis_momentum: 0.05
-    trend_following: 0.18
-    supertrend: 0.13
-    sector_rotation: 0.10
-    donchian_breakout: 0.12
     regime_switch: 0.05
-    volume_profile: 0.05
 
   stable_large_cap:
     # Stable blue-chips with low volatility (e.g. AAPL, MSFT, JNJ)
-    trend_following: 0.15
+    trend_following: 0.14
     quality_factor: 0.12
-    donchian_breakout: 0.13
-    rsi_divergence: 0.13
+    donchian_breakout: 0.12
+    rsi_divergence: 0.12
     bnf_deviation: 0.10
-    macd_histogram: 0.10
+    macd_histogram: 0.09
+    pead_drift: 0.08
     larry_williams: 0.08
-    bollinger_squeeze: 0.09
-    volume_profile: 0.05
+    bollinger_squeeze: 0.08
     dual_momentum: 0.05
+    volume_profile: 0.02
 
   cyclical_value:
     # Cyclical/value stocks sensitive to macro (e.g. JPM, XOM)
-    sector_rotation: 0.18
-    regime_switch: 0.15
-    bnf_deviation: 0.15
+    sector_rotation: 0.16
+    regime_switch: 0.14
+    bnf_deviation: 0.13
     dual_momentum: 0.12
-    trend_following: 0.12
-    rsi_divergence: 0.10
-    donchian_breakout: 0.10
-    volume_profile: 0.08
+    trend_following: 0.11
+    rsi_divergence: 0.09
+    donchian_breakout: 0.09
+    pead_drift: 0.08
+    volume_surge: 0.05
+    volume_profile: 0.03
 
   high_volatility:
     # High-volatility stocks needing careful risk management
-    supertrend: 0.20        # STOCK-35: +0.02 from cis_momentum reduction
-    rsi_divergence: 0.16    # STOCK-35: +0.01 from cis_momentum reduction
-    bnf_deviation: 0.17     # STOCK-35: +0.02 from cis_momentum reduction
-    donchian_breakout: 0.15
-    cis_momentum: 0.05      # STOCK-35: 0.12 -> 0.05 (poor live performance)
-    trend_following: 0.10
-    bollinger_squeeze: 0.12  # STOCK-35: +0.02 from cis_momentum reduction
-    macd_histogram: 0.05
+    supertrend: 0.18
+    rsi_divergence: 0.15
+    bnf_deviation: 0.15
+    donchian_breakout: 0.13
+    volume_surge: 0.10
+    trend_following: 0.09
+    bollinger_squeeze: 0.08
+    pead_drift: 0.06
+    cis_momentum: 0.03
+    macd_histogram: 0.03
 
 # Adaptive weight blending
 adaptive:
