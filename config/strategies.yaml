@@ -78,27 +78,29 @@ global:
 # Market state -> strategy weight profiles
 profiles:
   strong_uptrend:
-    trend_following: 0.18
-    dual_momentum: 0.14
+    trend_following: 0.17
+    dual_momentum: 0.13
     cross_sectional_momentum: 0.10
     quality_factor: 0.05
-    donchian_breakout: 0.10
+    pead_drift: 0.07
+    donchian_breakout: 0.08
     supertrend: 0.10
     cis_momentum: 0.05
-    larry_williams: 0.08
+    larry_williams: 0.07
     bnf_deviation: 0.05
-    volume_surge: 0.15
+    volume_surge: 0.13
 
   uptrend:
     trend_following: 0.12
-    dual_momentum: 0.13
-    cross_sectional_momentum: 0.10
+    dual_momentum: 0.12
+    cross_sectional_momentum: 0.08
     quality_factor: 0.07
-    donchian_breakout: 0.10
+    pead_drift: 0.07
+    donchian_breakout: 0.08
     supertrend: 0.10
     macd_histogram: 0.05
-    cis_momentum: 0.05
-    larry_williams: 0.08
+    cis_momentum: 0.04
+    larry_williams: 0.07
     bnf_deviation: 0.05
     volume_surge: 0.15
 
@@ -106,14 +108,15 @@ profiles:
     trend_following: 0.05
     dual_momentum: 0.05
     cross_sectional_momentum: 0.05
-    quality_factor: 0.10
+    quality_factor: 0.08
+    pead_drift: 0.05
     donchian_breakout: 0.05
     supertrend: 0.05
     macd_histogram: 0.08
-    rsi_divergence: 0.13
-    bollinger_squeeze: 0.13
+    rsi_divergence: 0.12
+    bollinger_squeeze: 0.12
     volume_profile: 0.08
-    cis_momentum: 0.03
+    cis_momentum: 0.02
     larry_williams: 0.05
     bnf_deviation: 0.05
     volume_surge: 0.10
@@ -123,8 +126,9 @@ profiles:
     dual_momentum: 0.10
     cross_sectional_momentum: 0.03
     quality_factor: 0.07
-    rsi_divergence: 0.22
-    bollinger_squeeze: 0.13
+    pead_drift: 0.03
+    rsi_divergence: 0.20
+    bollinger_squeeze: 0.12
     bnf_deviation: 0.25
     volume_surge: 0.10
     regime_switch: 0.10
@@ -209,6 +213,7 @@ consensus:
       - trend_following
       - dual_momentum
       - cross_sectional_momentum
+      - pead_drift
       - donchian_breakout
       - supertrend
       - cis_momentum
@@ -491,6 +496,28 @@ strategies:
       enabled: true
       activation_pct: 0.08
       trail_pct: 0.04
+
+  pead_drift:
+    enabled: true
+    timeframe: "1D"
+    params:
+      gap_threshold: 0.03       # 3% min gap to qualify as earnings-like
+      volume_multiplier: 2.0    # 2x avg volume confirms gap significance
+      drift_window: 5           # 5-day drift confirmation window
+      max_entry_delay: 10       # max days after gap to enter
+      min_follow_through: 0.005 # 0.5% min follow-through
+      fade_protection: true     # skip if gap has reversed >50%
+    stop_loss:
+      type: atr
+      atr_multiplier: 2.0
+      max_pct: 0.10
+    take_profit:
+      type: fixed_pct
+      max_pct: 0.15
+    trailing_stop:
+      enabled: true
+      activation_pct: 0.06
+      trail_pct: 0.03
 
 # Market-specific overrides
 # Each market key can override: disabled_strategies, risk, evaluation_loop
