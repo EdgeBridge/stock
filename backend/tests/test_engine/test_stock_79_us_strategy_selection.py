@@ -1,10 +1,9 @@
-"""Tests for STOCK-79: US strategy selection — dual_momentum activated,
-sector_rotation / volume_profile disabled.
+"""Tests for US strategy selection from config/strategies.yaml.
 
 Verifies:
 1. US disabled_strategies are loaded from config/strategies.yaml (not hardcoded)
-2. dual_momentum and volume_surge are the only enabled strategies for US
-3. sector_rotation and volume_profile are disabled
+2. Walk-forward validated strategies are enabled for US
+3. Overfit strategies remain disabled
 4. EvaluationLoop reflects the config-driven disabled set
 
 Also covers STOCK-81 self-review follow-up:
@@ -40,7 +39,11 @@ _ALL_STRATEGIES = [
     "bnf_deviation", "volume_surge",
 ]
 
-_US_ENABLED = {"dual_momentum", "volume_surge"}
+_US_ENABLED = {
+    "dual_momentum", "volume_surge", "trend_following", "donchian_breakout",
+    "supertrend", "macd_histogram", "rsi_divergence", "regime_switch",
+    "sector_rotation",
+}
 
 
 def _make_df(n: int = 50) -> pd.DataFrame:
@@ -125,18 +128,18 @@ class TestUSConfigLoader:
         disabled = loader.get_market_disabled_strategies("US")
         assert "volume_surge" not in disabled
 
-    def test_sector_rotation_disabled(self):
-        loader = StrategyConfigLoader()
-        disabled = loader.get_market_disabled_strategies("US")
-        assert "sector_rotation" in disabled
-
     def test_volume_profile_disabled(self):
         loader = StrategyConfigLoader()
         disabled = loader.get_market_disabled_strategies("US")
         assert "volume_profile" in disabled
 
-    def test_us_enabled_set_is_dual_momentum_and_volume_surge(self):
-        """Exactly dual_momentum + volume_surge survive the disabled filter."""
+    def test_bollinger_squeeze_disabled(self):
+        loader = StrategyConfigLoader()
+        disabled = loader.get_market_disabled_strategies("US")
+        assert "bollinger_squeeze" in disabled
+
+    def test_us_enabled_set_matches_walk_forward_validated(self):
+        """Walk-forward validated strategies survive the disabled filter."""
         loader = StrategyConfigLoader()
         disabled = set(loader.get_market_disabled_strategies("US"))
         enabled = {s for s in _ALL_STRATEGIES if s not in disabled}
@@ -172,21 +175,21 @@ class TestUSEvaluationLoop:
         active_names = {s.name for s in loop._get_active_strategies()}
         assert "dual_momentum" in active_names
 
-    def test_sector_rotation_is_inactive(self):
-        loader = StrategyConfigLoader()
-        loop = _make_loop(disabled=loader.get_market_disabled_strategies("US"))
-        active_names = {s.name for s in loop._get_active_strategies()}
-        assert "sector_rotation" not in active_names
-
     def test_volume_profile_is_inactive(self):
         loader = StrategyConfigLoader()
         loop = _make_loop(disabled=loader.get_market_disabled_strategies("US"))
         active_names = {s.name for s in loop._get_active_strategies()}
         assert "volume_profile" not in active_names
 
+    def test_bollinger_squeeze_is_inactive(self):
+        loader = StrategyConfigLoader()
+        loop = _make_loop(disabled=loader.get_market_disabled_strategies("US"))
+        active_names = {s.name for s in loop._get_active_strategies()}
+        assert "bollinger_squeeze" not in active_names
+
     @pytest.mark.asyncio
     async def test_evaluate_symbol_calls_only_active_strategies(self):
-        """evaluate_symbol should only run dual_momentum and volume_surge."""
+        """evaluate_symbol should only run walk-forward validated strategies."""
         loader = StrategyConfigLoader()
         loop = _make_loop(
             disabled=loader.get_market_disabled_strategies("US"),

@@ -62,13 +62,15 @@ REGIME_POSITION_PCT: dict[str, float] = {
     "strong_uptrend": 0.08,  # Max per position (diversified)
     "uptrend": 0.07,
     "sideways": 0.06,
-    "downtrend": 0.04,  # Defensive
+    "weak_downtrend": 0.04,  # Caution
+    "downtrend": 0.03,  # Defensive
 }
 REGIME_EXPOSURE_PCT: dict[str, float] = {
     "strong_uptrend": 0.95,
     "uptrend": 0.90,
     "sideways": 0.70,
-    "downtrend": 0.40,  # Mostly cash
+    "weak_downtrend": 0.50,  # Reduce exposure early
+    "downtrend": 0.30,  # Mostly cash
 }
 
 

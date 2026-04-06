@@ -258,12 +258,12 @@ class TestStrategyConfigLoaderMarketMethods:
         disabled = loader.get_market_disabled_strategies("KR")
         assert isinstance(disabled, list)
         assert len(disabled) > 0
-        # All strategies except supertrend and dual_momentum should be disabled
-        assert "supertrend" not in disabled
+        # dual_momentum, trend_following, donchian_breakout enabled for KR
         assert "dual_momentum" not in disabled
-        # These should be disabled
-        assert "trend_following" in disabled
-        assert "donchian_breakout" in disabled
+        assert "trend_following" not in disabled
+        assert "donchian_breakout" not in disabled
+        # supertrend disabled (walk-forward: -110K KR loss driver)
+        assert "supertrend" in disabled
         assert "macd_histogram" in disabled
         assert "rsi_divergence" in disabled
         assert "bollinger_squeeze" in disabled
@@ -279,19 +279,19 @@ class TestStrategyConfigLoaderMarketMethods:
         loader = StrategyConfigLoader()
         risk_cfg = loader.get_market_risk_config("KR")
         assert isinstance(risk_cfg, dict)
-        assert risk_cfg.get("kelly_fraction") == pytest.approx(1.00)
-        assert risk_cfg.get("max_position_pct") == pytest.approx(0.30)
-        assert risk_cfg.get("min_position_pct") == pytest.approx(0.15)
-        assert risk_cfg.get("max_positions") == 8
-        assert risk_cfg.get("default_stop_loss_pct") == pytest.approx(0.15)
-        assert risk_cfg.get("default_take_profit_pct") == pytest.approx(0.15)
-        assert risk_cfg.get("dynamic_sl_tp") is False
+        assert risk_cfg.get("kelly_fraction") == pytest.approx(0.40)
+        assert risk_cfg.get("max_position_pct") == pytest.approx(0.10)
+        assert risk_cfg.get("min_position_pct") == pytest.approx(0.04)
+        assert risk_cfg.get("max_positions") == 12
+        assert risk_cfg.get("default_stop_loss_pct") == pytest.approx(0.12)
+        assert risk_cfg.get("default_take_profit_pct") == pytest.approx(0.20)
+        assert risk_cfg.get("dynamic_sl_tp") is True
 
     def test_get_market_evaluation_loop_config_kr(self):
         loader = StrategyConfigLoader()
         eval_cfg = loader.get_market_evaluation_loop_config("KR")
         assert isinstance(eval_cfg, dict)
-        assert eval_cfg.get("min_confidence") == pytest.approx(0.20)
+        assert eval_cfg.get("min_confidence") == pytest.approx(0.40)
         assert eval_cfg.get("min_active_ratio") is None  # null in YAML = no override
         assert eval_cfg.get("sell_cooldown_days") == 1
         assert eval_cfg.get("whipsaw_max_losses") == 2
@@ -299,17 +299,18 @@ class TestStrategyConfigLoaderMarketMethods:
 
     def test_get_market_config_us(self):
         loader = StrategyConfigLoader()
-        # STOCK-79: US market has disabled_strategies in config (markets.US)
         us_disabled = loader.get_market_disabled_strategies("US")
         assert isinstance(us_disabled, list)
         assert len(us_disabled) > 0
-        # dual_momentum and volume_surge must NOT be in disabled list (they are enabled)
+        # Walk-forward validated strategies must NOT be in disabled list
         assert "dual_momentum" not in us_disabled
         assert "volume_surge" not in us_disabled
-        # sector_rotation and volume_profile must be disabled
-        assert "sector_rotation" in us_disabled
+        assert "trend_following" not in us_disabled
+        assert "sector_rotation" not in us_disabled
+        # Overfit strategies remain disabled
         assert "volume_profile" in us_disabled
-        # US has no risk or evaluation_loop overrides (those remain config defaults)
+        assert "bollinger_squeeze" in us_disabled
+        # US has no risk or evaluation_loop overrides (those remain code defaults)
         assert loader.get_market_risk_config("US") == {}
         assert loader.get_market_evaluation_loop_config("US") == {}
 
@@ -690,26 +691,26 @@ class TestYAMLKRSection:
         assert "min_hold_days" in ev
 
     def test_yaml_kr_disabled_count(self):
-        """Exactly 12 strategies disabled (14 total - 2 enabled = 12)."""
+        """11 strategies disabled (14 total - 3 enabled = 11)."""
         loader = StrategyConfigLoader()
         disabled = loader._config["markets"]["KR"]["disabled_strategies"]
-        assert len(disabled) == 12
+        assert len(disabled) == 11
 
     def test_yaml_kr_risk_values(self):
         loader = StrategyConfigLoader()
         risk = loader._config["markets"]["KR"]["risk"]
-        assert risk["kelly_fraction"] == pytest.approx(1.00)
-        assert risk["max_position_pct"] == pytest.approx(0.30)
-        assert risk["min_position_pct"] == pytest.approx(0.15)
-        assert risk["max_positions"] == 8
-        assert risk["default_stop_loss_pct"] == pytest.approx(0.15)
-        assert risk["default_take_profit_pct"] == pytest.approx(0.15)
-        assert risk["dynamic_sl_tp"] is False
+        assert risk["kelly_fraction"] == pytest.approx(0.40)
+        assert risk["max_position_pct"] == pytest.approx(0.10)
+        assert risk["min_position_pct"] == pytest.approx(0.04)
+        assert risk["max_positions"] == 12
+        assert risk["default_stop_loss_pct"] == pytest.approx(0.12)
+        assert risk["default_take_profit_pct"] == pytest.approx(0.20)
+        assert risk["dynamic_sl_tp"] is True
 
     def test_yaml_kr_eval_loop_values(self):
         loader = StrategyConfigLoader()
         ev = loader._config["markets"]["KR"]["evaluation_loop"]
-        assert ev["min_confidence"] == pytest.approx(0.20)
+        assert ev["min_confidence"] == pytest.approx(0.40)
         # null in YAML → None in Python; means 'no override, use per-call defaults'
         assert ev["min_active_ratio"] is None
         assert ev["sell_cooldown_days"] == 1

@@ -816,7 +816,7 @@ class FullPipelineBacktest:
         bullish = regime in cfg.etf_uptrend_regimes
 
         # Sell inverse ETF if holding in non-downtrend
-        if etf_short in self._positions and regime != "downtrend":
+        if etf_short in self._positions and regime not in ("downtrend", "weak_downtrend"):
             data = stock_data.get(etf_short)
             if data and date_idx < len(data.df):
                 price = float(data.df.iloc[date_idx]["close"])
@@ -858,7 +858,7 @@ class FullPipelineBacktest:
                             )
 
         # Buy inverse ETF in downtrend if not already holding
-        if regime == "downtrend" and etf_short not in self._positions:
+        if regime in ("downtrend", "weak_downtrend") and etf_short not in self._positions:
             data = stock_data.get(etf_short)
             if data and date_idx < len(data.df):
                 price = float(data.df.iloc[date_idx]["close"])
@@ -1053,7 +1053,7 @@ class FullPipelineBacktest:
         when market moves from uptrend/strong_uptrend to downtrend,
         positions with negative PnL are closed to protect capital.
         """
-        _BEARISH = {"downtrend"}
+        _BEARISH = {"downtrend", "weak_downtrend"}
 
         regime_worsened = (
             current_regime in _BEARISH

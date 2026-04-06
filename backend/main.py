@@ -245,13 +245,15 @@ async def lifespan(app: FastAPI):
     be_lock_ratio = be_cfg.get("lock_ratio", 0.75)
     be_lock_pct = be_cfg.get("lock_pct", 0.50)
 
-    # STOCK-77: US post-improvement grid search (+30.5%, Sharpe 2.06, MDD -5.4%)
+    # Rollback STOCK-77: walk-forward validated conservative params
+    # STOCK-77 was overfit (backtest +30.5% but walk-forward 80% OVERFIT).
+    # Conservative: 2x return, 7x Sharpe vs STOCK-77 in pipeline backtest.
     risk_params = RiskParams(
         market_allocations=market_allocs,
-        max_position_pct=0.30,  # 30% per position (was 0.20)
-        max_positions=5,  # Concentrated positions (was 8)
-        default_stop_loss_pct=0.07,  # 7% SL (was 0.10)
-        default_take_profit_pct=0.15,  # 15% TP (unchanged)
+        max_position_pct=0.08,  # 8% per position (diversified)
+        max_positions=20,  # Broad diversification
+        default_stop_loss_pct=0.12,  # 12% SL (wider, less whipsaw)
+        default_take_profit_pct=0.20,  # 20% TP (let winners run)
         tiered_trailing_tiers=tiered_tiers,
         breakeven_stop_enabled=be_enabled,
         breakeven_stop_activation_ratio=be_activation,
@@ -259,9 +261,9 @@ async def lifespan(app: FastAPI):
         breakeven_stop_lock_pct=be_lock_pct,
     )
     risk_manager = RiskManager(params=risk_params)
-    # STOCK-77: US Kelly sizing — 1.5x Kelly, 15% min position (was 1.00/0.12)
-    risk_manager._kelly._kelly_fraction = 1.50
-    risk_manager._kelly._min_position_pct = 0.15
+    # Conservative Kelly: 0.35x fraction, 3% min position
+    risk_manager._kelly._kelly_fraction = 0.35
+    risk_manager._kelly._min_position_pct = 0.03
 
     # KR-specific risk params: STOCK-65 grid-search optimized settings
     kr_risk_cfg = registry.config_loader.get_market_risk_config("KR")

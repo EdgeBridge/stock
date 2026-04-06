@@ -69,6 +69,11 @@ Architecture inherited from ~/coin project (crypto trading bot). **Live trading*
   - Fallback chain: claude-haiku -> claude-sonnet -> gemini-2.5-flash
   - Retry: 3x per model with exponential backoff (2s, 4s, 8s)
   - All 4 agents (market_analyst, risk_assessment, trade_review, news_sentiment) use LLMClient
+- Market regime: data/market_state.py — 5 regimes (STRONG_UPTREND/UPTREND/SIDEWAYS/WEAK_DOWNTREND/DOWNTREND)
+  - SPY vs SMA200 + VIX + 20d ROC based classification
+  - Asymmetric confirmation: 1-day for risk-off (fast), 2-day for risk-on (slow)
+  - WEAK_DOWNTREND fills gap between SIDEWAYS and DOWNTREND for early defensive action
+  - Regime confidence (0.5-0.95) scales position sizing via risk manager
 - Dual engine: US/KR Stock Engine (individual stocks) + ETF Engine (leveraged/inverse + sector ETFs)
   - ETF Engine: engine/etf_engine.py — regime-based leveraged pair switching + sector ETF rotation
   - US: TQQQ/SQQQ, SOXL/SOXS, sector ETFs (XLK/XLF/XLE) — SPY regime detection

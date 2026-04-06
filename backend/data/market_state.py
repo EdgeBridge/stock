@@ -20,6 +20,7 @@ class MarketRegime(str, Enum):
     STRONG_UPTREND = "strong_uptrend"
     UPTREND = "uptrend"
     SIDEWAYS = "sideways"
+    WEAK_DOWNTREND = "weak_downtrend"
     DOWNTREND = "downtrend"
 
 
@@ -53,6 +54,7 @@ class MarketStateDetector:
         self._confirmation_days = confirmation_days
         self._last_state: MarketState | None = None
         self._regime_streak = 0
+        self._pending_regime: MarketRegime | None = None
 
     def detect(
         self,
@@ -91,15 +93,25 @@ class MarketStateDetector:
         # Determine regime
         regime = self._classify(above_sma, distance_pct, vix, roc_20d)
 
-        # Confirmation: require streak before regime change
+        # Asymmetric confirmation: fast risk-off (1 day), slow risk-on (2 days)
         if self._last_state and regime != self._last_state.regime:
-            self._regime_streak += 1
-            if self._regime_streak < self._confirmation_days:
+            if self._pending_regime != regime:
+                self._pending_regime = regime
+                self._regime_streak = 1
+            else:
+                self._regime_streak += 1
+
+            is_risk_off = regime in (MarketRegime.WEAK_DOWNTREND, MarketRegime.DOWNTREND)
+            required = 1 if is_risk_off else self._confirmation_days
+
+            if self._regime_streak < required:
                 regime = self._last_state.regime
             else:
                 self._regime_streak = 0
+                self._pending_regime = None
         else:
             self._regime_streak = 0
+            self._pending_regime = None
 
         state = MarketState(
             regime=regime,
@@ -123,6 +135,9 @@ class MarketStateDetector:
             return MarketRegime.UPTREND
         if not above_sma and (vix > self._vix_bear or distance_pct < -5.0):
             return MarketRegime.DOWNTREND
+        # WEAK_DOWNTREND: below SMA and either elevated VIX or negative distance
+        if not above_sma and (vix > self._vix_caution or distance_pct < -2.0):
+            return MarketRegime.WEAK_DOWNTREND
         return MarketRegime.SIDEWAYS
 
     def _calc_confidence(

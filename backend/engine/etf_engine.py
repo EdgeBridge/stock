@@ -103,6 +103,7 @@ class ETFEngine:
             "strong_uptrend": 0.10,  # 10% per ETF → max 20% nominal, 60% effective
             "uptrend": 0.07,         # 7% per ETF → max 14% nominal, 42% effective
             "sideways": 0.00,        # Exit all leveraged
+            "weak_downtrend": 0.03,  # Small defensive (× bear_size_ratio)
             "downtrend": 0.05,       # 5% per ETF (× bear_size_ratio → 2%)
         }
 
@@ -284,27 +285,26 @@ class ETFEngine:
         if regime in (MarketRegime.STRONG_UPTREND, MarketRegime.UPTREND):
             target_etfs = self._etf.get_regime_etfs("bull")[:self._max_regime_etfs]
             exit_etfs = self._etf.get_regime_etfs("bear")
-        elif regime == MarketRegime.DOWNTREND:
-            # Always exit bull positions on downtrend
+        elif regime in (MarketRegime.WEAK_DOWNTREND, MarketRegime.DOWNTREND):
+            # Always exit bull positions on any downtrend
             exit_etfs = self._etf.get_regime_etfs("bull")
-            # Bear (inverse) entry requires stricter conditions:
-            #   1. SPY must be clearly below SMA200 (distance < threshold)
-            #   2. High confidence from MarketStateDetector
-            if (state.spy_distance_pct <= self._bear_min_distance
+            # Bear (inverse) entry: relaxed threshold for early entry
+            bear_dist = self._bear_min_distance if regime == MarketRegime.DOWNTREND else self._bear_min_distance * 0.6
+            if (state.spy_distance_pct <= bear_dist
                     and state.confidence >= self._bear_min_confidence):
                 target_etfs = self._etf.get_regime_etfs("bear")[:self._max_regime_etfs]
                 is_bear_entry = True
                 logger.info(
                     "Bear entry qualified: SPY dist=%.1f%% (threshold=%.1f%%), "
                     "confidence=%.2f (threshold=%.2f)",
-                    state.spy_distance_pct, self._bear_min_distance,
+                    state.spy_distance_pct, bear_dist,
                     state.confidence, self._bear_min_confidence,
                 )
             else:
                 logger.info(
                     "Bear entry skipped: SPY dist=%.1f%% (need <=%.1f%%), "
                     "confidence=%.2f (need >=%.2f) — exit to cash",
-                    state.spy_distance_pct, self._bear_min_distance,
+                    state.spy_distance_pct, bear_dist,
                     state.confidence, self._bear_min_confidence,
                 )
         else:  # SIDEWAYS

@@ -1385,9 +1385,14 @@ SIDEWAYS:
   Bollinger: 0.15, Volume: 0.10, CISMomentum: 0.05,
   LarryWilliams: 0.05, BNFDeviation: 0.15
 
+WEAK_DOWNTREND:
+  DualMomentum: 0.15, RSI_Div: 0.25, Bollinger: 0.15,
+  BNFDeviation: 0.25, VolumeSurge: 0.10, RegimeSwitch: 0.10
+  (초기 하락 감지, 노출 축소, 방어적 전략 위주)
+
 DOWNTREND:
-  TrendFollowing: 0.05, RSI_Div: 0.15, Bollinger: 0.10,
-  BNFDeviation: 0.20
+  RSI_Div: 0.30, BNFDeviation: 0.40,
+  VolumeSurge: 0.10, RegimeSwitch: 0.20
   (개별 종목 매수 억제, ETF 인버스 전략으로 전환)
 
 최소 신뢰도 임계값: 0.50
@@ -1408,7 +1413,7 @@ HOLD 신호: 기권 처리 (가중치 재분배)
    - VIX 수준
    - 거래량 트렌드
    - ADX 강도
-   → STRONG_UPTREND / UPTREND / SIDEWAYS / DOWNTREND / CRASH
+   → STRONG_UPTREND / UPTREND / SIDEWAYS / WEAK_DOWNTREND / DOWNTREND
 
 2. 유니버스 갱신 (Universe Manager)
    - KIS 스캐너 결과 반영

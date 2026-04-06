@@ -27,6 +27,21 @@ def _make_spy_df(n: int = 250, trend: str = "up") -> pd.DataFrame:
     })
 
 
+def _make_controlled_df(price: float, sma200: float, n: int = 250) -> pd.DataFrame:
+    """Create a DataFrame where last price and SMA200 are controlled."""
+    # Build a series that gives the desired SMA200 and final price
+    base = np.full(n, sma200)
+    # Set last value to desired price
+    base[-1] = price
+    return pd.DataFrame({
+        "open": base * 0.999,
+        "high": base * 1.005,
+        "low": base * 0.995,
+        "close": base,
+        "volume": np.full(n, 80_000_000.0),
+    })
+
+
 class TestMarketStateDetector:
     def test_strong_uptrend(self):
         detector = MarketStateDetector(confirmation_days=0)
@@ -73,16 +88,18 @@ class TestMarketStateDetector:
         state = detector.detect(df)  # vix_level=None -> defaults to 20
         assert state.vix_level == 20.0
 
-    def test_confirmation_delays_change(self):
+    def test_confirmation_delays_risk_on(self):
+        """Risk-on (uptrend) transitions require full confirmation_days."""
         detector = MarketStateDetector(confirmation_days=2)
         df_up = _make_spy_df(250, "up")
         df_down = _make_spy_df(250, "down")
 
-        state1 = detector.detect(df_up, vix_level=15.0)
-        initial = state1.regime
+        # Start in downtrend
+        detector.detect(df_down, vix_level=32.0)
+        initial = detector.last_state.regime
 
-        # First detect with different data should keep old regime
-        state2 = detector.detect(df_down, vix_level=32.0)
+        # First day of uptrend should keep old regime (risk-on needs 2 days)
+        state2 = detector.detect(df_up, vix_level=15.0)
         assert state2.regime == initial  # confirmation not met yet
 
     def test_state_has_all_fields(self):
@@ -105,3 +122,70 @@ class TestMarketStateDetector:
         s_unclear = detector2.detect(df_unclear, vix_level=22.0)
 
         assert s_clear.confidence >= s_unclear.confidence
+
+    # --- WEAK_DOWNTREND regime tests ---
+
+    def test_weak_downtrend_below_sma_elevated_vix(self):
+        """Below SMA200 with VIX 26 (> caution 25) → WEAK_DOWNTREND."""
+        detector = MarketStateDetector(confirmation_days=0)
+        # Price below SMA, moderate VIX (25-30 range), distance not extreme
+        df = _make_controlled_df(price=440, sma200=450, n=250)
+        state = detector.detect(df, vix_level=26.0)
+        assert state.regime == MarketRegime.WEAK_DOWNTREND
+
+    def test_weak_downtrend_below_sma_negative_distance(self):
+        """Below SMA200 with distance < -2% → WEAK_DOWNTREND."""
+        detector = MarketStateDetector(confirmation_days=0)
+        # Price ~3% below SMA, VIX moderate (not > 30)
+        df = _make_controlled_df(price=436, sma200=450, n=250)
+        state = detector.detect(df, vix_level=22.0)
+        assert state.regime == MarketRegime.WEAK_DOWNTREND
+
+    def test_full_downtrend_requires_extreme(self):
+        """Full DOWNTREND still requires VIX > 30 or distance < -5%."""
+        detector = MarketStateDetector(confirmation_days=0)
+        df = _make_spy_df(250, "down")
+        state = detector.detect(df, vix_level=32.0)
+        assert state.regime == MarketRegime.DOWNTREND
+
+    def test_weak_downtrend_in_enum(self):
+        """WEAK_DOWNTREND is a valid MarketRegime member."""
+        assert hasattr(MarketRegime, "WEAK_DOWNTREND")
+        assert MarketRegime.WEAK_DOWNTREND.value == "weak_downtrend"
+
+    # --- Asymmetric confirmation tests ---
+
+    def test_risk_off_confirms_faster(self):
+        """Downtrend transition confirms in 1 day (fast risk-off)."""
+        detector = MarketStateDetector(confirmation_days=2)
+        df_up = _make_spy_df(250, "up")
+        df_down = _make_spy_df(250, "down")
+
+        # Start in uptrend
+        detector.detect(df_up, vix_level=15.0)
+
+        # 1 day of downtrend data should switch (risk-off = fast)
+        state = detector.detect(df_down, vix_level=32.0)
+        assert state.regime == MarketRegime.DOWNTREND
+
+    def test_risk_on_requires_full_confirmation(self):
+        """Uptrend transition requires full confirmation_days (slow risk-on)."""
+        detector = MarketStateDetector(confirmation_days=2)
+        df_up = _make_spy_df(250, "up")
+        df_down = _make_spy_df(250, "down")
+
+        # Start in downtrend (need to get there first with confirmation_days=0)
+        detector2 = MarketStateDetector(confirmation_days=0)
+        detector2.detect(df_down, vix_level=32.0)
+
+        # Re-create with confirmation_days=2 and set state
+        detector = MarketStateDetector(confirmation_days=2)
+        detector.detect(df_down, vix_level=32.0)  # establish downtrend
+
+        # First day of uptrend: should NOT switch yet (slow risk-on)
+        state = detector.detect(df_up, vix_level=15.0)
+        assert state.regime == MarketRegime.DOWNTREND  # still downtrend
+
+        # Second day: should switch
+        state = detector.detect(df_up, vix_level=15.0)
+        assert state.regime == MarketRegime.STRONG_UPTREND

@@ -109,14 +109,21 @@ profiles:
     bnf_deviation: 0.10
     volume_surge: 0.10
 
+  weak_downtrend:
+    # Early downtrend: reduce exposure, favor defensive strategies
+    dual_momentum: 0.15
+    rsi_divergence: 0.25
+    bollinger_squeeze: 0.15
+    bnf_deviation: 0.25
+    volume_surge: 0.10
+    regime_switch: 0.10
+
   downtrend:
-    # Individual stock buys suppressed in downtrend; ETF engine takes over
-    # bnf_deviation catches oversold mean reversion opportunities
-    trend_following: 0.09
-    rsi_divergence: 0.27
-    bollinger_squeeze: 0.18
-    bnf_deviation: 0.37
-    volume_surge: 0.09
+    # Full downtrend: minimal stock buys, ETF engine takes over
+    rsi_divergence: 0.30
+    bnf_deviation: 0.40
+    volume_surge: 0.10
+    regime_switch: 0.20
 
   etf_engine:
     regime_switch: 0.55
@@ -428,38 +435,22 @@ strategies:
 # Each market key can override: disabled_strategies, risk, evaluation_loop
 markets:
   US:
-    # STOCK-79: dual_momentum + volume_surge — PROVISIONAL (see note below)
-    #
-    # US combo activation floor (see CLAUDE.md): Sharpe > 0, MDD < 15%, PF > 1.0
-    #
-    # Prior baseline (sector_rotation + volume_profile + volume_surge):
-    #   Ret=-10.2%, Sharpe=-0.99, MDD=-14.6%, PF=0.84
-    # This combo (dual_momentum + volume_surge), backtest 5y:
-    #   Ret=+1.5%,  Sharpe=-0.67, MDD=-8.6%,  PF=1.03
-    #
-    # ⚠ PROVISIONAL: Sharpe=-0.67 is negative and below the Sharpe > 0 floor.
-    # MDD and PF clear the floor; Sharpe does not. Improvement over baseline on
-    # all four dimensions is confirmed, but Sharpe > 0 has not been achieved.
-    # A follow-up ticket must optimise (e.g. add regime_switch or tune look-back
-    # windows) until Sharpe > 0 is met before this config is considered stable.
+    # Walk-forward validated combo: re-enable strategies with positive OOS alpha.
+    # Pipeline backtest (conservative, 20pos/8%): Return=8.6%, Sharpe=0.64
+    # Key performers: dual_momentum (WR 58%), trend_following (WR 56%),
+    #   supertrend (WR 59%), sector_rotation (WR 67%)
     disabled_strategies:
-      - trend_following
-      - donchian_breakout
-      - supertrend
-      - macd_histogram
-      - rsi_divergence
       - bollinger_squeeze
       - volume_profile
-      - regime_switch
-      - sector_rotation
       - cis_momentum
       - larry_williams
       - bnf_deviation
   KR:
-    # STOCK-65: Grid-search optimized — only supertrend + dual_momentum for KR
+    # Walk-forward rollback: supertrend disabled (KR backtest -110K loss driver).
+    # dual_momentum is the only proven KR performer (+114K).
+    # Re-enable donchian_breakout (+2K in backtest) and trend_following.
     disabled_strategies:
-      - trend_following
-      - donchian_breakout
+      - supertrend
       - macd_histogram
       - rsi_divergence
       - bollinger_squeeze
@@ -471,16 +462,16 @@ markets:
       - bnf_deviation
       - volume_surge
     risk:
-      kelly_fraction: 1.00       # STOCK-77: grid search optimal (was 0.50)
-      max_position_pct: 0.30     # STOCK-77: 30% per position (was 0.20)
-      min_position_pct: 0.15     # STOCK-77: 15% min (was 0.12)
-      max_positions: 8
-      default_stop_loss_pct: 0.15  # STOCK-77: 15% SL (was 0.10)
-      default_take_profit_pct: 0.15
-      dynamic_sl_tp: false
+      kelly_fraction: 0.40       # Conservative (was 1.00, full Kelly too aggressive)
+      max_position_pct: 0.10     # 10% per position (was 0.30)
+      min_position_pct: 0.04     # 4% min (was 0.15)
+      max_positions: 12
+      default_stop_loss_pct: 0.12  # 12% SL (was 0.15)
+      default_take_profit_pct: 0.20
+      dynamic_sl_tp: true        # Enable ATR-based dynamic SL/TP
     evaluation_loop:
-      min_confidence: 0.20       # STOCK-77: lowered (was 0.30)
-      min_active_ratio: null   # null = no override; use per-call defaults (0.15 for held)
+      min_confidence: 0.40       # Higher quality filter (was 0.20)
+      min_active_ratio: null
       sell_cooldown_days: 1
       whipsaw_max_losses: 2
       min_hold_days: 1
