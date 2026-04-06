@@ -197,6 +197,7 @@
 │   │   ├── scheduler.py          # APScheduler 작업 등록 (29 tasks)
 │   │   ├── adaptive_weights.py   # 적응형 가중치
 │   │   ├── stock_classifier.py   # 종목 분류
+│   │   ├── market_allocator.py  # 듀얼 모멘텀 시장 배분
 │   │   └── recovery.py           # 에러 복구
 │   │
 │   ├── strategies/               # 17 active strategies
@@ -272,6 +273,7 @@
 │   │
 │   ├── analytics/
 │   │   ├── factor_model.py          # MultiFactorModel (z-scores)
+│   │   ├── ml_factor_selector.py    # LightGBM feature importance
 │   │   ├── position_sizing.py       # KellyPositionSizer
 │   │   └── signal_quality.py        # SignalQualityTracker
 │   │
@@ -309,7 +311,7 @@
 │       ├── test_backtest/ (7)
 │       ├── test_api/ (3)
 │       ├── test_agents/ (4)
-│       ├── test_analytics/ (3)
+│       ├── test_analytics/ (4)
 │       ├── test_services/ (6)
 │       └── scenarios/ (8)
 │
@@ -1538,7 +1540,7 @@ KR 태스크 (7개):
 | 항목 | 기본값 | 설명 |
 |------|--------|------|
 | 최대 동시 보유 | 20종목 | 분산 투자 (백테스트 최적) |
-| 마켓 배분 | 50:50 US/KR | 레짐 기반 동적 ±20% (clamp 20-70%) |
+| 마켓 배분 | 듀얼 모멘텀 동적 | 12-1개월 모멘텀 + 역변동성, 일별 리밸런싱 (clamp 20-80%) |
 | 일일 손실 한도 | -3% | 초과 시 신규 매수 중단 |
 | 최대 낙폭 (MDD) | -15% | 초과 시 전량 청산 |
 | 레버리지 ETF 비중 | 30% | 전체 포트폴리오 대비 |
