@@ -1236,6 +1236,19 @@ class EvaluationLoop:
                         "Macro event sizing: %s reduced to %.0f%%", symbol, macro_mult * 100
                     )
 
+            # Risk-parity: scale position inversely proportional to volatility
+            if sizing.allowed and price > 0:
+                atr_val = None
+                if "atr" in df.columns:
+                    atr_val = float(df["atr"].iloc[-1])
+                elif "ATRr_14" in df.columns:
+                    atr_val = float(df["ATRr_14"].iloc[-1])
+                if atr_val and atr_val > 0:
+                    atr_pct = atr_val / price
+                    sizing = self._risk_manager.apply_volatility_scaling(
+                        sizing, atr_pct, price,
+                    )
+
             if not sizing.allowed:
                 logger.info(
                     "Buy rejected for %s: %s",

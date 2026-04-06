@@ -2,7 +2,7 @@
 
 import pytest
 
-from engine.risk_manager import RiskManager, RiskParams
+from engine.risk_manager import RiskManager, RiskParams, PositionSizeResult
 
 
 class TestPositionSizing:
@@ -1504,3 +1504,99 @@ class TestTaskDailyReset:
             "KR trading should be allowed after daily reset; "
             f"got reason: {result.reason}"
         )
+
+
+class TestVolatilityScaling:
+    """Tests for risk-parity volatility scaling (apply_volatility_scaling)."""
+
+    def _base_sizing(self, quantity: int = 10, price: float = 100.0) -> PositionSizeResult:
+        return PositionSizeResult(
+            quantity=quantity,
+            allocation_usd=quantity * price,
+            risk_per_share=price * 0.12,
+            reason="OK",
+            allowed=True,
+        )
+
+    def test_high_vol_reduces_position(self):
+        """High ATR% → scale < 1.0 → fewer shares."""
+        sizing = self._base_sizing(quantity=10, price=100.0)
+        result = RiskManager.apply_volatility_scaling(
+            sizing, atr_pct=0.04, price=100.0, target_risk_pct=0.02,
+        )
+        assert result.quantity < 10
+        assert result.allowed is True
+        assert "vol_scale" in result.reason
+
+    def test_low_vol_increases_position(self):
+        """Low ATR% → scale > 1.0 → more shares."""
+        sizing = self._base_sizing(quantity=10, price=100.0)
+        result = RiskManager.apply_volatility_scaling(
+            sizing, atr_pct=0.01, price=100.0, target_risk_pct=0.02,
+        )
+        assert result.quantity > 10
+        assert result.allowed is True
+
+    def test_target_vol_no_change(self):
+        """ATR% matches target → scale = 1.0 → same quantity."""
+        sizing = self._base_sizing(quantity=10, price=100.0)
+        result = RiskManager.apply_volatility_scaling(
+            sizing, atr_pct=0.02, price=100.0, target_risk_pct=0.02,
+        )
+        assert result.quantity == 10
+
+    def test_scale_clamped_at_min(self):
+        """Extremely high volatility should be clamped at min_scale."""
+        sizing = self._base_sizing(quantity=10, price=100.0)
+        result = RiskManager.apply_volatility_scaling(
+            sizing, atr_pct=0.20, price=100.0, target_risk_pct=0.02,
+            min_scale=0.3,
+        )
+        assert result.quantity >= 3  # 10 * 0.3 = 3
+        assert result.quantity <= 4  # rounding
+
+    def test_scale_clamped_at_max(self):
+        """Extremely low volatility should be clamped at max_scale."""
+        sizing = self._base_sizing(quantity=10, price=100.0)
+        result = RiskManager.apply_volatility_scaling(
+            sizing, atr_pct=0.001, price=100.0, target_risk_pct=0.02,
+            max_scale=1.5,
+        )
+        assert result.quantity == 15  # 10 * 1.5
+
+    def test_zero_atr_no_change(self):
+        """Zero ATR should return sizing unchanged."""
+        sizing = self._base_sizing(quantity=10, price=100.0)
+        result = RiskManager.apply_volatility_scaling(
+            sizing, atr_pct=0.0, price=100.0,
+        )
+        assert result.quantity == 10
+
+    def test_not_allowed_passthrough(self):
+        """Rejected sizing should pass through unchanged."""
+        sizing = PositionSizeResult(
+            quantity=0, allocation_usd=0, risk_per_share=0,
+            reason="Max positions", allowed=False,
+        )
+        result = RiskManager.apply_volatility_scaling(
+            sizing, atr_pct=0.03, price=100.0,
+        )
+        assert result.allowed is False
+        assert result.quantity == 0
+
+    def test_quantity_at_least_one(self):
+        """Even extreme scaling should leave at least 1 share."""
+        sizing = self._base_sizing(quantity=1, price=100.0)
+        result = RiskManager.apply_volatility_scaling(
+            sizing, atr_pct=0.10, price=100.0, target_risk_pct=0.02,
+            min_scale=0.1,
+        )
+        assert result.quantity >= 1
+
+    def test_allocation_matches_quantity(self):
+        """allocation_usd should equal quantity * price."""
+        sizing = self._base_sizing(quantity=10, price=150.0)
+        result = RiskManager.apply_volatility_scaling(
+            sizing, atr_pct=0.03, price=150.0, target_risk_pct=0.02,
+        )
+        assert result.allocation_usd == result.quantity * 150.0

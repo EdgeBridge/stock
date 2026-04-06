@@ -559,6 +559,48 @@ class RiskManager:
         current_invested = portfolio_value - cash_available
         return max(0.0, max_invested - current_invested)
 
+    @staticmethod
+    def apply_volatility_scaling(
+        sizing: PositionSizeResult,
+        atr_pct: float,
+        price: float,
+        target_risk_pct: float = 0.02,
+        min_scale: float = 0.3,
+        max_scale: float = 1.5,
+    ) -> PositionSizeResult:
+        """Apply risk-parity volatility scaling to a position size.
+
+        Scales position inversely proportional to stock volatility (ATR%),
+        so volatile stocks get smaller positions and stable stocks get larger.
+
+        Args:
+            sizing: Original PositionSizeResult to adjust.
+            atr_pct: ATR as a percentage of price (e.g. 0.02 = 2%).
+            price: Current stock price (for recalculating quantity).
+            target_risk_pct: Target per-position risk (default 2%).
+            min_scale: Minimum scaling factor (floor).
+            max_scale: Maximum scaling factor (cap).
+
+        Returns:
+            Adjusted PositionSizeResult with volatility-scaled quantity.
+        """
+        if not sizing.allowed or sizing.quantity <= 0 or atr_pct <= 0:
+            return sizing
+
+        scale = target_risk_pct / atr_pct
+        scale = max(min_scale, min(max_scale, scale))
+
+        new_quantity = max(1, int(sizing.quantity * scale))
+        new_alloc = new_quantity * price
+
+        return PositionSizeResult(
+            quantity=new_quantity,
+            allocation_usd=new_alloc,
+            risk_per_share=sizing.risk_per_share,
+            reason=f"{sizing.reason} vol_scale={scale:.2f}",
+            allowed=True,
+        )
+
     def calculate_extended_hours_position_size(
         self,
         symbol: str,
