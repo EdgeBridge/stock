@@ -596,3 +596,214 @@ class TestFullPipelineIntegration:
             # Dynamic SL/TP should differ from defaults in most cases
             assert pos.stop_loss_pct > 0
             assert pos.take_profit_pct > 0
+
+
+class TestLookAheadBiasFixes:
+    """Verify no look-ahead bias: current bar excluded from regime & factor scoring."""
+
+    def test_regime_detection_excludes_current_bar(self):
+        """SPY regime detection must use [:date_idx], not [:date_idx+1]."""
+        import ast
+        import inspect
+        import textwrap
+        from backtest.full_pipeline import FullPipelineBacktest
+
+        source = textwrap.dedent(inspect.getsource(FullPipelineBacktest.run))
+        tree = ast.parse(source)
+
+        # Find the spy_window assignment: should be spy_data.df.iloc[:date_idx]
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id == "spy_window":
+                        # The slice should be [:date_idx] (upper=Name(id='date_idx'))
+                        # NOT [:date_idx + 1] (upper=BinOp)
+                        value = node.value  # Subscript
+                        assert isinstance(value, ast.Subscript), "spy_window should be a subscript"
+                        slice_node = value.slice
+                        assert isinstance(slice_node, ast.Slice), "Should be a slice"
+                        upper = slice_node.upper
+                        assert isinstance(upper, ast.Name), (
+                            f"spy_window slice upper should be Name(date_idx), "
+                            f"got {type(upper).__name__} — possible look-ahead bias"
+                        )
+                        assert upper.id == "date_idx", (
+                            f"Expected date_idx, got {upper.id}"
+                        )
+                        return
+
+        pytest.fail("spy_window assignment not found in run()")
+
+    def test_factor_scores_exclude_current_bar(self):
+        """Factor score computation must use [:date_idx], not [:date_idx+1]."""
+        import ast
+        import inspect
+        import textwrap
+        from backtest.full_pipeline import FullPipelineBacktest
+
+        source = textwrap.dedent(inspect.getsource(FullPipelineBacktest._update_factor_scores))
+        tree = ast.parse(source)
+
+        # Find data.df.iloc[:date_idx] — the slice should NOT be a BinOp
+        found_slice = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Subscript):
+                if isinstance(node.slice, ast.Slice):
+                    upper = node.slice.upper
+                    if isinstance(upper, ast.Name) and upper.id == "date_idx":
+                        found_slice = True
+                    elif isinstance(upper, ast.BinOp):
+                        pytest.fail(
+                            "Factor scores use [:date_idx + N] — look-ahead bias detected"
+                        )
+
+        assert found_slice, "Expected [:date_idx] slice in _update_factor_scores"
+
+    def test_strategy_signals_exclude_current_bar(self):
+        """Strategy analyze() receives df_window=[:date_idx], not [:date_idx+1]."""
+        import ast
+        import inspect
+        import textwrap
+        from backtest.full_pipeline import FullPipelineBacktest
+
+        source = textwrap.dedent(inspect.getsource(FullPipelineBacktest.run))
+        tree = ast.parse(source)
+
+        # Find df_window assignment: sdata.df.iloc[:date_idx]
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id == "df_window":
+                        value = node.value
+                        assert isinstance(value, ast.Subscript)
+                        slice_node = value.slice
+                        assert isinstance(slice_node, ast.Slice)
+                        upper = slice_node.upper
+                        assert isinstance(upper, ast.Name), (
+                            f"df_window slice should be Name(date_idx), "
+                            f"got {type(upper).__name__} — look-ahead bias"
+                        )
+                        assert upper.id == "date_idx"
+                        return
+
+        pytest.fail("df_window assignment not found in run()")
+
+
+class TestKellyParamsMatchLive:
+    """Verify backtest Kelly params match live defaults."""
+
+    def test_default_kelly_fraction(self):
+        config = PipelineConfig()
+        assert config.kelly_fraction == 0.40
+
+    def test_default_confidence_exponent(self):
+        config = PipelineConfig()
+        assert config.confidence_exponent == 1.2
+
+    def test_default_min_position_pct(self):
+        config = PipelineConfig()
+        assert config.min_position_pct == 0.05
+
+    def test_kelly_sizer_receives_correct_params(self):
+        """KellyPositionSizer is initialized with matching parameters."""
+        config = PipelineConfig()
+        engine = FullPipelineBacktest(config)
+        sizer = engine._risk_manager._kelly
+        assert sizer._kelly_frac == config.kelly_fraction
+        assert sizer._conf_exp == config.confidence_exponent
+        assert sizer._min_pct == config.min_position_pct
+
+
+class TestSymmetricSlippage:
+    """Verify sell-side slippage is volume-adjusted (symmetric with buy)."""
+
+    def test_close_position_uses_effective_slippage(self):
+        """_close_position should call _effective_slippage, not use fixed slippage."""
+        config = PipelineConfig(
+            universe=["AAPL"],
+            slippage_pct=0.05,
+            volume_adjusted_slippage=True,
+        )
+        engine = FullPipelineBacktest(config)
+        engine._cash = 0
+
+        engine._positions["AAPL"] = _Position(
+            "AAPL", 100, 100.0, "2023-01-01", "test", 100.0, 0.08, 0.20,
+        )
+
+        # Close with high volume → base slippage (0.05%)
+        engine._close_position("AAPL", 100.0, "2023-03-01", "test", volume=10_000_000)
+        trade_high_vol = engine._trades[-1]
+
+        # Reset position
+        engine._positions["AAPL"] = _Position(
+            "AAPL", 100, 100.0, "2023-01-01", "test", 100.0, 0.08, 0.20,
+        )
+        engine._cash = 0
+
+        # Close with low volume → higher slippage (3x at >10% participation)
+        engine._close_position("AAPL", 100.0, "2023-03-01", "test", volume=500)
+        trade_low_vol = engine._trades[-1]
+
+        # Low volume should have worse exit price (more slippage)
+        assert trade_low_vol.exit_price < trade_high_vol.exit_price
+
+    def test_execute_sell_passes_volume(self):
+        """_execute_sell should pass volume to _close_position."""
+        config = PipelineConfig(
+            universe=["AAPL"],
+            dynamic_sl_tp=False,
+            default_stop_loss_pct=0.08,
+            default_take_profit_pct=0.20,
+        )
+        engine = FullPipelineBacktest(config)
+        engine._cash = 0
+        engine._day_count = 10
+
+        engine._positions["AAPL"] = _Position(
+            "AAPL", 100, 100.0, "2023-01-01", "test", 100.0, 0.08, 0.20,
+            entry_day_count=0,
+        )
+
+        # Create data with known volume
+        df = _make_ohlcv(10, start_price=100.0)
+        from data.indicator_service import IndicatorService
+        df = IndicatorService.add_all_indicators(df)
+        stock_data = {"AAPL": BacktestData("AAPL", df, "2023-01-01", "2023-06-01")}
+
+        signal = MagicMock()
+        signal.strategy_name = "test"
+        signal.confidence = 0.80
+        signal.signal_type = SignalType.SELL
+
+        engine._execute_sell("AAPL", stock_data, 5, df.index[5], signal)
+        assert len(engine._trades) == 1
+        # Trade recorded with volume-adjusted slippage (not zero-volume fixed)
+
+    def test_effective_slippage_tiers(self):
+        """Verify volume-adjusted slippage scales with participation rate."""
+        config = PipelineConfig(
+            slippage_pct=0.05,
+            volume_adjusted_slippage=True,
+            universe=["AAPL"],
+        )
+        engine = FullPipelineBacktest(config)
+
+        # <1% participation → base
+        assert engine._effective_slippage(100_000, 500) == 0.05
+        # 1-5% participation → 1.5x
+        assert engine._effective_slippage(10_000, 200) == pytest.approx(0.075)
+        # 5-10% participation → 2x
+        assert engine._effective_slippage(10_000, 600) == pytest.approx(0.10)
+        # >10% participation → 3x
+        assert engine._effective_slippage(1_000, 200) == pytest.approx(0.15)
+
+    def test_zero_volume_uses_base_slippage(self):
+        """When volume=0, use base slippage (don't divide by zero)."""
+        config = PipelineConfig(
+            slippage_pct=0.05,
+            volume_adjusted_slippage=True,
+            universe=["AAPL"],
+        )
+        engine = FullPipelineBacktest(config)
+        assert engine._effective_slippage(0, 100) == 0.05

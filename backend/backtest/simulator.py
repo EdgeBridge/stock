@@ -210,13 +210,16 @@ class BacktestSimulator:
             highest_price=exec_price,
         )
 
-    def _close_position(self, symbol: str, price: float, date) -> None:
+    def _close_position(
+        self, symbol: str, price: float, date, volume: float = 0.0,
+    ) -> None:
         pos = self._positions.get(symbol)
         if not pos:
             return
 
-        # Apply slippage (sell lower)
-        exec_price = price * (1 - self._config.slippage_pct / 100)
+        # Apply volume-adjusted slippage symmetrically (same as buy side)
+        slippage = self._effective_slippage(volume, pos.quantity)
+        exec_price = price * (1 - slippage / 100)
         proceeds = pos.quantity * exec_price - self._config.commission_per_order
         self._cash += proceeds
 

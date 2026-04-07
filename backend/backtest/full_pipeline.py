@@ -143,10 +143,10 @@ class PipelineConfig:
     min_active_ratio: float = 0.15  # Min fraction of strategies that must be active
     min_confidence: float = 0.50  # Min combined confidence to generate BUY/SELL
 
-    # Kelly sizing
-    kelly_fraction: float = 0.25  # Fractional Kelly (0.25 = quarter Kelly)
-    confidence_exponent: float = 2.0  # Confidence scaling power (lower = bigger positions)
-    min_position_pct: float = 0.02  # Minimum position size
+    # Kelly sizing (match live defaults from position_sizing.py)
+    kelly_fraction: float = 0.40  # Fractional Kelly (matches live)
+    confidence_exponent: float = 1.2  # Confidence scaling power (matches live)
+    min_position_pct: float = 0.05  # Minimum position size (matches live)
 
     # Momentum factor tilt
     enable_momentum_tilt: bool = False  # Pass momentum z-scores to Kelly sizer
@@ -459,8 +459,8 @@ class FullPipelineBacktest:
                 # Actually reset only on real new days, but for daily bars this is every bar
                 pass  # We reset in _end_of_day
 
-            # 4a. Detect market state from SPY
-            spy_window = spy_data.df.iloc[:date_idx + 1]
+            # 4a. Detect market state from SPY (exclude current bar to avoid look-ahead)
+            spy_window = spy_data.df.iloc[:date_idx]
             market_state = self._market_state_detector.detect(spy_window)
             regime_str = market_state.regime.value
             self._risk_manager.set_eval_regime(regime_str)
@@ -645,9 +645,11 @@ class FullPipelineBacktest:
                 if cfg.enable_cash_parking and parking_sym in self._positions:
                     data = stock_data.get(parking_sym)
                     if data and date_idx < len(data.df):
-                        price = float(data.df.iloc[date_idx]["close"])
+                        _row = data.df.iloc[date_idx]
+                        price = float(_row["close"])
+                        _vol = float(_row["volume"]) if "volume" in _row.index else 0.0
                         self._close_position(
-                            parking_sym, price, date, "cash_unpark",
+                            parking_sym, price, date, "cash_unpark", volume=_vol,
                         )
 
                 # Reset daily buy count on new day
@@ -897,7 +899,7 @@ class FullPipelineBacktest:
         price_data = {}
         for symbol, data in stock_data.items():
             if date_idx < len(data.df):
-                price_data[symbol] = data.df.iloc[:date_idx + 1]
+                price_data[symbol] = data.df.iloc[:date_idx]  # exclude current bar
 
         if len(price_data) < 3:
             return
@@ -1068,7 +1070,8 @@ class FullPipelineBacktest:
             if not data or date_idx >= len(data.df):
                 continue
 
-            price = float(data.df.iloc[date_idx]["close"])
+            row = data.df.iloc[date_idx]
+            price = float(row["close"])
             pnl_pct = (price - pos.avg_price) / pos.avg_price
 
             if pnl_pct < 0:
@@ -1076,7 +1079,8 @@ class FullPipelineBacktest:
                     "Regime sell %s: %s→%s, PnL=%.1f%%",
                     symbol, self._prev_regime, current_regime, pnl_pct * 100,
                 )
-                self._close_position(symbol, price, date, "regime_protect")
+                vol = float(row["volume"]) if "volume" in row.index else 0.0
+                self._close_position(symbol, price, date, "regime_protect", volume=vol)
 
     # ------------------------------------------------------------------
     # Extended hours simulation
@@ -1538,11 +1542,14 @@ class FullPipelineBacktest:
             if unrealized_pct > -self._config.hard_sl_pct:
                 return  # Min hold not met, not hard SL
 
-        price = float(data.df.iloc[date_idx]["close"])
-        self._close_position(symbol, price, date, "signal_sell")
+        row = data.df.iloc[date_idx]
+        price = float(row["close"])
+        vol = float(row["volume"]) if "volume" in row.index else 0.0
+        self._close_position(symbol, price, date, "signal_sell", volume=vol)
 
     def _close_position(
         self, symbol: str, price: float, date, reason: str = "",
+        volume: float = 0.0,
     ) -> None:
         """Close a position and record the trade."""
         pos = self._positions.get(symbol)
@@ -1550,7 +1557,9 @@ class FullPipelineBacktest:
             return
 
         cfg = self._config
-        exec_price = price * (1 - cfg.slippage_pct / 100)
+        # Apply volume-adjusted slippage symmetrically (same as buy side)
+        slippage = self._effective_slippage(volume, pos.quantity)
+        exec_price = price * (1 - slippage / 100)
         proceeds = pos.quantity * exec_price - cfg.commission_per_order
         self._cash += proceeds
 
