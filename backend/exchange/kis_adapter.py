@@ -700,11 +700,18 @@ class KISAdapter(ExchangeAdapter):
         high: bool = True,
         limit: int = 20,
     ) -> list[RankedStock]:
-        """Fetch stocks hitting new highs or new lows."""
+        """Fetch stocks hitting new highs or new lows.
+
+        2026-04-09: Same NDAY-required bug as fetch_updown_rate. After
+        fixing updown-rate, the second OPSQ2001 NDAY warning at startup
+        was traced to this call (HHDFS76300000 also needs NDAY).
+        NDAY="0" = "today's new highs/lows".
+        """
         await self._auth.ensure_valid_token()
         params = {
             "AUTH": "",
             "EXCD": exchange,
+            "NDAY": "0",  # required by HHDFS76300000
             "MINX": "9",  # 120 min window
             "VOL_RANG": "1",  # >= 100 shares
             "GUBN": "1" if high else "0",

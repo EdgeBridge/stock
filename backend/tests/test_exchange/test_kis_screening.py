@@ -160,3 +160,26 @@ class TestFetchUpdownRateParams:
         assert captured["params"]["NDAY"] == "0"
         assert captured["params"]["EXCD"] == "NYS"
         assert captured["params"]["GUBN"] == "0"  # down
+
+    @pytest.mark.asyncio
+    async def test_fetch_new_highlow_passes_nday(self, mock_adapter):
+        """Same NDAY-required bug as updown-rate.
+
+        After the first NDAY fix to fetch_updown_rate, the journalctl
+        still showed one OPSQ2001 warning per startup. Tracing it
+        showed fetch_new_highlow (HHDFS76300000) also requires NDAY.
+        """
+        captured: dict = {}
+
+        async def fake_get(path, tr_id, params):
+            captured["path"] = path
+            captured["params"] = dict(params)
+            return {"rt_cd": "0", "output2": []}
+
+        mock_adapter._get = fake_get  # type: ignore[assignment]
+        await mock_adapter.fetch_new_highlow(exchange="NAS", high=True)
+
+        assert captured["path"] == "/uapi/overseas-stock/v1/ranking/new-highlow"
+        assert captured["params"]["NDAY"] == "0", "NDAY required for HHDFS76300000"
+        assert captured["params"]["GUBN"] == "1"  # high
+        assert captured["params"]["GUBN2"] == "1"  # sustained
