@@ -668,11 +668,21 @@ class KISAdapter(ExchangeAdapter):
         direction: str = "up",
         limit: int = 20,
     ) -> list[RankedStock]:
-        """Fetch stocks by price change rate (gainers or losers)."""
+        """Fetch stocks by price change rate (gainers or losers).
+
+        2026-04-09: Added required NDAY parameter (was missing → KIS
+        returned `OPSQ2001 ERROR INPUT FIELD NOT FOUND [NDAY]` and the
+        gainers source of UniverseExpander was silently dead). NDAY="0"
+        means "today's intraday rank" which is what we want for a
+        live gainers scanner.
+        Values: 0=today, 1=2d, 2=3d, 3=5d, 4=10d, 5=20d, 6=30d, 7=60d,
+                8=120d, 9=1y.
+        """
         await self._auth.ensure_valid_token()
         params = {
             "AUTH": "",
             "EXCD": exchange,
+            "NDAY": "0",  # required by HHDFS76290000 (today's gainers/losers)
             "GUBN": "1" if direction == "up" else "0",
             "VOL_RANG": "1",  # >= 100 shares
             "KEYB": "",

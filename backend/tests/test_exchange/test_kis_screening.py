@@ -115,3 +115,48 @@ class TestRankedStock:
         )
         assert stock.symbol == "TSLA"
         assert stock.source == "volume_surge"
+
+
+class TestFetchUpdownRateParams:
+    """Regression: fetch_updown_rate must include NDAY parameter.
+
+    2026-04-09: KIS API returned `OPSQ2001 ERROR INPUT FIELD NOT FOUND
+    [NDAY]` because the params dict was missing NDAY. Fix added
+    `NDAY: "0"` (today's gainers/losers). This test locks in the fix.
+    """
+
+    @pytest.mark.asyncio
+    async def test_fetch_updown_rate_passes_nday(self, mock_adapter):
+        captured: dict = {}
+
+        async def fake_get(path, tr_id, params):
+            captured["path"] = path
+            captured["tr_id"] = tr_id
+            captured["params"] = dict(params)
+            return {"rt_cd": "0", "output2": []}
+
+        mock_adapter._get = fake_get  # type: ignore[assignment]
+
+        await mock_adapter.fetch_updown_rate(exchange="NAS", direction="up")
+
+        assert captured["path"] == "/uapi/overseas-stock/v1/ranking/updown-rate"
+        # Required parameters per KIS HHDFS76290000
+        assert captured["params"]["NDAY"] == "0", "NDAY must be set or KIS returns OPSQ2001"
+        assert captured["params"]["EXCD"] == "NAS"
+        assert captured["params"]["GUBN"] == "1"  # up
+        assert captured["params"]["VOL_RANG"] == "1"
+
+    @pytest.mark.asyncio
+    async def test_fetch_updown_rate_down_direction(self, mock_adapter):
+        captured: dict = {}
+
+        async def fake_get(path, tr_id, params):
+            captured["params"] = dict(params)
+            return {"rt_cd": "0", "output2": []}
+
+        mock_adapter._get = fake_get  # type: ignore[assignment]
+        await mock_adapter.fetch_updown_rate(exchange="NYS", direction="down")
+
+        assert captured["params"]["NDAY"] == "0"
+        assert captured["params"]["EXCD"] == "NYS"
+        assert captured["params"]["GUBN"] == "0"  # down
