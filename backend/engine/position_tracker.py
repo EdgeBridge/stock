@@ -75,6 +75,11 @@ class PositionTracker:
         self._exchange_resolver = exchange_resolver
         self._account_id = account_id
         self._tracked: dict[str, TrackedPosition] = {}
+        # Commission rate per order (one-way). Exits with gain < 2× this
+        # (round-trip cost) are suppressed — selling at +0.3% with 0.25%
+        # commission each way = net loss. Added 2026-04-13 after the system
+        # was found to be completely commission-blind.
+        self._commission_rate: float = 0.0025 if market == "US" else 0.0020
         # Callbacks invoked after a sell is executed (STOCK-43).
         # Signature: callback(symbol: str, sell_timestamp: float) -> None
         # Used by EvaluationLoop to update sell cooldown on PositionTracker-
@@ -519,21 +524,36 @@ class PositionTracker:
                 "pnl": pnl,
             }
 
+        # Commission guard: don't exit for tiny profits that would be wiped
+        # out by round-trip commission. SL exits are exempt (cutting losses
+        # is always worth the commission). Added 2026-04-13.
+        _rt_commission = self._commission_rate * 2  # round-trip
+        _gain_pct = (
+            (current_price - tracked.entry_price) / tracked.entry_price
+            if tracked.entry_price > 0 else 0.0
+        )
+
         # Partial profit-taking at intermediate gain level
         if self._check_profit_taking(tracked, current_price):
-            gain_pct = (current_price - tracked.entry_price) / tracked.entry_price
-            sell_qty = self._calculate_profit_take_qty(tracked)
-            if sell_qty > 0:
-                pnl = (current_price - tracked.entry_price) * sell_qty
-                return {
-                    "symbol": tracked.symbol,
-                    "reason": "profit_taking",
-                    "entry": tracked.entry_price,
-                    "current": current_price,
-                    "pnl": pnl,
-                    "partial_qty": sell_qty,
-                    "gain_pct": round(gain_pct * 100, 1),
-                }
+            if _gain_pct < _rt_commission:
+                logger.debug(
+                    "Skipping profit_taking for %s: gain %.2f%% < commission %.2f%%",
+                    tracked.symbol, _gain_pct * 100, _rt_commission * 100,
+                )
+            else:
+                gain_pct = _gain_pct
+                sell_qty = self._calculate_profit_take_qty(tracked)
+                if sell_qty > 0:
+                    pnl = (current_price - tracked.entry_price) * sell_qty
+                    return {
+                        "symbol": tracked.symbol,
+                        "reason": "profit_taking",
+                        "entry": tracked.entry_price,
+                        "current": current_price,
+                        "pnl": pnl,
+                        "partial_qty": sell_qty,
+                        "gain_pct": round(gain_pct * 100, 1),
+                    }
 
         # Trailing stop (flat, per-strategy)
         if self._risk.check_trailing_stop(
@@ -543,15 +563,21 @@ class PositionTracker:
             tracked.trailing_activation_pct,
             tracked.trailing_stop_pct,
         ):
-            pnl = (current_price - tracked.entry_price) * tracked.quantity
-            return {
-                "symbol": tracked.symbol,
-                "reason": "trailing_stop",
-                "entry": tracked.entry_price,
-                "current": current_price,
-                "highest": tracked.highest_price,
-                "pnl": pnl,
-            }
+            if _gain_pct > 0 and _gain_pct < _rt_commission:
+                logger.debug(
+                    "Skipping trailing_stop for %s: gain %.2f%% < commission %.2f%%",
+                    tracked.symbol, _gain_pct * 100, _rt_commission * 100,
+                )
+            else:
+                pnl = (current_price - tracked.entry_price) * tracked.quantity
+                return {
+                    "symbol": tracked.symbol,
+                    "reason": "trailing_stop",
+                    "entry": tracked.entry_price,
+                    "current": current_price,
+                    "highest": tracked.highest_price,
+                    "pnl": pnl,
+                }
 
         # Tiered trailing stop (global, gain-adaptive — STOCK-24)
         if self._risk.check_tiered_trailing_stop(
@@ -559,11 +585,17 @@ class PositionTracker:
             current_price,
             tracked.highest_price,
         ):
-            pnl = (current_price - tracked.entry_price) * tracked.quantity
-            gain_pct = (tracked.highest_price - tracked.entry_price) / tracked.entry_price
-            return {
-                "symbol": tracked.symbol,
-                "reason": "tiered_trailing_stop",
+            if _gain_pct > 0 and _gain_pct < _rt_commission:
+                logger.debug(
+                    "Skipping tiered_trailing for %s: gain %.2f%% < commission %.2f%%",
+                    tracked.symbol, _gain_pct * 100, _rt_commission * 100,
+                )
+            else:
+                pnl = (current_price - tracked.entry_price) * tracked.quantity
+                gain_pct = (tracked.highest_price - tracked.entry_price) / tracked.entry_price
+                return {
+                    "symbol": tracked.symbol,
+                    "reason": "tiered_trailing_stop",
                 "entry": tracked.entry_price,
                 "current": current_price,
                 "highest": tracked.highest_price,

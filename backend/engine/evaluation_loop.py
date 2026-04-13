@@ -135,6 +135,14 @@ class EvaluationLoop:
         self._max_sector_pct: float = 0.40
         self._sector_cache: dict[str, str] = {}  # symbol -> sector name
 
+        # Commission rate per order (one-way). Used to filter out trades
+        # where expected PnL < round-trip commission. KIS US = 0.25%,
+        # KR = ~0.015% brokerage + 0.18% sell tax ≈ 0.20% effective.
+        # 2026-04-13: Added after cash_parking churn showed the system
+        # was completely commission-blind (860k KRW in 2 days).
+        self._commission_rate: float = 0.0025 if market == "US" else 0.0020
+        self._min_profit_after_commission: float = self._commission_rate * 2  # round-trip
+
         # Cash parking (port from backtest/full_pipeline.py — recovers ~13pp
         # alpha by parking idle cash in SPY/KODEX 200 instead of letting it
         # sit during low-conviction periods). Default disabled; opt-in via
