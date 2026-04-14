@@ -28,6 +28,7 @@ CASH_FLOW_THRESHOLD = 0.05  # 5%
 def detect_cash_flow(
     prev_total: float,
     new_total: float,
+    threshold: float | None = None,
 ) -> float:
     """Detect external deposit/withdrawal between two snapshots.
 
@@ -40,7 +41,7 @@ def detect_cash_flow(
       raw_cf = new_total - prev_total
 
     Normal market appreciation may also appear here, but is typically below the
-    5% threshold within a single snapshot interval.
+    threshold within a single snapshot interval (default 5% for US, 10% for KR).
 
     Returns the detected cash flow amount (positive=deposit, negative=withdrawal).
     """
@@ -48,7 +49,8 @@ def detect_cash_flow(
         return 0.0
 
     raw_cf = new_total - prev_total
-    threshold_amount = CASH_FLOW_THRESHOLD * prev_total
+    effective_threshold = threshold if threshold is not None else CASH_FLOW_THRESHOLD
+    threshold_amount = effective_threshold * prev_total
 
     if abs(raw_cf) > threshold_amount:
         return raw_cf
@@ -159,11 +161,17 @@ class PortfolioManager:
         daily_pnl = await self._calculate_daily_pnl(total_equity)
 
         # STOCK-46: Detect external cash flow (deposit/withdrawal).
+        # 2026-04-14: KR balance.total can fluctuate >10% between snapshots
+        # when buy orders fill (cash drops, stock value adds back with delay).
+        # Use a higher threshold for KR to avoid false "deposit" detection
+        # that was inflating dashboard returns (+500만 false 1d return).
         cash_flow = 0.0
+        cf_threshold = 0.10 if self._market == "KR" else CASH_FLOW_THRESHOLD
         if prev is not None and prev.total_value_usd > 0:
             cash_flow = detect_cash_flow(
                 prev_total=prev.total_value_usd,
                 new_total=total_equity,
+                threshold=cf_threshold,
             )
             if cash_flow != 0.0:
                 action = "deposit" if cash_flow > 0 else "withdrawal"
@@ -171,15 +179,18 @@ class PortfolioManager:
                     "[%s] Cash flow detected: %.2f (%s)", self._market, cash_flow, action
                 )
 
-        # STOCK-58: Capture exchange rate at snapshot time for accurate historical conversions
+        # STOCK-58: Capture exchange rate at snapshot time for accurate historical conversions.
+        # 2026-04-14: Removed `if self._market == "US"` guard — KR snapshots
+        # also need the rate for equity timeline building. Without it,
+        # usd_krw_rate=0 was stored for all KR snapshots, breaking dashboard
+        # return calculations when US+KR timelines were combined.
         usd_krw_rate = None
-        if self._market == "US":
-            try:
-                usd_krw_rate = await self._market_data.get_exchange_rate()
-                if usd_krw_rate <= 0:
-                    usd_krw_rate = None
-            except Exception as e:
-                logger.debug("[%s] Failed to fetch exchange rate for snapshot: %s", self._market, e)
+        try:
+            usd_krw_rate = await self._market_data.get_exchange_rate()
+            if usd_krw_rate is not None and usd_krw_rate <= 0:
+                usd_krw_rate = None
+        except Exception as e:
+            logger.debug("[%s] Failed to fetch exchange rate for snapshot: %s", self._market, e)
 
         snapshot = PortfolioSnapshot(
             market=self._market,
