@@ -25,6 +25,24 @@ export interface PortfolioSummary {
   total_unrealized_pnl_usd?: number
   total_equity: number
   available_cash?: number
+  equity_breakdown?: {
+    formula: string
+    kr_total_krw: number
+    us_total_krw: number
+    shared_deposit_krw: number
+    kr_deposit_krw?: number
+    kr_stock_eval_krw?: number
+    kr_tot_evlu_krw?: number
+  }
+  cash_breakdown?: {
+    formula: string
+    combined_cash_krw: number
+    kr_orderable_cash_krw: number
+    us_orderable_cash_usd: number
+    us_orderable_cash_krw: number
+    withdrawable_cash_krw?: number
+    total_position_value_krw: number
+  }
 }
 
 export interface PositionWithMarket extends Position {

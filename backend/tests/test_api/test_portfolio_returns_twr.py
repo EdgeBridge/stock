@@ -10,7 +10,7 @@ Validates:
 
 import asyncio
 from datetime import datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -149,6 +149,26 @@ class TestBuildEquityTimeline:
         # first combined entry because US equity is now carried forward.
         assert len(timeline) == 1
         assert timeline[0][1] == pytest.approx(10_000 * 1400.0 + 10_000_000)
+
+    def test_combined_timeline_uses_us_position_value_and_ignores_us_cash_flow(self):
+        now = datetime.utcnow()
+        us = [
+            _make_snapshot("US", 10_000, now, cash_usd=4_000, cash_flow=2_000.0),
+            _make_snapshot(
+                "US",
+                11_000,
+                now + timedelta(hours=1),
+                cash_usd=4_500,
+                cash_flow=0.0,
+            ),
+        ]
+        kr = [
+            _make_snapshot("KR", 5_000_000, now + timedelta(seconds=1), cash_flow=0.0),
+            _make_snapshot("KR", 5_100_000, now + timedelta(hours=1, seconds=1), cash_flow=0.0),
+        ]
+        timeline = _build_equity_timeline(us, kr, 1400.0, combined=True)
+        assert timeline[0][1] == pytest.approx(5_000_000 + (10_000 - 4_000) * 1400.0)
+        assert timeline[0][2] == 0.0
 
 
 # ── _calculate_twr() tests ──────────────────────────────────────────────
@@ -306,7 +326,14 @@ class TestPortfolioReturnsTWR:
 
         loop.run_until_complete(_seed())
 
-        with patch("api.portfolio._cached_usd_krw", 1400.0):
+        live_total = 10_500 * 1400
+        with (
+            patch("api.portfolio._cached_usd_krw", 1400.0),
+            patch(
+                "api.portfolio._combined_summary",
+                new=AsyncMock(return_value={"total_equity": live_total}),
+            ),
+        ):
             app = _make_app(session_factory)
             client = TestClient(app)
             data = client.get("/api/v1/portfolio/returns").json()
@@ -355,7 +382,14 @@ class TestPortfolioReturnsTWR:
 
         loop.run_until_complete(_seed())
 
-        with patch("api.portfolio._cached_usd_krw", 1400.0):
+        live_total = 15_500 * 1400
+        with (
+            patch("api.portfolio._cached_usd_krw", 1400.0),
+            patch(
+                "api.portfolio._combined_summary",
+                new=AsyncMock(return_value={"total_equity": live_total}),
+            ),
+        ):
             app = _make_app(session_factory)
             client = TestClient(app)
             data = client.get("/api/v1/portfolio/returns").json()
@@ -399,7 +433,14 @@ class TestPortfolioReturnsTWR:
 
         loop.run_until_complete(_seed())
 
-        with patch("api.portfolio._cached_usd_krw", 1400.0):
+        live_total = 10_500 * 1400
+        with (
+            patch("api.portfolio._cached_usd_krw", 1400.0),
+            patch(
+                "api.portfolio._combined_summary",
+                new=AsyncMock(return_value={"total_equity": live_total}),
+            ),
+        ):
             app = _make_app(session_factory)
             client = TestClient(app)
             data = client.get("/api/v1/portfolio/returns").json()
@@ -433,7 +474,14 @@ class TestPortfolioReturnsTWR:
 
         loop.run_until_complete(_seed())
 
-        with patch("api.portfolio._cached_usd_krw", 1400.0):
+        live_total = 16_275 * 1400
+        with (
+            patch("api.portfolio._cached_usd_krw", 1400.0),
+            patch(
+                "api.portfolio._combined_summary",
+                new=AsyncMock(return_value={"total_equity": live_total}),
+            ),
+        ):
             app = _make_app(session_factory)
             client = TestClient(app)
             data = client.get("/api/v1/portfolio/returns").json()

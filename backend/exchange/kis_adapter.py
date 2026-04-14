@@ -113,6 +113,8 @@ class KISAdapter(ExchangeAdapter):
         self._usd_deposit_krw: float = 0.0  # 달러예수금 (KRW equivalent)
         self._tot_asst_krw: float = 0.0  # CTRP6504R tot_asst_amt (해외자산+예수금)
         self._tot_dncl_krw: float = 0.0  # CTRP6504R tot_dncl_amt (예수금, 통합증거금 공유)
+        self._us_position_value_krw: float = 0.0  # CTRP6504R evlu_amt_smtl (미주 보유 평가금액)
+        self._withdrawable_total_krw: float = 0.0  # CTRP6504R wdrw_psbl_tot_amt (통합 주문가능예수금)
 
     async def initialize(self) -> None:
         self._session = aiohttp.ClientSession()
@@ -303,6 +305,12 @@ class KISAdapter(ExchangeAdapter):
         self._tot_asst_krw = tot_asst_krw  # 해외자산 + 예수금 (KR stocks 미포함)
         self._tot_dncl_krw = tot_dncl_krw  # 예수금 (통합증거금 공유)
         self._usd_deposit_krw = float(pb_o3.get("frcr_evlu_tota", 0)) if pb_o3 else 0
+        self._us_position_value_krw = float(
+            pb_o3.get("evlu_amt_smtl", 0) or pb_o3.get("evlu_amt_smtl_amt", 0) or 0
+        ) if pb_o3 else 0
+        self._withdrawable_total_krw = float(
+            pb_o3.get("wdrw_psbl_tot_amt", 0) or 0
+        ) if pb_o3 else 0
         # STOCK-53: Store uncapped buying power + positions for total_equity calc.
         # frcr_ord_psbl_amt1 includes KRW auto-conversion, reflecting the full
         # account capacity (통합증거금). Used by portfolio summary for accurate total.

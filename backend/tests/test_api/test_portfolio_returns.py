@@ -8,7 +8,7 @@ Validates:
 """
 
 from datetime import datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -114,8 +114,14 @@ class TestPortfolioReturnsWithSnapshots:
         loop = asyncio.get_event_loop_policy().new_event_loop()
         loop.run_until_complete(_seed())
 
-        # Patch _cached_usd_krw to a known value
-        with patch("api.portfolio._cached_usd_krw", 1400.0):
+        live_total = 10_500 * 1400
+        with (
+            patch("api.portfolio._cached_usd_krw", 1400.0),
+            patch(
+                "api.portfolio._combined_summary",
+                new=AsyncMock(return_value={"total_equity": live_total}),
+            ),
+        ):
             app = _make_app(session_factory)
             client = TestClient(app)
             data = client.get("/api/v1/portfolio/returns").json()
@@ -147,7 +153,14 @@ class TestPortfolioReturnsWithSnapshots:
         loop = asyncio.get_event_loop_policy().new_event_loop()
         loop.run_until_complete(_seed())
 
-        with patch("api.portfolio._cached_usd_krw", 1400.0):
+        live_total = 10_000 * 1400
+        with (
+            patch("api.portfolio._cached_usd_krw", 1400.0),
+            patch(
+                "api.portfolio._combined_summary",
+                new=AsyncMock(return_value={"total_equity": live_total}),
+            ),
+        ):
             app = _make_app(session_factory)
             client = TestClient(app)
             data = client.get("/api/v1/portfolio/returns").json()
@@ -178,7 +191,14 @@ class TestPortfolioReturnsWithSnapshots:
         loop = asyncio.get_event_loop_policy().new_event_loop()
         loop.run_until_complete(_seed())
 
-        with patch("api.portfolio._cached_usd_krw", 1400.0):
+        live_total = 10_000 * 1400
+        with (
+            patch("api.portfolio._cached_usd_krw", 1400.0),
+            patch(
+                "api.portfolio._combined_summary",
+                new=AsyncMock(return_value={"total_equity": live_total}),
+            ),
+        ):
             app = _make_app(session_factory)
             client = TestClient(app)
             data = client.get("/api/v1/portfolio/returns").json()
@@ -212,7 +232,14 @@ class TestPortfolioReturnsWithSnapshots:
         loop = asyncio.get_event_loop_policy().new_event_loop()
         loop.run_until_complete(_seed())
 
-        with patch("api.portfolio._cached_usd_krw", 1400.0):
+        live_total = 5_500_000 + 11_000 * 1400
+        with (
+            patch("api.portfolio._cached_usd_krw", 1400.0),
+            patch(
+                "api.portfolio._combined_summary",
+                new=AsyncMock(return_value={"total_equity": live_total}),
+            ),
+        ):
             app = _make_app(session_factory)
             client = TestClient(app)
             data = client.get("/api/v1/portfolio/returns").json()
@@ -244,7 +271,14 @@ class TestPortfolioReturnsWithSnapshots:
         loop = asyncio.get_event_loop_policy().new_event_loop()
         loop.run_until_complete(_seed())
 
-        with patch("api.portfolio._cached_usd_krw", 1400.0):
+        live_total = 9_500 * 1400
+        with (
+            patch("api.portfolio._cached_usd_krw", 1400.0),
+            patch(
+                "api.portfolio._combined_summary",
+                new=AsyncMock(return_value={"total_equity": live_total}),
+            ),
+        ):
             app = _make_app(session_factory)
             client = TestClient(app)
             data = client.get("/api/v1/portfolio/returns").json()
@@ -273,7 +307,14 @@ class TestPortfolioReturnsWithSnapshots:
         loop = asyncio.get_event_loop_policy().new_event_loop()
         loop.run_until_complete(_seed())
 
-        with patch("api.portfolio._cached_usd_krw", 1400.0):
+        live_total = 10_500 * 1400
+        with (
+            patch("api.portfolio._cached_usd_krw", 1400.0),
+            patch(
+                "api.portfolio._combined_summary",
+                new=AsyncMock(return_value={"total_equity": live_total}),
+            ),
+        ):
             app = _make_app(session_factory)
             client = TestClient(app)
             data = client.get("/api/v1/portfolio/returns").json()
@@ -284,12 +325,8 @@ class TestPortfolioReturnsWithSnapshots:
 
         loop.close()
 
-    def test_daily_zero_change_when_only_recent_snapshot(self, _setup_db):
-        """Daily shows zero change when only recent snapshot exists within 24h.
-
-        _get_oldest_snapshot finds the 1h-ago snapshot (oldest after now-1day),
-        and _get_latest_snapshot also returns the same snapshot → change=0.
-        """
+    def test_daily_uses_snapshot_before_boundary_as_base(self, _setup_db):
+        """Daily uses the last snapshot before the boundary as the base."""
         session_factory, engine = _setup_db
         now = datetime.utcnow()
 
@@ -305,18 +342,79 @@ class TestPortfolioReturnsWithSnapshots:
         loop = asyncio.get_event_loop_policy().new_event_loop()
         loop.run_until_complete(_seed())
 
-        with patch("api.portfolio._cached_usd_krw", 1400.0):
+        live_total = 10_500 * 1400
+        with (
+            patch("api.portfolio._cached_usd_krw", 1400.0),
+            patch(
+                "api.portfolio._combined_summary",
+                new=AsyncMock(return_value={"total_equity": live_total}),
+            ),
+        ):
             app = _make_app(session_factory)
             client = TestClient(app)
             data = client.get("/api/v1/portfolio/returns").json()
 
-        # Daily: oldest after now-1day = 1h-ago, latest = 1h-ago → same → change=0
         assert data["daily"] is not None
-        assert data["daily"]["change"] == 0.0
-        assert data["daily"]["pct"] == 0.0
-        # Weekly should find the 3-day-old snapshot as base
+        expected_change = (10_500 - 10_000) * 1400
+        assert data["daily"]["change"] == expected_change
+        assert data["daily"]["pct"] == pytest.approx(5.0, abs=0.01)
         assert data["weekly"] is not None
-        assert data["weekly"]["change"] != 0
+        assert data["weekly"]["change"] == expected_change
+
+        loop.close()
+
+    def test_dual_market_returns_use_us_position_value_in_combined_mode(self, _setup_db):
+        """Combined returns should use US position value, not US total account value."""
+        session_factory, _ = _setup_db
+        now = datetime.utcnow()
+
+        import asyncio
+
+        async def _seed():
+            async with session_factory() as session:
+                session.add(
+                    _make_snapshot(
+                        "US",
+                        10_000.0,
+                        now - timedelta(hours=12),
+                        cash_usd=4_000.0,
+                        invested_usd=6_000.0,
+                    )
+                )
+                session.add(
+                    _make_snapshot(
+                        "US",
+                        11_000.0,
+                        now - timedelta(hours=1),
+                        cash_usd=4_500.0,
+                        invested_usd=6_500.0,
+                    )
+                )
+                session.add(_make_snapshot("KR", 5_000_000.0, now - timedelta(hours=12)))
+                session.add(_make_snapshot("KR", 5_500_000.0, now - timedelta(hours=1)))
+                await session.commit()
+
+        loop = asyncio.get_event_loop_policy().new_event_loop()
+        loop.run_until_complete(_seed())
+
+        live_total = 5_500_000 + (11_000 - 4_500) * 1400
+        with (
+            patch("api.portfolio._cached_usd_krw", 1400.0),
+            patch(
+                "api.portfolio._combined_summary",
+                new=AsyncMock(return_value={"total_equity": live_total}),
+            ),
+        ):
+            app = _make_app(session_factory)
+            client = TestClient(app)
+            data = client.get("/api/v1/portfolio/returns").json()
+
+        daily = data["daily"]
+        assert daily is not None
+        old_equity = 5_000_000 + (10_000 - 4_000) * 1400
+        new_equity = 5_500_000 + (11_000 - 4_500) * 1400
+        assert daily["base_equity"] == old_equity
+        assert daily["change"] == new_equity - old_equity
 
         loop.close()
 

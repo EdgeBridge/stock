@@ -98,8 +98,7 @@ class TestTotalEquityIntegratedMargin:
         client = TestClient(app)
         data = client.get("/api/v1/portfolio/summary").json()
 
-        # kr_tot_evlu already includes overseas, so no us_position_value added
-        expected = kr_tot_evlu
+        expected = kr_tot_evlu + us_position_value_krw
         assert abs(data["total_equity"] - expected) < 1.0
 
     def test_no_shared_deposit_skips_dedup(self):
@@ -241,7 +240,7 @@ class TestResponseStructure:
         )
         client = TestClient(app)
         data = client.get("/api/v1/portfolio/summary").json()
-        assert data["equity_breakdown"]["formula"] == "kr_tot_evlu_krw (includes overseas)"
+        assert data["equity_breakdown"]["formula"] == "kr_tot_evlu_krw + us_position_value_krw"
         assert data["equity_breakdown"]["shared_deposit_krw"] == 0
         assert data["cash_breakdown"]["combined_cash_krw"] == data["available_cash"]
 

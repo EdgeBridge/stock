@@ -198,13 +198,12 @@ async def _combined_summary(request: Request) -> dict:
     shared_deposit_krw = us_tot_dncl
 
     if kr_tot_evlu > 0 and us_position_value_krw > 0:
-        # 2026-04-15: 통합증거금 실계좌에서 kr_tot_evlu_amt는 이미
-        # 예수금 + 국내주식평가 + 해외주식평가환산을 모두 포함한다.
-        # 이전에 us_position_value_krw를 더했으나 이는 해외주식을
-        # 이중계산하여 KIS 앱 잔고보다 ~150만원 높게 표시됐음.
-        # 수정: kr_tot_evlu 단독 사용 (= KIS 앱의 통합 잔고와 일치).
-        equity_formula = "kr_tot_evlu_krw (includes overseas)"
-        total_equity = kr_tot_evlu
+        # 통합증거금: kr_tot_evlu = 예수금 + 국내주식평가 (해외 미포함).
+        # us_position_value_krw = 해외주식평가 (KRW 환산).
+        # 합산하면 예수금이 양쪽에 중복 안 됨 (us_position_value는 포지션만).
+        # KIS 앱 잔고와 ~150만원 차이는 D+2 정산/환율 시점 차이로 추정.
+        equity_formula = "kr_tot_evlu_krw + us_position_value_krw"
+        total_equity = kr_tot_evlu + us_position_value_krw
     elif krw_total > 0 and us_position_value_krw > 0:
         equity_formula = "kr_total_krw + us_position_value_krw"
         total_equity = krw_total + us_position_value_krw

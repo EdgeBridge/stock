@@ -71,6 +71,22 @@ export default function Dashboard() {
   // but keep fallback for robustness). USD total already includes cash + positions.
   const totalEquity = summary.total_equity ??
     (summary.balance.total + (summary.usd_balance?.total ?? 0) * rate)
+  const equitySub = summary.equity_breakdown
+    ? (
+      summary.equity_breakdown.formula === 'kr_tot_evlu_krw + us_position_value_krw' &&
+      summary.equity_breakdown.kr_tot_evlu_krw != null
+        ? `KR total eval ${formatCurrency(summary.equity_breakdown.kr_tot_evlu_krw, 'KRW')} + US eval ${formatCurrency(summary.equity_breakdown.us_total_krw, 'KRW')}`
+        : summary.equity_breakdown.kr_deposit_krw != null &&
+            summary.equity_breakdown.kr_stock_eval_krw != null
+          ? `KR cash ${formatCurrency(summary.equity_breakdown.kr_deposit_krw, 'KRW')} + KR stock ${formatCurrency(summary.equity_breakdown.kr_stock_eval_krw, 'KRW')} + US eval ${formatCurrency(summary.equity_breakdown.us_total_krw, 'KRW')}`
+        : `KR total ${formatCurrency(summary.equity_breakdown.kr_total_krw, 'KRW')} + US eval ${formatCurrency(summary.equity_breakdown.us_total_krw, 'KRW')}`
+    )
+    : undefined
+  const combinedCashSub = summary.cash_breakdown
+    ? `KIS orderable ${formatCurrency(summary.cash_breakdown.withdrawable_cash_krw ?? summary.cash_breakdown.kr_orderable_cash_krw, 'KRW')} · KR ${formatCurrency(summary.cash_breakdown.kr_orderable_cash_krw, 'KRW')} / US ${formatCurrency(summary.cash_breakdown.us_orderable_cash_usd, 'USD')}`
+    : (hasUsd
+      ? `KRW ${formatCurrency(summary.balance.available, 'KRW')} / USD ${formatCurrency(summary.usd_balance!.available, 'USD')}`
+      : undefined)
 
   return (
     <div className="space-y-6">
@@ -83,14 +99,12 @@ export default function Dashboard() {
           usdTotal={summary.usd_balance?.total ?? 0}
           rate={rate}
           returns={returns}
+          breakdownSub={equitySub}
         />
         <Card
-          title="Available Cash"
+          title="Orderable Cash"
           value={formatCurrency(summary.available_cash ?? summary.balance.available, 'KRW')}
-          sub={hasUsd
-            ? `KRW ${formatCurrency(summary.balance.available, 'KRW')} / USD ${formatCurrency(summary.usd_balance!.available, 'USD')}`
-            : undefined
-          }
+          sub={combinedCashSub}
         />
         <Card title="Positions" value={String(summary.positions_count)} />
         <Card
@@ -248,6 +262,7 @@ function EquityCard({
   usdTotal,
   rate,
   returns,
+  breakdownSub,
 }: {
   totalEquity: number
   hasUsd: boolean
@@ -255,6 +270,7 @@ function EquityCard({
   usdTotal: number
   rate: number
   returns?: { daily: PeriodReturn | null; weekly: PeriodReturn | null; monthly: PeriodReturn | null }
+  breakdownSub?: string
 }) {
   const [period, setPeriod] = useState<ReturnPeriod>('daily')
   const periodLabels: Record<ReturnPeriod, string> = { daily: '1D', weekly: '1W', monthly: '1M' }
@@ -264,7 +280,11 @@ function EquityCard({
     <div className="bg-gray-900 rounded-lg p-4">
       <div className="text-xs text-gray-400 uppercase tracking-wide">Total Equity</div>
       <div className="text-2xl font-bold mt-1">{formatCurrency(totalEquity, 'KRW')}</div>
-      {hasUsd && (
+      {breakdownSub ? (
+        <div className="text-xs mt-0.5 text-gray-500">
+          {breakdownSub}
+        </div>
+      ) : hasUsd && (
         <div className="text-xs mt-0.5 text-gray-500">
           KRW {formatCurrency(krwTotal, 'KRW')} + USD {formatCurrency(usdTotal, 'USD')} ({'\u20A9'}{rate.toFixed(0)})
         </div>

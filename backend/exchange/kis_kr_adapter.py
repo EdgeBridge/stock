@@ -107,6 +107,8 @@ class KISKRAdapter(ExchangeAdapter):
         self._is_paper = "vts" in config.base_url
         self._tr = TR_ID_KR_PAPER if self._is_paper else TR_ID_KR_LIVE
         self._tot_evlu_amt: float = 0.0  # 총평가금액 (통합증거금: KR+overseas)
+        self._scts_evlu_amt: float = 0.0  # 국내주식 평가금액
+        self._dnca_tot_amt: float = 0.0   # 예수금 총액
 
     async def initialize(self) -> None:
         self._session = aiohttp.ClientSession()
@@ -271,6 +273,8 @@ class KISKRAdapter(ExchangeAdapter):
         self._tot_evlu_amt = float(output2.get("tot_evlu_amt", 0))
         invested = float(output2.get("pchs_amt_smtl_amt", 0)) # 매입금액합계
         deposit = float(output2.get("dnca_tot_amt", 0))       # 예수금총금액
+        self._scts_evlu_amt = stock_eval
+        self._dnca_tot_amt = deposit
 
         # Get actual orderable amount via 주문가능조회
         # dnca_tot_amt includes unsettled US stock buys — not actual buying power
@@ -278,11 +282,13 @@ class KISKRAdapter(ExchangeAdapter):
         if available is None:
             available = deposit  # fallback
 
-        # Domestic-only total: orderable cash + domestic stock market value
-        total = available + stock_eval
+        # Domestic-only total asset: deposit + domestic stock market value.
+        # available/orderable cash can be lower due to unsettled funds, but that
+        # should affect buying power only, not total asset valuation.
+        total = deposit + stock_eval
         if total <= 0:
             # Fallback: use purchase cost if stock evaluation not available
-            total = available + invested
+            total = deposit + invested
 
         logger.info(
             "KR balance: deposit=%.0f, orderable=%.0f, stock_eval=%.0f, "
