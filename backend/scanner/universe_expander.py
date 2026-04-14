@@ -259,7 +259,9 @@ class UniverseExpander:
 # ---------------------------------------------------------------------------
 
 # KIS KR screening: max symbols per API call (first page, no pagination)
-KR_KIS_SCREEN_LIMIT = 15
+# 2026-04-14: raised from 15 to 25 so more dynamic burst candidates
+# survive the per-call limit (6 calls × 25 = up to 150 raw candidates).
+KR_KIS_SCREEN_LIMIT = 25
 
 
 @dataclass
@@ -292,7 +294,7 @@ class KRUniverseExpander:
         kis_kr_adapter: "KISKRAdapter | None" = None,
         rate_limiter: "RateLimiter | None" = None,
         kr_etf_universe: "ETFUniverseType | None" = None,
-        max_total: int = 80,
+        max_total: int = 120,  # raised from 80 to fit seed(~80) + KIS ranking(~50)
     ):
         self._kis_kr = kis_kr_adapter
         self._rate_limiter = rate_limiter
