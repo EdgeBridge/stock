@@ -581,6 +581,7 @@ markets:
       - bnf_deviation
       - donchian_breakout
       - dual_momentum
+      - quality_factor
     # Cash parking — recovers ~13pp alpha by parking idle cash in SPY
     # instead of letting it sit through low-conviction periods.
     # Source: backend/scripts/validate_cash_parking.py V1_park_30 (US 2y, wide universe).
