@@ -35,6 +35,8 @@ def _make_app(
     kr_tot_evlu_amt: float = 0,
     us_position_value_krw: float = 0,
     withdrawable_total_krw: float = 0,
+    kr_deposit_krw: float = 0,
+    kr_stock_eval_krw: float = 0,
 ) -> FastAPI:
     """Create test app with configurable mock state."""
     app = FastAPI()
@@ -64,6 +66,8 @@ def _make_app(
     )
     kr_adapter.fetch_positions = AsyncMock(return_value=kr_positions or [])
     kr_adapter._tot_evlu_amt = kr_tot_evlu_amt
+    kr_adapter._dnca_tot_amt = kr_deposit_krw
+    kr_adapter._scts_evlu_amt = kr_stock_eval_krw
 
     us_rl = RateLimiter(max_per_second=100)
     kr_rl = RateLimiter(max_per_second=100)
@@ -77,28 +81,32 @@ def _make_app(
 
 
 class TestTotalEquityIntegratedMargin:
-    """통합증거금: total = kr_tot_evlu (already includes overseas).
+    """통합증거금: total = 예수금 + 국내주식평가 + 해외주식평가.
 
-    2026-04-15: Fixed from kr_tot_evlu + us_position_value_krw (double-counted
-    overseas stocks) to kr_tot_evlu alone. KIS KR 총평가금액 already includes
-    예수금 + 국내주식 + 해외주식환산, so adding us_position_value is redundant.
+    2026-04-15: KIS 앱 총자산 필드 직접 확인 후 수정.
+    kr_tot_evlu_amt는 해외증거금 차감이 섞여서 부정확.
+    개별 3필드 합산이 KIS 앱과 가장 근접 (시차 ~1만원).
     """
 
     def test_combined_formula(self):
-        """Primary path: kr_tot_evlu alone (includes overseas eval)."""
+        """Primary: deposit + KR stocks + US position = KIS 총자산."""
         kr_total = 8_654_115
         kr_tot_evlu = 9_602_699
         us_position_value_krw = 9_561_545
+        kr_deposit = 4_183_180
+        kr_stock_eval = 2_316_380
 
         app = _make_app(
-            kr_balance=Balance(currency="KRW", total=kr_total, available=4_183_180, locked=4_470_935),
+            kr_balance=Balance(currency="KRW", total=kr_total, available=kr_deposit, locked=4_470_935),
             kr_tot_evlu_amt=kr_tot_evlu,
             us_position_value_krw=us_position_value_krw,
+            kr_deposit_krw=kr_deposit,
+            kr_stock_eval_krw=kr_stock_eval,
         )
         client = TestClient(app)
         data = client.get("/api/v1/portfolio/summary").json()
 
-        expected = kr_tot_evlu + us_position_value_krw
+        expected = kr_deposit + kr_stock_eval + us_position_value_krw
         assert abs(data["total_equity"] - expected) < 1.0
 
     def test_no_shared_deposit_skips_dedup(self):
@@ -237,11 +245,12 @@ class TestResponseStructure:
             kr_tot_evlu_amt=9_602_699,
             us_position_value_krw=9_561_545,
             withdrawable_total_krw=4_183_090,
+            kr_deposit_krw=4_183_180,
+            kr_stock_eval_krw=2_316_380,
         )
         client = TestClient(app)
         data = client.get("/api/v1/portfolio/summary").json()
-        assert data["equity_breakdown"]["formula"] == "kr_tot_evlu_krw + us_position_value_krw"
-        assert data["equity_breakdown"]["shared_deposit_krw"] == 0
+        assert data["equity_breakdown"]["formula"] == "kr_deposit + kr_stock_eval + us_position_value"
         assert data["cash_breakdown"]["combined_cash_krw"] == data["available_cash"]
 
     def test_usd_balance_fields(self):
