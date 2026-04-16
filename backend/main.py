@@ -1249,7 +1249,7 @@ async def lifespan(app: FastAPI):
         "portfolio_snapshot",
         task_portfolio_snapshot,
         interval_sec=3600,
-        phases=[MarketPhase.REGULAR],
+        phases=None,  # always — balance is queryable regardless of market hours
     )
     scheduler.add_task(
         "order_reconciliation",
@@ -1952,7 +1952,7 @@ async def lifespan(app: FastAPI):
         "kr_portfolio_snapshot",
         task_kr_portfolio_snapshot,
         interval_sec=3600,
-        phases=[MarketPhase.REGULAR],
+        phases=None,  # always — balance is queryable regardless of market hours
         market="KR",
     )
     scheduler.add_task(
