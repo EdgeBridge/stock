@@ -1,0 +1,270 @@
+# StockBot Public Edition - Strategy Configuration
+# 3 strategies: ETF Engine (regime_switch + sector_rotation) + Trend Following + MACD Histogram
+# Runtime hot-reload supported via StrategyRegistry.reload_config()
+
+global:
+  min_confidence: 0.50
+  evaluation_interval_sec: 300
+  max_active_strategies: 3
+  signal_combination: weighted_vote
+  held_sell_bias: 0.05
+  held_min_confidence: 0.40
+  stale_pnl_threshold: -0.05
+
+  profit_taking:
+    enabled: true
+    threshold_pct: 0.06
+    sell_ratio: 0.50
+
+  profit_exit:
+    sell_confidence_boost_min_pnl: 0.02
+    sell_confidence_boost_factor: 0.5
+    sell_confidence_boost_max: 0.15
+    profit_take_min_pnl: 0.05
+    profit_take_base_confidence: 0.65
+    profit_take_weakness_required: 1
+    rsi_overbought: 70.0
+    volume_weakness_ratio: 0.8
+    high_profit_auto_sell_pnl: 0.25
+    high_profit_auto_sell_confidence: 0.70
+
+  profit_protection_pct: 0.25
+  hard_sl_pct: -0.15
+
+  trailing_stop_defaults:
+    activation_pct: 0.08
+    trail_pct: 0.04
+
+  tiered_trailing_stop:
+    enabled: true
+    tiers:
+      - gain_pct: 0.05
+        trail_pct: 0.03
+      - gain_pct: 0.10
+        trail_pct: 0.05
+      - gain_pct: 0.15
+        trail_pct: 0.04
+      - gain_pct: 0.20
+        trail_pct: 0.03
+
+  breakeven_stop:
+    enabled: true
+    activation_ratio: 0.50
+    lock_ratio: 0.75
+    lock_pct: 0.50
+
+# Market state -> strategy weight profiles (public: 3 strategies only)
+profiles:
+  strong_uptrend:
+    trend_following: 0.55
+    macd_histogram: 0.45
+
+  uptrend:
+    trend_following: 0.50
+    macd_histogram: 0.50
+
+  sideways:
+    trend_following: 0.30
+    macd_histogram: 0.70
+
+  weak_downtrend:
+    macd_histogram: 0.60
+    trend_following: 0.40
+
+  downtrend:
+    macd_histogram: 0.70
+    trend_following: 0.30
+
+  etf_engine:
+    regime_switch: 0.55
+    sector_rotation: 0.45
+
+# Stock category profiles (simplified for public)
+stock_profiles:
+  growth_momentum:
+    trend_following: 0.60
+    macd_histogram: 0.40
+
+  stable_large_cap:
+    trend_following: 0.45
+    macd_histogram: 0.55
+
+  cyclical_value:
+    trend_following: 0.40
+    macd_histogram: 0.60
+
+  high_volatility:
+    trend_following: 0.35
+    macd_histogram: 0.65
+
+adaptive:
+  alpha: 0.6
+  ema_decay: 0.1
+  min_signals: 5
+  reclassify_interval: 86400
+
+consensus:
+  enabled: false
+  min_group_signals: 1
+  consensus_boost: 0.30
+  discord_penalty: 0.40
+  groups:
+    trend:
+      - trend_following
+    mean_reversion:
+      - macd_histogram
+
+# Individual strategy parameters
+strategies:
+  trend_following:
+    enabled: true
+    timeframe: "1D"
+    params:
+      ema_fast: 20
+      ema_slow: 50
+      ema_long: 200
+      adx_period: 14
+      adx_threshold: 20
+      volume_ma_period: 20
+      volume_min_ratio: 1.0
+    stop_loss:
+      type: fixed_pct
+      max_pct: 0.10
+    trailing_stop:
+      enabled: true
+      activation_pct: 0.08
+      trail_pct: 0.05
+
+  macd_histogram:
+    enabled: true
+    timeframe: "1D"
+    params:
+      fast_period: 8
+      slow_period: 20
+      signal_period: 7
+      divergence_lookback: 14
+      min_histogram_change: 0.5
+    stop_loss:
+      type: fixed_pct
+      max_pct: 0.05
+
+  regime_switch:
+    enabled: true
+    timeframe: "1D"
+    params:
+      spy_sma_period: 200
+      vix_bull_threshold: 18
+      vix_bear_threshold: 23
+      confirmation_days: 2
+      max_leverage_etf_hold_days: 10
+    etf_mapping:
+      bull: [TQQQ, SOXL, UPRO, TECL, FNGU]
+      bear: [SQQQ, SOXS, SPXU, TECS, FNGD]
+      neutral: [QQQ, SOXX, SPY, XLK]
+
+  sector_rotation:
+    enabled: true
+    timeframe: "1M"
+    params:
+      top_sectors: 2
+      lookback_weeks: 16
+      rebalance_day: 1
+      min_strength_score: 60
+    sector_etfs:
+      Technology: [XLK, TECL]
+      Financials: [XLF, FAS]
+      Energy: [XLE, ERX]
+      Healthcare: [XLV, LABU]
+      Consumer_Disc: [XLY]
+      Consumer_Staples: [XLP]
+      Industrials: [XLI]
+      Materials: [XLB]
+      Utilities: [XLU]
+      Real_Estate: [XLRE]
+      Communications: [XLC]
+
+# Market-specific overrides
+markets:
+  US:
+    # Public edition: only trend_following + macd_histogram enabled for stocks
+    # ETF engine handles regime_switch + sector_rotation separately
+    disabled_strategies:
+      - dual_momentum
+      - donchian_breakout
+      - supertrend
+      - rsi_divergence
+      - bollinger_squeeze
+      - volume_profile
+      - cis_momentum
+      - larry_williams
+      - bnf_deviation
+      - volume_surge
+      - cross_sectional_momentum
+      - quality_factor
+      - pead_drift
+    cash_parking:
+      enabled: true
+      symbol: SPY
+      threshold: 0.30
+      buffer: 0.10
+
+  KR:
+    # KR market: same 2 stock strategies + ETF engine
+    disabled_strategies:
+      - dual_momentum
+      - donchian_breakout
+      - supertrend
+      - rsi_divergence
+      - bollinger_squeeze
+      - volume_profile
+      - cis_momentum
+      - larry_williams
+      - bnf_deviation
+      - volume_surge
+      - cross_sectional_momentum
+      - quality_factor
+      - pead_drift
+    cash_parking:
+      enabled: false
+      symbol: "069500"
+      threshold: 0.30
+      buffer: 0.10
+    risk:
+      kelly_fraction: 0.40
+      max_position_pct: 0.10
+      min_position_pct: 0.04
+      max_positions: 12
+      default_stop_loss_pct: 0.12
+      default_take_profit_pct: 0.20
+      dynamic_sl_tp: true
+    evaluation_loop:
+      min_confidence: 0.40
+      min_active_ratio: null
+      sell_cooldown_days: 1
+      whipsaw_max_losses: 2
+      min_hold_days: 1
+
+# Screening pipeline settings
+screening:
+  indicator_screener:
+    weights:
+      trend: 0.40
+      momentum: 0.25
+      volatility_volume: 0.20
+      support_resistance: 0.15
+    min_grade: "B"
+    max_candidates: 50
+
+  fundamental_enricher:
+    weights:
+      consensus: 0.35
+      fundamental: 0.35
+      smart_money: 0.30
+
+  ai_recommender:
+    score_blend:
+      indicator_weight: 0.35
+      enrichment_weight: 0.25
+      ai_weight: 0.40
+    min_final_score: 70
+    min_conviction: "MEDIUM"

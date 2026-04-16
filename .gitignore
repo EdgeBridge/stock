@@ -26,6 +26,9 @@ Thumbs.db
 # Node
 node_modules/
 frontend/dist/
+mobile/.expo/
+mobile/android/
+mobile/ios/
 
 # Database
 *.db
