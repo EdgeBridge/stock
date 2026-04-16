@@ -3,11 +3,18 @@ import { useMutation } from '@tanstack/react-query'
 import { runEvaluation } from '../api/client'
 import clsx from 'clsx'
 
-const phaseBadge: Record<string, string> = {
-  regular: 'bg-green-600 text-green-100',
-  pre_market: 'bg-blue-600 text-blue-100',
-  after_hours: 'bg-orange-600 text-orange-100',
-  closed: 'bg-gray-600 text-gray-300',
+const phaseBg: Record<string, string> = {
+  regular: 'bg-emerald-100 text-emerald-700',
+  pre_market: 'bg-sky-100 text-sky-700',
+  after_hours: 'bg-amber-100 text-amber-700',
+  closed: 'bg-gray-100 text-gray-500',
+}
+
+const phaseDot: Record<string, string> = {
+  regular: 'bg-emerald-500',
+  pre_market: 'bg-sky-500',
+  after_hours: 'bg-amber-500',
+  closed: 'bg-gray-400',
 }
 
 export default function EngineControl() {
@@ -16,18 +23,20 @@ export default function EngineControl() {
   const evaluate = useMutation({ mutationFn: runEvaluation })
 
   const running = status?.running ?? false
-  const phase = status?.market_phase ?? ''
+  const usPhase = status?.market_phase ?? 'closed'
+  const krPhase = status?.kr_market_phase ?? 'closed'
 
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex flex-wrap items-center gap-2">
+      {/* Engine status + controls */}
       <div className="flex items-center gap-2">
         <div
           className={clsx(
-            'w-2.5 h-2.5 rounded-full',
-            running ? 'bg-green-500 animate-pulse' : 'bg-gray-600'
+            'w-2 h-2 rounded-full',
+            running ? 'bg-emerald-500 animate-pulse' : 'bg-gray-400'
           )}
         />
-        <span className="text-sm text-gray-300">
+        <span className="text-sm text-gray-600 font-medium">
           {running ? 'Running' : 'Stopped'}
         </span>
       </div>
@@ -36,7 +45,7 @@ export default function EngineControl() {
         <button
           onClick={() => stop.mutate()}
           disabled={stop.isPending}
-          className="px-3 py-1 text-xs font-medium bg-red-600 hover:bg-red-700 rounded transition-colors disabled:opacity-50"
+          className="px-2.5 py-1 text-xs font-semibold bg-rose-500 hover:bg-rose-600 text-white rounded-lg transition disabled:opacity-50"
         >
           Stop
         </button>
@@ -44,7 +53,7 @@ export default function EngineControl() {
         <button
           onClick={() => start.mutate()}
           disabled={start.isPending}
-          className="px-3 py-1 text-xs font-medium bg-green-600 hover:bg-green-700 rounded transition-colors disabled:opacity-50"
+          className="px-2.5 py-1 text-xs font-semibold bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition disabled:opacity-50"
         >
           Start
         </button>
@@ -53,34 +62,27 @@ export default function EngineControl() {
       <button
         onClick={() => evaluate.mutate()}
         disabled={evaluate.isPending}
-        className="px-3 py-1 text-xs font-medium bg-amber-600 hover:bg-amber-700 rounded transition-colors disabled:opacity-50"
+        className="px-2.5 py-1 text-xs font-semibold bg-amber-500 hover:bg-amber-600 text-white rounded-lg transition disabled:opacity-50"
       >
-        {evaluate.isPending ? 'Evaluating...' : 'Run Evaluate'}
+        {evaluate.isPending ? 'Eval...' : 'Evaluate'}
       </button>
 
-      {phase && (
-        <span
-          className={clsx(
-            'px-2 py-0.5 text-xs font-medium rounded-full uppercase',
-            phaseBadge[phase] ?? 'bg-gray-600 text-gray-300'
-          )}
-          title="US Market"
-        >
-          US {phase.replace('_', ' ')}
-        </span>
-      )}
+      {/* Market phase pills — wrap to next line on mobile */}
+      <span className={clsx(
+        'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold',
+        phaseBg[usPhase] ?? phaseBg.closed,
+      )}>
+        <span className={clsx('w-1.5 h-1.5 rounded-full', phaseDot[usPhase] ?? phaseDot.closed, usPhase === 'regular' && 'animate-pulse')} />
+        US {usPhase.replace('_', ' ')}
+      </span>
 
-      {status?.kr_market_phase && (
-        <span
-          className={clsx(
-            'px-2 py-0.5 text-xs font-medium rounded-full uppercase',
-            phaseBadge[status.kr_market_phase] ?? 'bg-gray-600 text-gray-300'
-          )}
-          title="KR Market"
-        >
-          KR {status.kr_market_phase.replace('_', ' ')}
-        </span>
-      )}
+      <span className={clsx(
+        'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold',
+        phaseBg[krPhase] ?? phaseBg.closed,
+      )}>
+        <span className={clsx('w-1.5 h-1.5 rounded-full', phaseDot[krPhase] ?? phaseDot.closed, krPhase === 'regular' && 'animate-pulse')} />
+        KR {krPhase.replace('_', ' ')}
+      </span>
     </div>
   )
 }
